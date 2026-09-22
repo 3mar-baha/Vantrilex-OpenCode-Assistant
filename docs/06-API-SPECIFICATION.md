@@ -115,12 +115,24 @@ id: evt_7c9d
 data: {"sessionId":"ses_9f3k…","at":"2026-09-22T10:04:11.000Z",
        "payload":{"outcome":"green","summary":{…SessionSummary…}},
        "cursor":"evt_7c9d"}
+
+event: step:complete
+id: evt_7c9e
+data: {"sessionId":"ses_9f3k…","at":"2026-09-22T10:04:12.000Z",
+       "payload":{"stepIndex":5,"outcome":"green","digest":"…secretSafe…"},
+       "cursor":"evt_7c9e"}
 ```
+
+Lifecycle types carried on `event:`: `session:start`, `agent:action`,
+`subagent:complete`, `step:complete`, `session:complete`, `session:idle`.
+Completion-class events (`session:complete`, `step:complete`) are terminal-class:
+buffered and replayed losslessly; transient `agent:action` ticks may be dropped when
+queue latency exceeds 300 ms (`25` §25.3A).
 
 Rules (full FSM in `25`): client sends `Last-Event-ID` on every (re)connect; server
 replays missed events; client dedupes on `envelope.id` (§5.3 idempotency rule);
 heartbeat comments (`: ping`) keep NAT mappings alive; three missed heartbeats →
-reconnect with backoff + jitter.
+staggered reconnect with jittered backoff per `25` §25.3A (never thundering-herd).
 
 ## 6.4 — Groq Whisper STT (multipart, consumed)
 
