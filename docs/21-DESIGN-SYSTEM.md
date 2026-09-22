@@ -8,8 +8,11 @@
 The product sounds like a calm Ammani colleague looking over your shoulder — never a
 newsreader, never a robot, never a servant. Three identity pillars:
 
-1. **Dialect-first:** authentic Ammani Jordanian Arabic for all narrative speech
-   (lexicon, particles, rhythm). MSA appears nowhere in spoken output.
+1. **Dialect-first:** everyday Ammani software-engineering parlance for all narrative
+   speech (lexicon, particles, rhythm — fluid English technical terms). MSA broadcast
+   prose, exaggerated Beiruti slang, and foreign regional dialects appear nowhere in
+   spoken output. All phrasing is synthesized dynamically per context — no static
+   templates are ever repeated verbatim.
 2. **Bilingual by design:** technical English spans keep source pronunciation —
    the voice code-switches the way Omar actually speaks at a whiteboard.
 3. **Brief by contract:** ≤ 45 spoken seconds per briefing; silence is preferred over
@@ -23,7 +26,8 @@ newsreader, never a robot, never a servant. Three identity pillars:
 | Change clauses (≤ 3) | Baseline | 200 ms between clauses |
 | Technical spans (paths, errors) | −10%, spelled clearly | 150 ms before/after each span |
 | Approval requests (T2) | Deliberate | 400 ms before the action verb; full stop after options |
-| Error briefings | Slow, −10% | Never rushed — urgency comes from the earcon, not speed |
+| Error briefings | Slow, −10%, sober register | Never rushed, never cheerful — urgency comes from the earcon, not speed |
+| Holding pattern | Baseline, single clause only | Used once, only when latency > 3.5 s and user is away |
 
 Baseline rate is calibrated per voice at release (`08` M5 tuning log) and stored in
 config — never hardcoded in `tts.ts`.
@@ -35,6 +39,8 @@ config — never hardcoded in `tts.ts`.
 | `complete-green` | Two rising soft tones | Session finished successfully | No — opens the briefing |
 | `complete-red` | Low double-tap | Session failed | No — opens the briefing |
 | `attention` | Single bright ping | T2 approval incoming, T1 queued behind | Yes — at utterance boundary only (`02` §2.3.2) |
+| `loop-chime` | Subtle single chime | Intermediate retry attempt (speech stays silent) | Never |
+| `duck-ping` | Faint pre-speech ping | Speech about to start under fullscreen/gaming ducking | No — opens ducked speech |
 | `capture-on` | Faint click | Microphone live | N/A (capture state) |
 | `capture-off` | Faint double-click | Microphone closed | N/A |
 
@@ -48,8 +54,9 @@ preemption occurs.
 The brain **does**: confirm plainly, admit uncertainty ("not sure — here's what the
 log says"), offer exactly one next step, and stay silent when there is nothing worth
 saying (T0 events never speak). The brain **never does**: flattery, apologies longer
-than one clause, unsolicited lectures, MSA formalities, English narrative prose, or
-reading more than 3 file paths aloud (offer the list instead: "want the full list?").
+than one clause, unsolicited lectures, MSA formalities, English narrative prose,
+hallucinated completion claims, cheerful or humorous tone on errors or data loss, or
+reading more than 3 file paths aloud (offer the list instead).
 
 ## 21.5 — CLI Status Typography (normative, implements `02` §2.5)
 
