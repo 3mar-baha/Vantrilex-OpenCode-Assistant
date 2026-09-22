@@ -81,7 +81,7 @@ export function extractJson(content: string): unknown | null {
 }
 
 export interface BrainClient {
-  respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean }>;
+  respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean; attempts: number }>;
 }
 
 export class GroqBrainClient implements BrainClient {
@@ -91,18 +91,20 @@ export class GroqBrainClient implements BrainClient {
     this.client = new Groq({ apiKey });
   }
 
-  async respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean }> {
+  async respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean; attempts: number }> {
     const started = Date.now();
-    // Transient empty completions get one immediate retry; persistent failure
-    // takes the fallback path (never raw speech, never a loop).
+    // Transient empty completions get up to two immediate retries (3 attempts
+    // total, each under the 5s ceiling); persistent failure takes the fallback
+    // path (never raw speech, never an unbounded loop).
     let lastError: unknown = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        return await this.respondOnce(transcript, sessionContext, started);
+        const result = await this.respondOnce(transcript, sessionContext, started);
+        return { ...result, attempts: attempt };
       } catch (err) {
         lastError = err;
         const retryableEmpty = err instanceof OrchestratorError && err.code === 'BRAIN_TIMEOUT' && err.retryable;
-        if (!retryableEmpty || attempt === 1) throw err;
+        if (!retryableEmpty || attempt === 3) throw err;
       }
     }
     throw lastError;
