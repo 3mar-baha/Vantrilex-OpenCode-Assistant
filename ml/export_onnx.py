@@ -40,10 +40,11 @@ def main() -> None:
     models_dir = root / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     fp32_path = models_dir / "laya-m7.onnx"
-    dummy = torch.ones(1, 32, dtype=torch.long)
+    seq_len = training["max_length"]  # 128
+    dummy = torch.ones(1, seq_len, dtype=torch.long)
     torch.onnx.export(
         _Wrapper(model),
-        (dummy, torch.ones(1, 32, dtype=torch.long)),
+        (dummy, torch.ones(1, seq_len, dtype=torch.long)),
         str(fp32_path),
         input_names=["input_ids", "attention_mask"],
         output_names=[f"logit_{h}" for h in HEADS],
@@ -66,10 +67,8 @@ def main() -> None:
             torch_logits = torch.stack(
                 [model(torch.from_numpy(ids), torch.from_numpy(mask))[h] for h in HEADS], dim=1
             ).numpy()
-        ort_logits = np.stack(
-            session.run(None, {"input_ids": ids, "attention_mask": mask}), axis=1
-        ).reshape(1, -1)
-        max_diff = max(max_diff, float(np.abs(torch_logits - ort_logits).max()))
+        ort_logits = session.run(None, {"input_ids": ids, "attention_mask": mask})
+        max_diff = max(max_diff, float(np.abs(torch_logits - ort_logits[0]).max()))
     print(f"parity max_diff={max_diff:.2e}")
     assert max_diff < 1e-4, "ONNX parity gate FAILED"
 
