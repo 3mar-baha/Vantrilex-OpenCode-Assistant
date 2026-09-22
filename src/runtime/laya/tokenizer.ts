@@ -47,8 +47,13 @@ export class LayaBpeTokenizer implements LayaTokenizer {
     this.rank = new Map();
     for (let i = 0; i < spec.model.merges.length; i += 1) {
       const merge = spec.model.merges[i];
+      if (merge === undefined) continue;
       const pair = typeof merge === 'string' ? merge.split(' ') : merge;
-      if (pair.length === 2) this.rank.set(`${pair[0]}\u0000${pair[1]}`, i);
+      const left = pair[0];
+      const right = pair[1];
+      if (left !== undefined && right !== undefined) {
+        this.rank.set(`${left}\u0000${right}`, i);
+      }
     }
     this.byteFallback = spec.model.byte_fallback === true;
     this.unk = this.vocab.get(spec.model.unk_token ?? '<unk>') ?? 0;
@@ -114,8 +119,8 @@ export class LayaBpeTokenizer implements LayaTokenizer {
         }
       }
       if (bestIndex === -1) break;
-      const left = current[bestIndex];
-      const right = current[bestIndex + 1];
+      const left = current[bestIndex] as string;
+      const right = current[bestIndex + 1] as string;
       const merged: string[] = [];
       for (let i = 0; i < current.length; ) {
         if (i < current.length - 1 && current[i] === left && current[i + 1] === right) {
