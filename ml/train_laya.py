@@ -97,18 +97,27 @@ def main() -> None:
     assert not torch.cuda.is_available(), "CPU-only invariant violated"
     print(f"threads={threads} cuda_available=False")
 
-    # Laya repo layout: backbone under `encoder/`, tokenizer.json under `tokenizer/`
-    # (loaded via the `tokenizers` lib — see dataset class note above).
+    # Laya repo layout: backbone config under `encoder/`, weights
+    # (model.safetensors) at repo root, tokenizer.json under `tokenizer/`.
+    # Stage weights next to the config, then load from the local path.
+    # Tokenizer loads via the `tokenizers` lib (custom config breaks AutoTokenizer).
+    import shutil
+
     from huggingface_hub import snapshot_download
     from tokenizers import Tokenizer
 
-    tokenizer_path = Path(
+    snapshot = Path(
         snapshot_download(
-            training["model_id"], allow_patterns=["tokenizer/tokenizer.json"]
+            training["model_id"],
+            allow_patterns=["encoder/*", "model.safetensors", "tokenizer/tokenizer.json"],
         )
-    ) / "tokenizer" / "tokenizer.json"
-    tokenizer = Tokenizer.from_file(str(tokenizer_path))
-    backbone = AutoModel.from_pretrained(training["model_id"], subfolder="encoder", trust_remote_code=True)
+    )
+    encoder_dir = snapshot / "encoder"
+    staged_weights = encoder_dir / "model.safetensors"
+    if not staged_weights.exists():
+        shutil.copyfile(snapshot / "model.safetensors", staged_weights)
+    tokenizer = Tokenizer.from_file(str(snapshot / "tokenizer" / "tokenizer.json"))
+    backbone = AutoModel.from_pretrained(str(encoder_dir), trust_remote_code=True)
     hidden = backbone.config.hidden_size
     model = LayaHeads(backbone, hidden)
 
