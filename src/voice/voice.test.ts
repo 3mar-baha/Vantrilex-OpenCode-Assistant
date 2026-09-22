@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { BrainOutputSchema, requiresConfirmation } from './brain.js';
+import { BrainOutputSchema, normalizeBrainJson, requiresConfirmation } from './brain.js';
 import { projectSlot, qualifyBriefing } from './disambiguation.js';
 import { CHUNK_BYTES, chunkPcm, OVERLAP_BYTES } from './stt.js';
 import { TtsEngine, type AudioOut, type FishTransport } from './tts.js';
@@ -37,6 +37,20 @@ describe('brain contracts', () => {
     expect(requiresConfirmation('please deploy to production')).toBe(true);
     expect(requiresConfirmation('run rm -rf on the cache dir')).toBe(true);
     expect(requiresConfirmation('run the test suite')).toBe(false);
+  });
+
+  test('near-miss shapes normalize; garbage returns null', () => {
+    const normalized = normalizeBrainJson({
+      intent: 'followUp',
+      outcome: 'All tests green',
+      identity: 'Live session',
+      nextAction: 'Await instructions',
+    });
+    expect(normalized?.intent).toBe('followUp');
+    expect(normalized?.reply).toContain('All tests green');
+    expect(normalizeBrainJson({ intent: 'followUp', reply: 'ok' })?.reply).toBe('ok');
+    expect(normalizeBrainJson('just prose')).toBeNull();
+    expect(normalizeBrainJson({})).toBeNull();
   });
 });
 

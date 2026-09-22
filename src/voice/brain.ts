@@ -17,6 +17,30 @@ export const BrainOutputSchema = z.object({
 });
 export type BrainOutput = z.infer<typeof BrainOutputSchema>;
 
+/**
+ * Normalize near-miss shapes (e.g. {intent, outcome, identity, nextAction})
+ * into the canonical contract. Returns null when nothing salvageable exists —
+ * the caller then takes the fallback briefing path (never raw speech).
+ */
+export function normalizeBrainJson(raw: unknown): BrainOutput | null {
+  const exact = BrainOutputSchema.safeParse(raw);
+  if (exact.success) return exact.data;
+  if (typeof raw !== 'object' || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+  const loose = z.object({
+    intent: z.enum(['newSession', 'followUp', 'control']).default('followUp'),
+    reply: z.string().optional(),
+    outcome: z.string().optional(),
+    identity: z.string().optional(),
+    nextAction: z.string().optional(),
+  }).safeParse(obj);
+  if (!loose.success) return null;
+  const parts = [loose.data.identity, loose.data.outcome, loose.data.reply, loose.data.nextAction]
+    .filter((p): p is string => typeof p === 'string' && p.length > 0);
+  if (parts.length === 0) return null;
+  return BrainOutputSchema.parse({ intent: loose.data.intent, reply: parts.join('. ').slice(0, 1200) });
+}
+
 const HIGH_STAKES_VERBS = ['destroy', 'delete', 'drop', 'force-push', 'force push', 'deploy', 'rm -rf', 'rm -rf '];
 
 /** FR-12: ambiguous or explicit destructive language always requires confirmation. */
@@ -38,6 +62,8 @@ export const AMMANI_SYSTEM_PROMPT = [
   'Destructive verbs: ALWAYS require explicit two-way confirmation. Ambiguous: ask, never act.',
   'Retry loops: silent intermediates; heartbeat every 5 min or 3 fails; halt at 5, ask for guidance.',
   'Classify intent: newSession | followUp | control. Reply ONLY with the JSON shape. No prose outside JSON.',
+  'Exact contract — use THESE keys and no others:',
+  '{"intent": "followUp", "control": "none", "reply": "<Ammani briefing text>", "sessionDirective": "<prompt text, omit unless followUp/newSession>"}',
 ].join('\n');
 
 /** Extract the first top-level JSON object (fences/prose tolerated, never trusted). */
@@ -85,11 +111,10 @@ export class GroqBrainClient implements BrainClient {
       );
       const elapsedMs = Date.now() - started;
       const content = completion.choices[0]?.message?.content ?? '';
-      const parsedJson = extractJson(content);
-      if (parsedJson === null) {
+      const output = normalizeBrainJson(extractJson(content));
+      if (output === null) {
         throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain returned non-JSON output — fallback briefing');
       }
-      const output = BrainOutputSchema.parse(parsedJson);
       return { output, elapsedMs, goldenBreached: elapsedMs > BRAIN_GOLDEN_MS };
     } catch (err) {
       if (err instanceof OrchestratorError) throw err;
