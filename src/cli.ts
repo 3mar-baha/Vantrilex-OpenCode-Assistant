@@ -86,6 +86,7 @@ async function liveLoop(): Promise<number> {
       const ttsStart = Date.now();
       const first = await engine.speak('أمورك تمام، هذا اختبار الصوت', cfg.voice.default);
       report['tts_ms'] = Date.now() - ttsStart;
+      report['tts_first_chunk_ms'] = first.firstChunkMs ?? 'n/a-buffered';
       report['tts_cache_hit'] = first.cacheHit ? 'yes' : 'no';
 
       // 2. Whisper STT round-trip on a generated 1s silent PCM (latency probe).

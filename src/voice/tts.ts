@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nowIso, VOICE_IDS } from '../common/brands.js';
@@ -15,21 +15,43 @@ export const TTS_FIRST_CHUNK_BUDGET_MS = 800;
 
 export interface AudioOut {
   play(audio: Uint8Array, voice: VoiceId): Promise<{ startedMs: number }>;
+  /** Progressive sink: receives chunks as they synthesize; default callers may omit. */
+  playStream?(chunks: AsyncIterable<Uint8Array>, voice: VoiceId): Promise<{ startedMs: number }>;
 }
 
 export class FileAudioOut implements AudioOut {
   constructor(private readonly dir: string = join(tmpdir(), 'opencode-voice-playback')) {}
 
   async play(audio: Uint8Array, voice: VoiceId): Promise<{ startedMs: number }> {
+    return this.playStream(
+      (async function* (): AsyncGenerator<Uint8Array> {
+        yield audio;
+      })(),
+      voice,
+    );
+  }
+
+  async playStream(chunks: AsyncIterable<Uint8Array>, voice: VoiceId): Promise<{ startedMs: number }> {
     const started = Date.now();
     mkdirSync(this.dir, { recursive: true });
-    writeFileSync(join(this.dir, `${cacheKey(nowIso(), voice)}.mp3`), audio);
+    const path = join(this.dir, `${cacheKey(nowIso(), voice)}.mp3`);
+    const { openSync, writeSync, closeSync } = await import('node:fs');
+    const fd = openSync(path, 'w');
+    try {
+      for await (const chunk of chunks) {
+        writeSync(fd, chunk);
+      }
+    } finally {
+      closeSync(fd);
+    }
     return { startedMs: Date.now() - started };
   }
 }
 
 export interface FishTransport {
   synthesize(text: string, fishVoiceId: string): Promise<Uint8Array>;
+  /** Progressive synthesis; engine times first yield as first-chunk TTFB. */
+  synthesizeStream?(text: string, fishVoiceId: string): AsyncGenerator<Uint8Array>;
 }
 
 export class FishHttpTransport implements FishTransport {
@@ -39,6 +61,21 @@ export class FishHttpTransport implements FishTransport {
   ) {}
 
   async synthesize(text: string, fishVoiceId: string): Promise<Uint8Array> {
+    const parts: Uint8Array[] = [];
+    for await (const chunk of this.synthesizeStream(text, fishVoiceId)) {
+      parts.push(chunk);
+    }
+    const total = parts.reduce((n, p) => n + p.byteLength, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      out.set(part, offset);
+      offset += part.byteLength;
+    }
+    return out;
+  }
+
+  async *synthesizeStream(text: string, fishVoiceId: string): AsyncGenerator<Uint8Array> {
     const key = this.keyring.acquire('fish');
     try {
       const res = await fetch(this.endpoint, {
@@ -62,13 +99,21 @@ export class FishHttpTransport implements FishTransport {
         this.keyring.release(key, false, 429);
         throw new Error('TTS rate-limited (429)');
       }
-      if (!res.ok) {
+      if (!res.ok || res.body === null) {
         this.keyring.release(key, false, res.status);
         throw new Error(`TTS failed: HTTP ${res.status}`);
       }
-      const bytes = new Uint8Array(await res.arrayBuffer());
       this.keyring.release(key, true);
-      return bytes;
+      const reader = res.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return;
+          yield value;
+        }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
     } catch (err) {
       try {
         key.material.fill(0);
@@ -91,11 +136,35 @@ export class TtsEngine {
     this.cache = new AudioCache(cfg);
   }
 
-  async speak(text: string, voice: VoiceId): Promise<{ cacheHit: boolean; startedMs: number }> {
+  async speak(text: string, voice: VoiceId): Promise<{ cacheHit: boolean; startedMs: number; firstChunkMs?: number }> {
     const cached = await this.cache.get(text, voice);
     if (cached !== null) {
       const { startedMs } = await this.out.play(new Uint8Array(cached), voice);
-      return { cacheHit: true, startedMs };
+      return { cacheHit: true, startedMs, firstChunkMs: 0 };
+    }
+    if (this.transport.synthesizeStream !== undefined && this.out.playStream !== undefined) {
+      // Progressive path: first chunk flows to the sink before synthesis completes.
+      const stream = this.transport.synthesizeStream(text, VOICE_IDS[voice]);
+      const started = Date.now();
+      let firstChunkMs = -1;
+      const collected: Uint8Array[] = [];
+      const tee = async function* (): AsyncGenerator<Uint8Array> {
+        for await (const chunk of stream) {
+          if (firstChunkMs < 0) firstChunkMs = Date.now() - started;
+          collected.push(chunk);
+          yield chunk;
+        }
+      };
+      const { startedMs } = await this.out.playStream(tee(), voice);
+      const total = collected.reduce((n, p) => n + p.byteLength, 0);
+      const audio = new Uint8Array(total);
+      let offset = 0;
+      for (const part of collected) {
+        audio.set(part, offset);
+        offset += part.byteLength;
+      }
+      await this.cache.set(text, voice, audio);
+      return { cacheHit: false, startedMs, firstChunkMs };
     }
     const audio = await this.transport.synthesize(text, VOICE_IDS[voice]);
     await this.cache.set(text, voice, audio);

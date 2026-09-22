@@ -67,8 +67,7 @@ describe('TTS cache-first pipeline', () => {
     },
   };
 
-  test('miss synthesizes once; hit replays without transport', async () => {
-    let calls = 0;
+  test('miss synthesizes once; hit replays without transport', async () => {    let calls = 0;
     const counting: FishTransport = {
       synthesize: async () => {
         calls += 1;
@@ -87,8 +86,45 @@ describe('TTS cache-first pipeline', () => {
   });
 });
 
-describe('project disambiguation', () => {
-  test('silent slot on single project; embedded slot on multiple', () => {
+describe('TTS progressive streaming', () => {
+  test('chunks reach the sink before synthesis completes; first-chunk timed', async () => {
+    const seenBySink: number[] = [];
+    let resolveSecond: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const streaming = {
+      synthesize: async () => new Uint8Array([1]),
+      async *synthesizeStream(): AsyncGenerator<Uint8Array> {
+        yield new Uint8Array([1, 2]);
+        await gate;
+        yield new Uint8Array([3, 4]);
+      },
+    };
+    const sink: AudioOut = {
+      play: async () => ({ startedMs: 0 }),
+      playStream: async (chunks: AsyncIterable<Uint8Array>) => {
+        for await (const c of chunks) {
+          seenBySink.push(c.byteLength);
+          if (seenBySink.length === 1 && resolveSecond !== null) resolveSecond();
+        }
+        return { startedMs: 1 };
+      },
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'stream-test-'));
+    const engine = new TtsEngine(
+      { dir, maxEntries: 50, maxBytes: 1 << 20, maxEntryBytes: 1 << 18 },
+      streaming,
+      sink,
+    );
+    const result = await engine.speak('streaming probe', 'male-default');
+    expect(result.cacheHit).toBe(false);
+    expect(typeof result.firstChunkMs).toBe('number');
+    expect(seenBySink).toEqual([2, 2]);
+  });
+});
+
+describe('project disambiguation', () => {  test('silent slot on single project; embedded slot on multiple', () => {
     expect(projectSlot({ activeProjects: ['a'], currentProject: 'a' })).toBe('');
     expect(projectSlot({ activeProjects: ['a', 'b'], currentProject: 'b' })).toBe('b');
     expect(qualifyBriefing('done', { activeProjects: ['a'], currentProject: 'a' })).toBe('done');
