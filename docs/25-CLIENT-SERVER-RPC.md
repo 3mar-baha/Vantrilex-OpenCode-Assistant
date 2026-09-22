@@ -10,8 +10,11 @@
   keys on `POST /session` and `POST /session/{id}/prompt` (client-generated UUIDv4,
   server echoes on 409 per F-09).
 - **Events:** SSE `GET /event` with `Accept: text/event-stream`; per-dispatch framing
-  `event:` (lifecycle type) + `id:` (envelope id) + `data:` (JSON envelope); comment
-  heartbeats (`: ping`) every 15 s; 3 missed heartbeats = dead connection.
+  `event:` (lifecycle type — including `step:complete`) + `id:` (envelope id) + `data:`
+  (JSON envelope); comment heartbeats (`: ping`) every 15 s; 3 missed heartbeats = dead
+  connection. Lifecycle completion events (`session:complete`, `step:complete`) are
+  buffered and replayed without loss; transient progress ticks may be dropped when event
+  queue latency exceeds 300 ms (drop counter + ledger mark).
 - **Cursors:** client sends `Last-Event-ID` on every (re)connect; server replays
   missed envelopes in order; client dedupes on `envelope.id` (never on cursor order —
   redelivery may interleave).
@@ -47,8 +50,17 @@ flowchart LR
 
 Buffer full policy: shed oldest *routine* envelopes first, increment `shedRoutine`
 counter, ledger-mark the shed range; terminal envelopes (`session:complete`,
-`session:idle`, approval requests) bypass the buffer via the priority lane and are
-never shed. Shed marks are included in the stress proof (`23` §23.2).
+`session:idle`, `step:complete`, approval requests) bypass the buffer via the priority
+lane and are never shed. Shed marks are included in the stress proof (`23` §23.2).
+
+## 25.3A — Staggered Reconnect Manager (normative, T1)
+
+Multi-session reconnects never fire simultaneously. A central connection manager assigns
+each session a stagger offset and applies jittered exponential backoff per attempt:
+50 ms base, ±30 ms random jitter, 2.5 s cap. Reconnect order follows session priority
+(sessions with pending terminal events first). This prevents thundering-herd retries
+against a warming server while keeping terminal-event recovery lossless via replay
+cursors.
 
 ## 25.4 — Reconnection State Machine (normative)
 
@@ -60,7 +72,7 @@ stateDiagram-v2
     Suspect --> Reconnecting: 3 missed / socket error
     Reconnecting --> Connected: replay caught up, dedupe clean
     Reconnecting --> Backoff: attempt failed
-    Backoff --> Reconnecting: delay elapsed (exp + jitter, cap 30s)
+    Backoff --> Reconnecting: delay elapsed (staggered per §25.3A)
     Backoff --> Degraded: 5 min without stream
     Degraded --> Reconnecting: probe succeeds
     Degraded --> Failed: operator abort
