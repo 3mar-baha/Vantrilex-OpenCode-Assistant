@@ -64,7 +64,9 @@ terminal events lost. Verified by the kill -9 chaos test (`23` §23.4, E-10).
 | Batch | Files | Commits (hash range) | Verification |
 |-------|-------|---------------------|--------------|
 | Batch 1 + Gate 1 + `16` | `16`, `01`–`07` (8 files) | `9a81b88` → `73141b8` (9 commits) | 8/8 files; placeholder grep clean; tree clean |
-| Batch 2 | `08`–`14` (7 files) | `e8cb30b` → *in progress* | per-file commits; counts verified at batch end |
+| Batch 2 | `08`–`14` (7 files) | `e8cb30b` → `7e71cb2` (7 commits) | 15/15 files; placeholder grep clean; tree clean |
+| Batch 3 | `15`, `17`–`20` (5 files; `16` shipped early) | `efd8917` → `38db258` (5 commits) | 20/20 files; grep 3 hits adjudicated self-referential (`16` rule quotes); tree clean |
+| Batch 4 | `21`–`28` (8 files) | `cd8058b` → *batch-4 close* (8 commits + ledger sync) | 28/28 files; full gate below; tree clean |
 
 ---
 
