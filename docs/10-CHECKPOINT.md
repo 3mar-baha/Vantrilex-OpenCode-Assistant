@@ -103,6 +103,7 @@ which must name its targets by construction).*
 | M4 voice pipeline | `voice/stt` + `voice/brain` + `voice/tts` + disambiguation + proofs | `c429e8e`, `7b054cc`, `5344e75`, `0b8b068` | tsc 0, lint 0, 28/28 tests |
 | M5 mic UI | `ui/` mic control, speech policy, settings store, modal view-model + proofs | `dc2fbb0`, `0b6b47b` | tsc 0, lint 0, 34/34 tests |
 | Live verification | Vault bootstrap, Fish contract fix, brain normalization + retry + prompt compression, full provider loop | `e21529a`, `f85a4aa`, `b6d1f26`, `831116b`, `aa36fb8`, `aee2f81`, `9e59540` | live TTS/STT/brain/TTS loop green (see §10.6) |
+| Polish streaming | Chunked reader + progressive sink + first-chunk TTFB proof, artifact cleanup | `3e088b8` | first-chunk 623/657 ms < 800 ms; 36/36 tests |
 
 ---
 
@@ -116,7 +117,8 @@ which must name its targets by construction).*
 
 | Stage | Measured | Budget | Verdict |
 |-------|----------|--------|---------|
-| Fish TTS synthesis (full request) | ~1.7–2.4 s | first-chunk < 800 ms (streaming; transport buffers — chunk timing not yet instrumented) | Partial: synthesis works, chunk instrumentation open |
+| Fish TTS first-chunk TTFB (streaming transport) | **623 ms / 657 ms** (two live runs) | < 800 ms | **Pass** — chunked reader pipes to sink progressively |
+| Fish TTS synthesis (full request) | ~1.7–2.4 s | — | Informational (bounded by full-clip length) |
 | Whisper STT round-trip (1 chunk) | ~230–300 ms | p50 < 500 ms | **Pass** |
 | Brain `gpt-oss-120b` | ~600–1250 ms | p50 ≤ 2.0 s golden | **Pass** |
 | Reply TTS | ~3.3–5.2 s (longer text) | — | Informational |
