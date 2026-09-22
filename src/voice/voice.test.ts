@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { BrainOutputSchema, requiresConfirmation } from './brain.js';
 import { projectSlot, qualifyBriefing } from './disambiguation.js';
@@ -38,7 +41,7 @@ describe('brain contracts', () => {
 });
 
 describe('TTS cache-first pipeline', () => {
-  const cfg: AudioCacheConfig = { dir: `cache-test-${Date.now()}`, maxEntries: 50, maxBytes: 1 << 20, maxEntryBytes: 1 << 18 };
+  const cfg: AudioCacheConfig = { dir: mkdtempSync(join(tmpdir(), 'cache-test-')), maxEntries: 50, maxBytes: 1 << 20, maxEntryBytes: 1 << 18 };
   const transport: FishTransport = {
     synthesize: async () => new Uint8Array([1, 2, 3, 4]),
   };
