@@ -123,11 +123,11 @@ def main() -> None:
     # Operating point: smallest swept length that fits p99 of real token counts.
     operating = next((length for length in sorted(SWEEP_LENGTHS) if length >= p99_tokens), max(SWEEP_LENGTHS))
     gate_p50 = results[str(operating)]["p50"]
+    gate_pass = gate_p50 < GATE_MS
     print(f"operating length={operating} (covers p99={p99_tokens} tokens) p50={gate_p50:.2f}ms")
-    if gate_p50 >= GATE_MS:
-        raise SystemExit(f"latency gate FAILED: p50 {gate_p50:.2f}ms >= {GATE_MS}ms at length {operating}")
-    print("latency gate PASS")
 
+    # Always persist the report — a failing gate must still leave honest evidence
+    # rather than silently retaining a stale passing report.
     report = {
         "parity_max_diff": max_diff,
         "parity_samples": PARITY_SAMPLES,
@@ -135,11 +135,16 @@ def main() -> None:
         "token_length": {"max": max(token_counts), "p99": p99_tokens},
         "operating_length": operating,
         "gate_ms": GATE_MS,
+        "latency_gate_pass": gate_pass,
         "sweep": results,
         "model": int8_path.name,
     }
     (root / "ml" / "l2_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("wrote ml/l2_report.json")
+
+    if not gate_pass:
+        raise SystemExit(f"latency gate FAILED: p50 {gate_p50:.2f}ms >= {GATE_MS}ms at length {operating}")
+    print("latency gate PASS")
 
 
 if __name__ == "__main__":

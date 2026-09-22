@@ -1,0 +1,127 @@
+{
+  "length": 32,
+  "n_cases": 78,
+  "pass_definition": "core = is_destructive+barge_in+stuck_in_loop",
+  "fp32": {
+    "negation_false_positive_rate": 0.3888888888888889,
+    "confusable_error_rate": 0.25,
+    "overall_core_pass_rate": 0.6538461538461539,
+    "overall_all4_pass_rate": 0.41025641025641024,
+    "categories": {
+      "barge_loop_edge": {
+        "n": 12,
+        "core_pass": 0.75,
+        "all4_pass": 0.5
+      },
+      "benign_keyword_inclusions": {
+        "n": 16,
+        "core_pass": 0.4375,
+        "all4_pass": 0.125
+      },
+      "imperative_confusables": {
+        "n": 16,
+        "core_pass": 0.6875,
+        "all4_pass": 0.5625
+      },
+      "marker_free_destructive": {
+        "n": 16,
+        "core_pass": 0.8125,
+        "all4_pass": 0.625
+      },
+      "negated_destructive": {
+        "n": 18,
+        "core_pass": 0.6111111111111112,
+        "all4_pass": 0.2777777777777778
+      }
+    },
+    "failures": [
+      "neg-01",
+      "neg-03",
+      "neg-04",
+      "neg-05",
+      "neg-06",
+      "neg-16",
+      "neg-18",
+      "conf-01",
+      "conf-05",
+      "conf-07",
+      "conf-09",
+      "conf-11",
+      "mfd-10",
+      "mfd-12",
+      "mfd-15",
+      "ben-01",
+      "ben-03",
+      "ben-04",
+      "ben-06",
+      "ben-08",
+      "ben-09",
+      "ben-10",
+      "ben-12",
+      "ben-14",
+      "bl-02",
+      "bl-07",
+      "bl-10"
+    ]
+  },
+  "int8": {
+    "negation_false_positive_rate": 0.3333333333333333,
+    "confusable_error_rate": 0.25,
+    "overall_core_pass_rate": 0.6794871794871795,
+    "overall_all4_pass_rate": 0.41025641025641024,
+    "categories": {
+      "barge_loop_edge": {
+        "n": 12,
+        "core_pass": 0.75,
+        "all4_pass": 0.4166666666666667
+      },
+      "benign_keyword_inclusions": {
+        "n": 16,
+        "core_pass": 0.5,
+        "all4_pass": 0.125
+      },
+      "imperative_confusables": {
+        "n": 16,
+        "core_pass": 0.6875,
+        "all4_pass": 0.5625
+      },
+      "marker_free_destructive": {
+        "n": 16,
+        "core_pass": 0.8125,
+        "all4_pass": 0.5625
+      },
+      "negated_destructive": {
+        "n": 18,
+        "core_pass": 0.6666666666666666,
+        "all4_pass": 0.3888888888888889
+      }
+    },
+    "failures": [
+      "neg-01",
+      "neg-03",
+      "neg-04",
+      "neg-05",
+      "neg-06",
+      "neg-18",
+      "conf-01",
+      "conf-05",
+      "conf-07",
+      "conf-09",
+      "conf-11",
+      "mfd-06",
+      "mfd-12",
+      "mfd-14",
+      "ben-02",
+      "ben-03",
+      "ben-06",
+      "ben-08",
+      "ben-09",
+      "ben-10",
+      "ben-11",
+      "ben-14",
+      "bl-02",
+      "bl-07",
+      "bl-10"
+    ]
+  }
+}
