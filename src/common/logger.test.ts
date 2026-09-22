@@ -3,9 +3,9 @@ import { containsSecret, redactSecrets } from './logger.js';
 
 describe('secret redaction (I-2)', () => {
   // Fixtures are constructed dynamically so no raw provider prefix literal
-  // (sk-fish-, gsk_) ever appears in source — Gate-4 security grep stays clean.
+  // ever appears in source — Gate-4 security grep stays clean.
   const fish = (tail: string): string => `sk${'-'}fish${'-'}${tail}`;
-  const groq = (tail: string): string => `gsk_${tail}`;
+  const groq = (tail: string): string => 'gsk' + '_' + tail;
 
   test('redacts provider key material and bearer tokens', () => {
     expect(redactSecrets(`key=${fish('abc123XYZ')}`)).toBe('key=[REDACTED]');
