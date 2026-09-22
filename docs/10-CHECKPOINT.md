@@ -99,6 +99,9 @@ which must name its targets by construction).*
 | P0 scaffold | package/tsconfig/vitest/eslint, `.env.example`, `common/` + tests, `voice/cache` + tests, RAG manifest, GuildSkills stub | `ebc65f0`, `ca5e764`, `458927d`, `8816c41`, `b7a8859`, `ff9a962` | tsc 0, lint 0, 5/5 tests |
 | P1 launcher+runtime | `launcher/` (supervised boot, tree-kill, sweeper, hot-restart), `runtime/` typed client + mock tests, `cli.ts` doctor | `67f868b`, `d544213` | tsc 0, lint 0, 10/10 tests |
 | P2 orchestrator | `orchestrator/` envelopes, ledger, queue, staggered SSE core + live mock-SSE tests | `3c7218d`, `ae24f7a` | tsc 0, lint 0, 12/12 tests |
+| M3 trust layer | P3 `voice/vault` + `voice/keyring` + proofs; P5 `guidance/` BLUF/agents/overseer/resolver + proofs | `fc1ea7c`, `77dfbbf`, `a593832`, `402bd6b` (+ `25c29e0` ledger marker) | tsc 0, lint 0, 23/23 tests |
+| M4 voice pipeline | `voice/stt` + `voice/brain` + `voice/tts` + disambiguation + proofs | `c429e8e`, `7b054cc`, `5344e75`, `0b8b068` | tsc 0, lint 0, 28/28 tests |
+| M5 mic UI | `ui/` mic control, speech policy, settings store, modal view-model + proofs | `dc2fbb0`, `0b6b47b` | tsc 0, lint 0, 34/34 tests |
 
 ---
 
