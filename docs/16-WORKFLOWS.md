@@ -324,6 +324,233 @@ For milestone `v1.0.0 MVP — voice loop` (`08-ROADMAP.md`):
 5. `/sync`: atomic commits per subsystem (`feat(runtime)`, `feat(orchestrator)`,
    `feat(voice)`, `security(keyring)` …), checkpoint update, push, clean tree.
 
+## 16.8A — Standardized Phase Execution Matrix (normative — all milestones)
+
+> **Canonical status:** Workflow standard. Extends the 5-gate lifecycle (§16.2) with a
+> per-phase binding contract. Every milestone SHALL instantiate this matrix. It binds a
+> phase to the agent that owns it, the skills it must load, the tools it may use
+> (MCP + LSP), the artifacts it needs to start, and the evidence that lets it exit.
+> Tooling is provisioned by `build(toolchain)` commits: agents/skills under `.opencode/`,
+> MCP + LSP under `opencode.json`.
+
+### 16.8A.1 Binding schema
+
+| Column | Allowed values | Rule |
+|--------|----------------|------|
+| **Assigned Agent** | `architect`, `laya-ml-engineer`, `ts-reviewer` (or `primary`) | Exactly one owner per phase. Review phases are read-only. |
+| **Active Skills** | `laya-ml-gates`, `vitest-live-gating`, `typescript-esm-strict` | Mandatory when the phase touches the skill's domain; `—` only when none applies. |
+| **MCP Tools & LSPs** | `context7` (library/API docs), `pyright` (`.py`), `typescript-language-server` (`.ts/.tsx/.js`), `native` (read/glob/grep/shell/webfetch) | `context7` for any library/API/syntax question; the matching LSP must report clean before the phase exits. |
+| **Input Artifacts** | Committed files/commands that must exist before the phase starts | Entry gate; a missing artifact blocks the phase. |
+| **Exit Quality Gates** | Measurable pass/fail checks + the artifact that proves them | Exit gate; a failed gate blocks progress. Never restate the target as the result. |
+
+### 16.8A.2 Standard phase matrix
+
+| Phase class | Assigned agent | Active skills | MCP tools & LSPs | Input artifacts | Exit quality gates |
+|-------------|----------------|---------------|------------------|-----------------|--------------------|
+| **SPEC** — design, ADR, contract | `architect` | `—` | `context7`, `native` | prior ADRs (`09`), requirement (`01`/`02`) | ≥ 2 real options with trade-offs; compliance test named; ADR written |
+| **DATA** — generation, labelling, splits | `laya-ml-engineer` | `laya-ml-gates` | `pyright`, `native` | data scripts + prior `synth_meta.json` | balance ≥ 20% minority per head; marker-hygiene assertion green; split-integrity report |
+| **IMPLEMENT** — code / training / export | `laya-ml-engineer` (ml) or `primary` (src) | `laya-ml-gates` (ml) · `typescript-esm-strict` (src) | `context7`, matching LSP | frozen data/spec from prior phase | domain gates pass (acc/latency/parity); LSP diagnostics clean |
+| **ADVERSARIAL** — red-team the result | `laya-ml-engineer` + `architect` review | `laya-ml-gates` | `context7`, `native` | phase artifact + gold suite | suite pass rate ≥ target; every failure classified; review signed |
+| **VERIFY** — hermetic + live tests | `ts-reviewer` (review) + `primary` | `vitest-live-gating`, `typescript-esm-strict` | `typescript-language-server`, `pyright` | built artifacts + model files | `tsc` 0; `eslint` 0; hermetic + `LAYA_LIVE=1` suites green; reviewer verdict |
+| **GOVERNANCE** — docs + ledger | `architect` | `—` | `native` | all prior exit artifacts | every scoped item has status + evidence pointer; ledger current; tree clean |
+
+### 16.8A.3 Phase discipline
+
+1. **No phase is skipped.** A phase with no work is marked `N/A` with a one-line reason.
+2. **Evidence over assertion.** Every exit gate cites a committed artifact or a pasted
+   command result. A number without a reproducing script + artifact is not evidence.
+3. **Gate failure blocks.** On failure, fix or escalate; never relabel the target as met.
+4. **One owner per phase.** The Assigned Agent owns that phase's write actions; reviewers
+   stay read-only (`ts-reviewer` must not edit).
+5. **LSPs are part of the gate.** `pyright` must report clean on touched `ml/*.py` and
+   `typescript-language-server` on touched `src/**/*.ts` before VERIFY exits.
+6. **`context7` first for API questions.** Library/framework/CLI behaviour is looked up,
+   not recalled from training data.
+7. **Governance is last and mandatory.** `09` (ADR) and `10` (ledger) are updated before
+   a milestone is called done.
+
+## 16.8B — Mission workflow: Laya P0 remediation (V1, V2, V4, V5, V6, V8)
+
+Instantiation of §16.8A for the P0 fixes in `LAYA-EVALUATION-AND-ROADMAP.md` §2. Scope:
+the model currently behaves as a **lexical marker detector** and its headline metrics are
+inflated by a leaked split; negation is not understood and one marker is semantically wrong.
+
+| Vuln | Failure mode | Owning phase |
+|------|--------------|--------------|
+| **V1** | Marker detector, not intent classifier | P1 (marker-free positives) + P2 (OOD cases) |
+| **V2** | Train/test leakage via repeated fixed frames | P1 (group-aware template-hash split) |
+| **V4** | `ديبلوي` (deploy) wrongly labelled destructive | P1 (marker-set repair) |
+| **V5** | `stuck_in_loop` marker hygiene broken | P1 (marker hygiene) |
+| **V6** | Negation ignored (negated commands fire) | P1 (negation labels) + P2 (negation cases) |
+| **V8** | Imperative confusables (`اسمع`/`امسح`) | P2 (confusable set) |
+
+*Carried from the prior brief:* **V3** (`should_speak` derivable from the other heads) is a
+cheap P1 data-hygiene fix and is included as gate G1.5.
+
+### 16.8B.1 Phase 1 — Dataset Generation & Negation Hardening
+
+| Field | Binding |
+|-------|---------|
+| Agent | `laya-ml-engineer` |
+| Skills | `laya-ml-gates` |
+| MCP & LSP | `pyright`, `native` (and `context7` for any tokenizer/API question) |
+| Input artifacts | `ml/data/generate_synth.py`, seed-8 `synth_meta.json`, `LAYA-EVALUATION-AND-ROADMAP.md` §2 |
+
+Work: repair the marker sets (V4, V5); add negated-destructive hard negatives and
+marker-free destructive positives (V1, V6); de-correlate the four heads (V3); replace the
+random split with a group-aware template-hash split (V2).
+
+| Gate | Pass condition |
+|------|----------------|
+| G1.1 marker hygiene | No benign verb in `DESTRUCTIVE_MARKERS`; every injected loop cue is a declared `LOOP_MARKER`; automated assertion: **0 markerless positives** per head |
+| G1.2 negation coverage | ≥ 40 negated destructive utterances, all `is_destructive=false` |
+| G1.3 marker-free positives | ≥ 60 destructive positives carrying no declared marker |
+| G1.4 split integrity | **0** template families shared across train/val/test, reported in `synth_meta.json` |
+| G1.5 head independence | pairwise \|φ\| between head labels < 0.3; `should_speak` not a function of the other three |
+| G1.6 balance | every head ≥ 20% minority |
+| G1.7 LSP | `opencode debug lsp diagnostics ml/data/generate_synth.py` → no errors |
+
+Artifact: regenerated `ml/data/splits/*` + `ml/data/synth_meta.json` with
+`split_integrity`, `head_correlation`, `negation_coverage`, `marker_free_positives`.
+
+### 16.8B.2 Phase 2 — Adversarial Gold Suite Construction
+
+| Field | Binding |
+|-------|---------|
+| Agent | `laya-ml-engineer` (author) + `architect` (review) |
+| Skills | `laya-ml-gates` |
+| MCP & LSP | `native` |
+| Input artifacts | Phase 1 exit artifacts (frozen; hash recorded) |
+
+Work: author `ml/adversarial_suite.json` — 50–100 hand-curated cases spanning negations,
+confusables (`اسمع`/`امسح`, `وقف`/`وقّف`, `احذف`/`احتفظ`), out-of-distribution phrasing
+(e.g. `امسح الداتابيز كلها`), marker-free destructive intent, hard negatives that merely
+contain a marker substring, and Arabic↔English code-switching. `architect` reviews for
+ambiguity and label correctness.
+
+| Gate | Pass condition |
+|------|----------------|
+| G2.1 composition | 50 ≤ cases ≤ 100; ≥ 10 negations, ≥ 8 confusable pairs, ≥ 10 OOD, ≥ 10 hard negatives |
+| G2.2 schema | every entry has `text`, 4 boolean `labels`, `category`, `rationale` |
+| G2.3 review | `architect` sign-off recorded; every disputed label resolved |
+
+Artifact: `ml/adversarial_suite.json` + review note.
+
+### 16.8B.3 Phase 3 — Retraining & ONNX Quantization
+
+| Field | Binding |
+|-------|---------|
+| Agent | `laya-ml-engineer` |
+| Skills | `laya-ml-gates` |
+| MCP & LSP | `context7` (ONNX/transformers API), `pyright` |
+| Input artifacts | Phase 1 data + Phase 2 suite, both frozen (hashes recorded) |
+
+Work: train the CPU heads on the group-aware split (`load_backbone` hard-abort), export
+FP32 + dynamic-INT8 ONNX (dynamic batch+seq), run the parity check, benchmark latency at
+the 32-token operating length, and evaluate the adversarial suite.
+
+| Gate | Pass condition |
+|------|----------------|
+| G3.1 train | on the **group-aware** split: primary acc ≥ 0.90, secondary ≥ 0.85 |
+| G3.2 adversarial | negation false-positive rate ≤ 0.10; confusable error rate ≤ 0.15; overall suite pass ≥ 0.80 |
+| G3.3 parity | max logit diff < 1e-4 vs torch |
+| G3.4 latency | INT8 p50 < 40 ms @ 32 tokens |
+| G3.5 quantization | INT8 clears all four head gates; delta vs FP32 reported |
+| G3.6 LSP | `pyright` clean on touched `ml/*.py` |
+
+Artifacts: `ml/eval_report.md`, `ml/l2_report.json`, `ml/quant_report.json`,
+`ml/adversarial_report.json`.
+
+### 16.8B.4 Phase 4 — Runtime Integration & Vitest Verification
+
+| Field | Binding |
+|-------|---------|
+| Agent | `ts-reviewer` (review) + `primary` (edits) |
+| Skills | `vitest-live-gating`, `typescript-esm-strict` |
+| MCP & LSP | `typescript-language-server`, `context7` |
+| Input artifacts | Phase 3 artifacts; INT8 model at `models/laya-m7-int8.onnx` |
+
+Work: propagate any label/tokenizer/operating-length change into `src/runtime/laya/`;
+extend the live integration test to assert negation handling; run the full gate.
+
+| Gate | Pass condition |
+|------|----------------|
+| G4.1 static | `npx tsc --noEmit` = 0; `npx eslint . --max-warnings 0` = 0 |
+| G4.2 hermetic | `npx vitest run` green (default suite) |
+| G4.3 live | `LAYA_LIVE=1 npx vitest run src/runtime/laya/laya.integration.test.ts` green — tokenizer golden parity, p50 < 40 ms, class separation, negation |
+| G4.4 review | `ts-reviewer` verdict `APPROVE` or `APPROVE WITH NITS` |
+| G4.5 LSP | `typescript-language-server` diagnostics clean on changed `src/**/*.ts` |
+
+Artifacts: command output + review verdict.
+
+### 16.8B.5 Phase 5 — Governance & Ledger Update
+
+| Field | Binding |
+|-------|---------|
+| Agent | `architect` |
+| Skills | `—` |
+| MCP & LSP | `native` |
+| Input artifacts | Phase 4 exit artifacts |
+
+Work: update `09` ADR-008 (measured evidence, negation + quantization findings),
+`10` §10.7 ledger (commit range, findings fixed), and mark each scoped vulnerability in
+`LAYA-EVALUATION-AND-ROADMAP.md` with status + evidence pointer.
+
+| Gate | Pass condition |
+|------|----------------|
+| G5.1 vuln status | V1, V2, V4, V5, V6, V8 each marked fixed/mitigated with an evidence pointer |
+| G5.2 ledger | `10` §10.7 updated with the commit range and Gate-4 evidence |
+| G5.3 hygiene | cross-refs resolve; `git status` clean |
+
+## 16.8C — Execution checklist: Laya P0 remediation
+
+Derived from §16.8B. Each item is a pass/fail gate; a failing gate blocks the next phase.
+
+**Phase 1 — Dataset Generation & Negation Hardening** (`laya-ml-engineer` + `laya-ml-gates` + `pyright`)
+
+- [ ] P1.1 Remove `ديبلوي` from `DESTRUCTIVE_MARKERS` (or reclassify deploy as a benign control intent) — V4
+- [ ] P1.2 Fix `stuck_in_loop` hygiene so every injected loop cue is a declared `LOOP_MARKER` — V5
+- [ ] P1.3 Add ≥ 40 negated-destructive negatives (`لا/ما/مش/مو` + marker) labelled `is_destructive=false` — V6
+- [ ] P1.4 Add ≥ 60 marker-free destructive positives (semantic paraphrase, no marker) — V1
+- [ ] P1.5 De-correlate heads: independent label sampling; `should_speak` not derived from the others — V3
+- [ ] P1.6 Group-aware split by template hash; assert 0 template families cross splits — V2
+- [ ] P1.7 Write `split_integrity`, `head_correlation`, `negation_coverage`, `marker_free_positives` into `synth_meta.json`
+- [ ] **Gate G1** — marker hygiene assertion green (0 markerless) · all heads ≥ 20% minority · 0 cross-split families · `pyright` clean on `generate_synth.py`
+
+**Phase 2 — Adversarial Gold Suite** (`laya-ml-engineer` + `architect` review)
+
+- [ ] P2.1 Author `ml/adversarial_suite.json` (50–100 cases: negations, confusables, OOD, hard negatives, code-switching)
+- [ ] P2.2 Validate schema (text, 4 boolean labels, category, rationale)
+- [ ] P2.3 `architect` review sign-off; disputes resolved
+- [ ] **Gate G2** — ≥ 10 negations · ≥ 8 confusable pairs · ≥ 10 OOD · ≥ 10 hard negatives · schema valid · review signed
+
+**Phase 3 — Retraining & ONNX Quantization** (`laya-ml-engineer` + `laya-ml-gates`)
+
+- [ ] P3.1 Train CPU heads on the group-aware split (`load_backbone` hard-abort; CPU-only assert)
+- [ ] P3.2 Export FP32 + INT8 ONNX (dynamic batch+seq)
+- [ ] P3.3 Parity check < 1e-4
+- [ ] P3.4 Latency probe @ 32 tokens (INT8 p50 < 40 ms)
+- [ ] P3.5 Adversarial-suite evaluation → `ml/adversarial_report.json`
+- [ ] P3.6 Quantization accuracy delta measured (all four gates still clear)
+- [ ] **Gate G3** — train gates pass on the **group-aware** split · negation FP rate ≤ 0.10 · confusable error ≤ 0.15 · suite pass ≥ 0.80 · parity < 1e-4 · p50 < 40 ms · `pyright` clean
+
+**Phase 4 — Runtime Integration & Vitest Verification** (`ts-reviewer` + `vitest-live-gating` + `typescript-esm-strict`)
+
+- [ ] P4.1 Propagate label/tokenizer/operating-length changes into `src/runtime/laya/`
+- [ ] P4.2 Extend the live integration test to assert negation handling
+- [ ] P4.3 `npx tsc --noEmit` = 0 and `npx eslint . --max-warnings 0` = 0
+- [ ] P4.4 `npx vitest run` green (hermetic)
+- [ ] P4.5 `LAYA_LIVE=1 npx vitest run src/runtime/laya/laya.integration.test.ts` green
+- [ ] P4.6 `ts-reviewer` verdict recorded
+- [ ] **Gate G4** — tsc 0 · lint 0 · hermetic green · live green · LSP clean on changed files · reviewer `APPROVE`/`APPROVE WITH NITS`
+
+**Phase 5 — Governance & Ledger** (`architect`)
+
+- [ ] P5.1 Update `09` ADR-008 with measured evidence + negation/quantization findings
+- [ ] P5.2 Update `10` §10.7 ledger (commit range + Gate-4 evidence)
+- [ ] P5.3 Mark V1, V2, V4, V5, V6, V8 with status + evidence pointer in `LAYA-EVALUATION-AND-ROADMAP.md`
+- [ ] **Gate G5** — every scoped vuln has status + pointer · ledger current · cross-refs resolve · tree clean
+
 ## 16.9 — Non-Compliance and Recovery
 
 | Violation | Detection | Recovery |
