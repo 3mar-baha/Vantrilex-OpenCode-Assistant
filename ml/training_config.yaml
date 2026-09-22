@@ -8,10 +8,10 @@ training:
   heads: [should_speak, is_destructive, barge_in, stuck_in_loop]
   max_length: 128
   batch_size: 32
-  epochs: 5
-  lr: 2.0e-4
+  epochs: 8
+  lr: 1.0e-3
   weight_decay: 0.01
-  early_stop_patience: 2
+  early_stop_patience: 3
   seed: 7
   num_threads: 0  # 0 = os.cpu_count()
 data:

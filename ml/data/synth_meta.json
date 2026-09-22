@@ -1,11 +1,11 @@
 {
-  "seed": 7,
+  "seed": 8,
   "count": 5200,
   "splits": {
     "train": 4160,
     "val": 520,
     "test": 520
   },
-  "balance_overall": "should_speak: true=61.21% false=38.79%\nis_destructive: true=20.12% false=79.88%\nbarge_in: true=22.46% false=77.54%\nstuck_in_loop: true=23.98% false=76.02%",
-  "balance_train": "should_speak: true=61.06% false=38.94%\nis_destructive: true=20.00% false=80.00%\nbarge_in: true=22.14% false=77.86%\nstuck_in_loop: true=23.92% false=76.08%"
+  "balance_overall": "should_speak: true=61.50% false=38.50%\nis_destructive: true=19.90% false=80.10%\nbarge_in: true=22.85% false=77.15%\nstuck_in_loop: true=24.58% false=75.42%",
+  "balance_train": "should_speak: true=61.23% false=38.77%\nis_destructive: true=19.88% false=80.12%\nbarge_in: true=22.67% false=77.33%\nstuck_in_loop: true=24.38% false=75.62%"
 }

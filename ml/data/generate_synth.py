@@ -95,6 +95,14 @@ def make_sample(rng: random.Random, index: int) -> dict:
         text = f"{rng.choice(BARGE_MARKERS)}، {text}"
         barge_in = True
     stuck_in_loop = any(m in text for m in LOOP_MARKERS) or roll < 0.20
+    # Deterministic surface: every true label must have a visible marker.
+    # (Prior version left ~10% of true labels markerless — unlearnable noise.)
+    if is_destructive and not any(m in text for m in DESTRUCTIVE_MARKERS):
+        text = f"{rng.choice(DESTRUCTIVE_MARKERS)} {text}"
+    if barge_in and not any(m in text for m in BARGE_MARKERS):
+        text = f"{rng.choice(BARGE_MARKERS)}، {text}"
+    if stuck_in_loop and not any(m in text for m in LOOP_MARKERS):
+        text = f"{text}، وبعدنا بنحاول"
     should_speak = True
     if roll < 0.25 and not (is_destructive or barge_in or stuck_in_loop):
         should_speak = False  # routine tick, stays silent
