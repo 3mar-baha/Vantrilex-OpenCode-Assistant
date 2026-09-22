@@ -93,6 +93,22 @@ export class GroqBrainClient implements BrainClient {
 
   async respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean }> {
     const started = Date.now();
+    // Transient empty completions get one immediate retry; persistent failure
+    // takes the fallback path (never raw speech, never a loop).
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.respondOnce(transcript, sessionContext, started);
+      } catch (err) {
+        lastError = err;
+        const retryableEmpty = err instanceof OrchestratorError && err.code === 'BRAIN_TIMEOUT' && err.retryable;
+        if (!retryableEmpty || attempt === 1) throw err;
+      }
+    }
+    throw lastError;
+  }
+
+  private async respondOnce(transcript: string, sessionContext: string, started: number): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), BRAIN_CEILING_MS);
     try {
@@ -111,6 +127,9 @@ export class GroqBrainClient implements BrainClient {
       );
       const elapsedMs = Date.now() - started;
       const content = completion.choices[0]?.message?.content ?? '';
+      if (content.trim().length === 0) {
+        throw new OrchestratorError('BRAIN_TIMEOUT', true, 'brain returned empty completion — retrying once');
+      }
       const output = normalizeBrainJson(extractJson(content));
       if (output === null) {
         throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain returned non-JSON output — fallback briefing');
