@@ -2,7 +2,8 @@
 """G1 exit-gate verifier — docs/16 §16.8B.1 (Laya P0 Phase 1).
 
 Reads ml/data/synth_meta.json and asserts every Phase-1 gate. Exit 0 = pass.
-G1.7 (pyright clean) is verified separately via `opencode debug lsp diagnostics`.
+G1.9 (pyright clean on the ml scripts) is verified separately via
+`opencode debug lsp diagnostics`.
 """
 from __future__ import annotations
 
@@ -11,11 +12,19 @@ import re
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+
 MIN_MINORITY = 0.20
 MIN_NEGATIONS = 40
 MIN_MARKER_FREE = 60
+MIN_FRAMES = 200
 MAX_PHI = 0.30
+MAX_P99_TOKENS = 32
 HEADS = ("should_speak", "is_destructive", "barge_in", "stuck_in_loop")
+HF_TOKENIZER = (
+    "O:/opencode-Vantrilex/.hf_cache/hub/models--convaiinnovations--laya-multilingual/"
+    "snapshots/052592a15d198d9ad47da779604259b10b47b7aa/tokenizer/tokenizer.json"
+)
 
 
 def main() -> None:
@@ -57,6 +66,28 @@ def main() -> None:
         f"{name}[" + ",".join(f"{h}={v:.0%}" for h, v in mins.items()) + "]" for name, mins in parsed.items()
     )
     results.append((f"G1.6 balance per split (every head >= {MIN_MINORITY:.0%} minority)", balance_ok, detail))
+
+    frames_total = meta.get("frames_total", 0)
+    results.append((f"G1.7 template diversity (frames >= {MIN_FRAMES})", frames_total >= MIN_FRAMES, f"frames={frames_total}"))
+
+    # G1.8 token length — critical: keeps the ~26 ms latency operating point.
+    try:
+        from tokenizers import Tokenizer
+
+        tokenizer = Tokenizer.from_file(HF_TOKENIZER)
+        corpus = ROOT / "ml" / "data" / "synth_ammani_se.jsonl"
+        lengths = sorted(
+            len(tokenizer.encode(json.loads(line)["text"]).ids)
+            for line in corpus.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+        p99 = lengths[int(len(lengths) * 0.99)]
+        length_ok = p99 <= MAX_P99_TOKENS
+        detail = f"max={lengths[-1]} p99={p99} n={len(lengths)}"
+    except Exception as exc:  # noqa: BLE001
+        length_ok = False
+        detail = f"tokenizer/length check failed: {exc}"
+    results.append((f"G1.8 token length p99 <= {MAX_P99_TOKENS}", length_ok, detail))
 
     width = max(len(name) for name, _, _ in results)
     failed = False

@@ -77,16 +77,17 @@ def main() -> None:
     ]
     train_set = set(train_texts)
     exact = [c["id"] for c in cases if norm(c["text"]) in train_set]
-    contained = [
-        c["id"]
-        for c in cases
-        if any(norm(c["text"]) in t and norm(c["text"]) != t for t in train_texts)
+    suite_in_train = [
+        c["id"] for c in cases if any(norm(c["text"]) in t and norm(c["text"]) != t for t in train_texts)
     ]
-    overlap_ok = not exact and not contained
-    detail = f"exact={len(exact)} contained={len(contained)}"
+    train_in_suite = [
+        c["id"] for c in cases if any(t in norm(c["text"]) and t != norm(c["text"]) for t in train_set)
+    ]
+    overlap_ok = not exact and not suite_in_train and not train_in_suite
+    detail = f"exact={len(exact)} suite_in_train={len(suite_in_train)} train_in_suite={len(train_in_suite)}"
     if not overlap_ok:
-        detail += f" | exact_ids={exact} contained_ids={contained}"
-    results.append(("G2.3 zero overlap with training corpus", overlap_ok, detail))
+        detail += f" | exact={exact} suite_in_train={suite_in_train} train_in_suite={train_in_suite}"
+    results.append(("G2.3 zero overlap with training corpus (both directions)", overlap_ok, detail))
 
     # Architect review
     review = suite.get("review", {})
