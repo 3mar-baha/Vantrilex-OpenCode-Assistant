@@ -1,28 +1,32 @@
 {
   "seed": 8,
-  "count": 5180,
+  "count": 5200,
   "splits": {
-    "train": 4440,
-    "val": 370,
-    "test": 370
+    "train": 4160,
+    "val": 520,
+    "test": 520
   },
-  "balance_overall": "should_speak: true=57.14% false=42.86%\nis_destructive: true=26.68% false=73.32%\nbarge_in: true=21.93% false=78.07%\nstuck_in_loop: true=25.21% false=74.79%",
-  "balance_train": "should_speak: true=58.33% false=41.67%\nis_destructive: true=26.55% false=73.45%\nbarge_in: true=22.00% false=78.00%\nstuck_in_loop: true=25.20% false=74.80%",
+  "balance_overall": "should_speak: true=50.00% false=50.00%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=21.98% false=78.02%\nstuck_in_loop: true=24.00% false=76.00%",
+  "balance_splits": {
+    "train": "should_speak: true=50.00% false=50.00%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=22.00% false=78.00%\nstuck_in_loop: true=23.99% false=76.01%",
+    "val": "should_speak: true=50.00% false=50.00%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=21.92% false=78.08%\nstuck_in_loop: true=24.04% false=75.96%",
+    "test": "should_speak: true=50.00% false=50.00%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=21.92% false=78.08%\nstuck_in_loop: true=24.04% false=75.96%"
+  },
   "hygiene": {
     "markerless_positives": 0,
     "marker_free_paraphrase_contains_marker": 0,
     "loop_markerless": 0,
     "barge_markerless": 0
   },
-  "negation_coverage": 390,
-  "marker_free_positives": 551,
+  "negation_coverage": 423,
+  "marker_free_positives": 523,
   "head_correlation": {
-    "should_speak~is_destructive": 0.0241,
-    "should_speak~barge_in": -0.003,
-    "should_speak~stuck_in_loop": -0.0227,
-    "is_destructive~barge_in": 0.0041,
-    "is_destructive~stuck_in_loop": -0.0045,
-    "barge_in~stuck_in_loop": 0.0049
+    "should_speak~is_destructive": -0.0231,
+    "should_speak~barge_in": -0.0144,
+    "should_speak~stuck_in_loop": 0.009,
+    "is_destructive~barge_in": -0.0094,
+    "is_destructive~stuck_in_loop": -0.0135,
+    "barge_in~stuck_in_loop": 0.0257
   },
   "split_integrity": {
     "cross_split_frames": 0,
@@ -32,34 +36,46 @@
         "outcome-01",
         "outcome-02",
         "outcome-03",
+        "outcome-04",
         "outcome-05",
         "outcome-06",
         "outcome-07",
-        "outcome-08",
         "outcome-10",
         "outcome-11",
         "outcome-12",
         "outcome-13",
         "outcome-14",
         "outcome-15",
+        "outcome-16",
+        "outcome-17",
         "routine-00",
         "routine-01",
         "routine-02",
         "routine-03",
+        "routine-04",
         "routine-05",
         "routine-06",
         "routine-07",
-        "routine-08",
         "routine-10",
-        "routine-11"
+        "routine-11",
+        "routine-12",
+        "routine-13",
+        "routine-14",
+        "routine-15",
+        "routine-16",
+        "routine-17"
       ],
       "val": [
-        "outcome-04",
-        "outcome-09"
+        "outcome-08",
+        "outcome-18",
+        "routine-08",
+        "routine-18"
       ],
       "test": [
-        "routine-04",
-        "routine-09"
+        "outcome-09",
+        "outcome-19",
+        "routine-09",
+        "routine-19"
       ]
     }
   },
