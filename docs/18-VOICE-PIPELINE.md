@@ -7,20 +7,26 @@
 
 ```mermaid
 flowchart LR
-    MIC(["Mic\npush-to-talk"]) --> CH["chunker\n5s win / 0.5s overlap"] --> STT["Whisper\nlarge-v3-turbo\np50 <500ms"]
+    MIC(["Mic\nArmed / push-to-talk"]) --> CH["chunker\n5s win / 0.5s overlap"] --> STT["Whisper\nlarge-v3-turbo\np50 <500ms"]
     STT --> TX["transcript\nbilingual verbatim\n+ correction window"]
-    TX --> BR["brain\ngpt-oss-120b\n2.0s / 5.0s"]
-    BR --> OUT["intent + Ammani reply\n(validated JSON)"]
-    OUT --> CACHE{"LRU-50 hit?"}
+    TX --> BR["brain\ngpt-oss-120b + RAG corpora\n2.0s / 5.0s"]
+    BR --> OUT["intent + dynamic Ammani reply\n(validated JSON)"]
+    OUT --> GATE{"high-stakes?\ndestructive → ask"}
+    GATE -->|confirm| CACHE{"LRU-50 hit?"}
+    GATE -->|safe| CACHE
     CACHE -->|hit| PLAY["play blob\n<50ms"]
     CACHE -->|miss| TTS["Fish s2.1-pro-free\nstream, first-chunk <800ms"]
     TTS --> STORE["store blob\n(evict LRU)"] --> PLAY
-    PLAY --> SPK(["Speaker\nno focus APIs"])
+    PLAY --> SPK(["Speaker\nno focus APIs\nbarge-in <50ms"])
+    EV["SSE structured events\n+ file log-tail (40w cap)"] --> BR
 ```
 
 Stage budgets are end-to-end additive worst case, but STT streams while the user still
 speaks and TTS streams while the brain text is final — perceived latency is dominated
-by the brain's 2.0 s golden path.
+by the brain's 2.0 s golden path. **There is no raw terminal audio ring buffer in this
+architecture** (ADR-007): the brain consumes structured JSON lifecycle events from the
+SSE stream; raw stdout/stderr reaches speech only via file-based log tailing, capped at
+40 spoken words per excerpt (§18.6).
 
 ## 18.2 — STT: Groq Whisper Audio Chunking (normative)
 
@@ -58,17 +64,32 @@ export interface Transcript {
 ### 18.3.1 System prompt (canonical shape — full text lives in `src/voice/prompts/ammani.system.md`)
 
 ```
-You are the voice of the developer's ambient coding orchestrator.
-Spoken output: authentic Ammani Jordanian Arabic (العامية الأردنية العمانية) —
-natural, warm, concise. NEVER Modern Standard Arabic newsreader style.
+You are the voice of the developer's ambient coding orchestrator — a peer, not a script.
+SYNTHESIZE every reply dynamically in your own authentic voice. Illustrative anchors below
+define register and flavor ONLY; NEVER repeat them verbatim. Adapt phrasing, tone, and
+pacing to live context, outcome severity, and session specifics.
+Spoken output: everyday Ammani Jordanian Arabic software-engineering parlance —
+natural particles, fluid English technical terms ("تيستات", "بيلد", "سكيما").
+NEVER MSA newsreader prose, exaggerated Beiruti slang, or foreign regional dialects.
 Technical spans (code identifiers, file paths, log excerpts, error codes, session
 names, CLI commands) stay in technical English, read with English pronunciation.
 Never transliterate code into Arabic script. Never translate error codes.
 Briefings: BLUF first — outcome + session identity in ≤ 15 spoken words, then at
-most 3 change-clauses, then one next-action sentence. Total ≤ 45 spoken seconds.
+most 3 change-clauses, then one next-action sentence. Total ≤ 45 spoken seconds;
+failure briefings ≤ 15 seconds: state → modules + count → logs saved → next step.
+Destructive verbs (destroy/delete/drop/force-push/deploy/rm-rf): ALWAYS ask for
+explicit two-way confirmation first. Ambiguous destructive speech: ask, never act.
+Retry loops: stay silent on intermediate attempts; heartbeat every 5 min or 3 fails;
+halt at 5 consecutive failures and ask for guidance.
 Classify every input into exactly one intent: newSession | followUp | control.
 Reply ONLY with the JSON shape below. No prose outside JSON.
 ```
+
+**RAG grounding (normative):** phrasing calibration draws on Gheith-Abandah/JODA
+(59k sentences), UniversalDependencies UD South Levantine Arabic-MADAR, and
+CAMeL-Lab `camel_tools`; planning methodology on dair-ai Prompt-Engineering-Guide;
+BLUF summarization on csebuetnlp xl-sum. Corpora are ingested at prompt-build time;
+the corpora manifest (versions + digests) is ledger-recorded per release.
 
 ### 18.3.2 Model call
 
@@ -92,15 +113,34 @@ export type BrainOutput = z.infer<typeof BrainOutputSchema>;
 ### 18.3.4 Language audit
 
 Every release runs the 100-briefing audit (`11` §11.5): zero non-technical English in
-narrative spans; zero Arabic script inside code spans. Regressions block the gate.
+narrative spans; zero Arabic script inside code spans; zero MSA broadcast phrasing;
+zero foreign-dialect particles; plus a trust-breaker scan (no hallucinated completion
+claims, tone matched to severity — never cheerful on failure, no lectures).
+Regressions block the gate.
+
+## 18.6 — Event Feed and Log Tailing (normative, ADR-007)
+
+The brain's world-model input is **structured JSON lifecycle events** consumed straight
+from the SSE stream (`session:start`, `agent:action`, `subagent:complete`,
+`session:complete`, `session:idle`, `step:complete`) — typed, validated, idempotent.
+Raw terminal bytes never enter the audio path and never enter a ring buffer (the
+ring-buffer concept is deprecated and SHALL NOT be implemented).
+
+Raw stdout/stderr is observable via **file-based log tailing**: the launcher captures
+child output to redacted log files; the brain may quote excerpts on demand subject to
+a hard cap of **40 spoken words** per excerpt (longer diagnostics stay in the log with
+an offer to continue). The 40-word cap is enforced in `bluf()` post-processing, not
+left to model goodwill.
 
 ## 18.4 — TTS: Fish Audio Streaming Integration (normative)
 
 1. **Cache first:** key `sha256(normalize(text) + '|' + fishVoiceId)`; hit → play blob
    (< 50 ms), no provider call, no keyring acquisition.
 2. **Synthesize:** `POST` streaming per `06` §6.6, model `s2.1-pro-free`, voice from
-   `VOICE_IDS` (`05` §5.1). Active voice = operator toggle (`male-default` default);
-   toggle applies at the next utterance boundary, never mid-word.
+   `VOICE_IDS` (`05` §5.1). Active voice = operator persona preference
+   (`male-default` default) applied universally; in advanced multi-agent runs the
+   secondary voice may represent the auditor/reviewer agent. Toggle applies at the
+   next utterance boundary, never mid-word.
 3. **Playback:** start on first chunk (p50 < 800 ms after text ready); stream to the
    background audio path — no window handles, no focus calls (`02` §2.2).
 4. **Persist:** completed blobs within size cap enter the LRU (`set()` evicts
