@@ -145,7 +145,8 @@ reports are tracked. Decision record: `09` ADR-008.*
 | L2 export | FP32 + dynamic-INT8 ONNX, dynamic batch+seq dims, parity vs torch | `fbf8531`, `0d08d1e` | parity 3.24e-05 < 1e-4; INT8 all gates PASS (`ml/quant_report.json`) |
 | L2 latency | ORT_ENABLE_ALL sweep; operating length 32 (corpus p99) | `0d08d1e` | p50 **25.84 ms** < 40 ms (`ml/l2_report.json`) |
 | L3 bridge | real SentencePiece-BPE tokenizer (golden-vector parity), onnxruntime-node engine, race-safe session | `428fd98`, `93f5adf`, `d622b32` | 3/3 live tests green; tokenizer byte-for-byte vs Python |
-| L4 docs | ADR-008 + this ledger | `df3a9c1`, *m7 close* | Gate-4: tsc 0, lint 0, 41 unit tests green |
+| L3 wiring | `LayaSpeechAdvisor` implements the orchestrator `SpeechAdvisor` gate | `3482f23` | 3/3 adapter tests green |
+| L4 docs | ADR-008 + this ledger | `df3a9c1`, *m7 close* | Gate-4: tsc 0, lint 0, 44 unit tests green |
 
 **Findings fixed in-flight (each was release-blocking):**
 
