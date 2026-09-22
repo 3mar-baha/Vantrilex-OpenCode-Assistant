@@ -40,11 +40,20 @@ class LayaHeadDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict:
         row = self.rows[index]
-        enc = self.tokenizer(
-            row["text"], truncation=True, padding="max_length", max_length=self.max_length, return_tensors="pt"
-        )
+        # `tokenizers` lib directly: repo tokenizer_config is custom-shaped and
+        # breaks transformers' AutoTokenizer init — bypass it, pad manually.
+        enc = self.tokenizer.encode(row["text"])
+        ids = enc.ids[: self.max_length]
+        mask = [1] * len(ids)
+        while len(ids) < self.max_length:
+            ids.append(0)
+            mask.append(0)
         labels = torch.tensor([1.0 if row["labels"][h] else 0.0 for h in HEADS])
-        return {"input_ids": enc["input_ids"].squeeze(0), "attention_mask": enc["attention_mask"].squeeze(0), "labels": labels}
+        return {
+            "input_ids": torch.tensor(ids, dtype=torch.long),
+            "attention_mask": torch.tensor(mask, dtype=torch.long),
+            "labels": labels,
+        }
 
 
 class LayaHeads(nn.Module):
@@ -57,7 +66,9 @@ class LayaHeads(nn.Module):
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict[str, torch.Tensor]:
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-        pooled = outputs.last_hidden_state[:, 0, :]
+        # Masked mean pooling matches the mmBERT pretraining head (classifier_pooling=mean).
+        mask = attention_mask.unsqueeze(-1).float()
+        pooled = (outputs.last_hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
         return {h: self.heads[h](pooled).squeeze(-1) for h in HEADS}
 
     def head_state(self) -> dict:
@@ -86,8 +97,18 @@ def main() -> None:
     assert not torch.cuda.is_available(), "CPU-only invariant violated"
     print(f"threads={threads} cuda_available=False")
 
-    tokenizer = AutoTokenizer.from_pretrained(training["model_id"], trust_remote_code=True)
-    backbone = AutoModel.from_pretrained(training["model_id"], trust_remote_code=True)
+    # Laya repo layout: backbone under `encoder/`, tokenizer.json under `tokenizer/`
+    # (loaded via the `tokenizers` lib — see dataset class note above).
+    from huggingface_hub import snapshot_download
+    from tokenizers import Tokenizer
+
+    tokenizer_path = Path(
+        snapshot_download(
+            training["model_id"], allow_patterns=["tokenizer/tokenizer.json"]
+        )
+    ) / "tokenizer" / "tokenizer.json"
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    backbone = AutoModel.from_pretrained(training["model_id"], subfolder="encoder", trust_remote_code=True)
     hidden = backbone.config.hidden_size
     model = LayaHeads(backbone, hidden)
 

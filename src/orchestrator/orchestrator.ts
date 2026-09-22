@@ -12,6 +12,12 @@ export interface Speaker {
   speak(text: string): Promise<void>;
 }
 
+/** Advisory System-1 gate (M7 Laya). Absent advisor = prior behavior, unchanged. */
+export interface SpeechAdvisor {
+  shouldSpeak(text: string): Promise<boolean>;
+  isDestructive(text: string): Promise<boolean>;
+}
+
 export class Orchestrator {
   private cursor: string | null = null;
   private readonly seen = new Set<string>();
@@ -24,6 +30,7 @@ export class Orchestrator {
     private readonly client: ServeClient,
     dataDir: string,
     private readonly speaker: Speaker,
+    private readonly advisor?: SpeechAdvisor,
   ) {
     this.ledger = new Ledger(dataDir);
   }
@@ -113,13 +120,22 @@ export class Orchestrator {
     let enqueued = false;
     if (envelope.type === 'session:complete' || envelope.type === 'session:idle' || envelope.type === 'step:complete') {
       const payload = envelope.payload as { outcome?: string; summaryText?: string };
-      enqueued = this.queue.enqueue({
-        sessionId: envelope.sessionId as SessionId,
-        eventId: envelope.id,
-        tier: 'T1',
-        outcome: payload.outcome ?? 'unknown',
-        text: payload.summaryText ?? `${envelope.sessionId} ${envelope.type}`,
-      });
+      const text = payload.summaryText ?? `${envelope.sessionId} ${envelope.type}`;
+      // Advisory Laya gate: silence only when the advisor votes against speech.
+      // Destructive tripwire never auto-acts — FR-12 confirmation still mandatory.
+      const advisorAllows = this.advisor === undefined || (await this.advisor.shouldSpeak(text).catch(() => true));
+      if (advisorAllows) {
+        enqueued = this.queue.enqueue({
+          sessionId: envelope.sessionId as SessionId,
+          eventId: envelope.id,
+          tier: 'T1',
+          outcome: payload.outcome ?? 'unknown',
+          text,
+        });
+      } else {
+        this.ledger.append({ event: envelope, receivedAt: nowIso(), briefingEnqueued: false, gap });
+        return;
+      }
     }
     this.ledger.append({ event: envelope, receivedAt: nowIso(), briefingEnqueued: enqueued, gap });
     if (enqueued) {
