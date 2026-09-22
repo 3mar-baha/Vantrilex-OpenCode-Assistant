@@ -1,0 +1,11 @@
+{
+  "seed": 7,
+  "count": 5200,
+  "splits": {
+    "train": 4160,
+    "val": 520,
+    "test": 520
+  },
+  "balance_overall": "should_speak: true=61.21% false=38.79%\nis_destructive: true=20.12% false=79.88%\nbarge_in: true=22.46% false=77.54%\nstuck_in_loop: true=23.98% false=76.02%",
+  "balance_train": "should_speak: true=61.06% false=38.94%\nis_destructive: true=20.00% false=80.00%\nbarge_in: true=22.14% false=77.86%\nstuck_in_loop: true=23.92% false=76.08%"
+}

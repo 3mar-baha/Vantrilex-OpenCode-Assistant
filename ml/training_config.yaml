@@ -1,0 +1,26 @@
+# Laya System-1 calibration — docs/09 ADR-008 (pending), milestone M7 L1.
+# Backbone: convaiinnovations/laya-multilingual (322M), frozen. Four
+# non-autoregressive linear heads, per-head class-weighted BCE, AdamW,
+# CPU-only (torch.set_num_threads). Early stop on val macro-F1 plateau.
+training:
+  model_id: convaiinnovations/laya-multilingual
+  freeze_backbone: true
+  heads: [should_speak, is_destructive, barge_in, stuck_in_loop]
+  max_length: 128
+  batch_size: 32
+  epochs: 5
+  lr: 2.0e-4
+  weight_decay: 0.01
+  early_stop_patience: 2
+  seed: 7
+  num_threads: 0  # 0 = os.cpu_count()
+data:
+  train: ml/data/splits/train.jsonl
+  val: ml/data/splits/val.jsonl
+  test: ml/data/splits/test.jsonl
+output:
+  dir: ml/checkpoints/laya-m7
+  report: ml/eval_report.md
+gates:
+  primary_accuracy: 0.90   # should_speak + is_destructive heads, test set
+  secondary_accuracy: 0.85 # barge_in + stuck_in_loop heads, test set

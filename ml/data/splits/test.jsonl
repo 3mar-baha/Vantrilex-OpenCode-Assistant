@@ -1,0 +1,520 @@
+{"id": "synth-03052", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00731", "text": "يا عمر رجع 500 من السيرفر بملف الـ Auth", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00414", "text": "وقف، rm -rf لسّاني شغال على الـ cache، علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-02659", "text": "ركز معي شوي: الـ code review رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00079", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00815", "text": "يا عمر المفتاح خلصت حصته بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00624", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04762", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01131", "text": "لسّاني شغال على الـ API، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04759", "text": "التيستات المفتاح خلصت حصته، أبلش أصلحهم", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03154", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01978", "text": "تمام بس، drop خلصت الـ code review، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04637", "text": "البيلد المفتاح خلصت حصته بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00954", "text": "اسكت، ديبلوي تمام، الريفاكتور صارت علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01039", "text": "هاي المحاولة 3 والمشكلة فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02868", "text": "هاي المحاولة 6 والمشكلة المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04672", "text": "التيستات تمام بس في تحذيرين، أبلش أصلحهم", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00086", "text": "خلصت التيستات، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03068", "text": "لسّاني شغال على الـ cache، فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00855", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03960", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00701", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03892", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01009", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01751", "text": "وقف اللي بتعمله، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00835", "text": "خلصت البيلد، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01607", "text": "التيستات البورت محجوز، أفتح لك التفاصيل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04962", "text": "وقف اللي بتعمله، خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01370", "text": "البيلد المفتاح خلصت حصته بعد آخر كوميت", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04805", "text": "البيلد تمام بس في تحذيرين بعد ريستارت السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00095", "text": "المفتاح خلصت حصته، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00176", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03660", "text": "تمام، البيلد صارت كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01356", "text": "تمام، الـ schema صارت البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02477", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03634", "text": "ديبلوي لسّاني شغال على الـ API، البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00588", "text": "البيلد فشل بثلاث تيستات بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00439", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04225", "text": "ديبلوي تمام، الديبلوي صارت في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03374", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03738", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02847", "text": "دمر التيستات علق على Type errors، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03298", "text": "ركز معي شوي: البيلد رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04823", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04025", "text": "التيستات فشل بثلاث تيستات، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01058", "text": "ديبلوي لسّاني شغال على الـ API، فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03879", "text": "وقف، امسح خلصت الريفاكتور، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00127", "text": "اسكت، ديبلوي التيستات تمام بس في تحذيرين، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00423", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01453", "text": "ديبلوي لسّاني شغال على الـ cache، البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00828", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05045", "text": "تمام، الـ schema صارت رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04311", "text": "تمام بس، drop وقف اللي بتعمله، علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03813", "text": "خلصت الديبلوي، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04616", "text": "تمام، الريفاكتور صارت في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04241", "text": "دمر البيلد فشل بثلاث تيستات بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00260", "text": "خلصت الـ schema، خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01442", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00797", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04490", "text": "تمام بس، drop البيلد فشل بثلاث تيستات بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-05106", "text": "تمام، الـ migration صارت خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02962", "text": "لسّاني شغال على الـ schema، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00903", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02790", "text": "ديبلوي البيلد خلص أخضر بعد آخر كوميت", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-02778", "text": "هاي المحاولة 2 والمشكلة كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01010", "text": "هاي المحاولة 3 والمشكلة كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-03747", "text": "يا عمر علق على Type errors بملف الـ REF", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04159", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03089", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02521", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01754", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03979", "text": "هاي المحاولة 4 والمشكلة تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04301", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04299", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01631", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02110", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05098", "text": "التيستات البورت محجوز، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04043", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04321", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04428", "text": "تمام، التيستات صارت كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00378", "text": "رجع 500 من السيرفر، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04620", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00142", "text": "هاي المحاولة 2 والمشكلة رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04096", "text": "هاي المحاولة 6 والمشكلة رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01622", "text": "يا عمر علق على Type errors بملف الـ Auth", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00923", "text": "تمام بس، ديبلوي ركز معي شوي: الريفاكتور في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-05140", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00426", "text": "خلصت الـ lint، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03575", "text": "تمام، الـ code review صارت فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02573", "text": "خلص بكفي، دمر هاي المحاولة 6 والمشكلة البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04074", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01364", "text": "ركز معي شوي: الـ code review فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02241", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01425", "text": "التيستات رجع 500 من السيرفر، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00429", "text": "خلصت البيلد، علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03463", "text": "ركز معي شوي: الـ cache فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03396", "text": "لسّاني شغال على الـ code review، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04863", "text": "لسّاني شغال على الـ migration، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01596", "text": "ركز معي شوي: الريفاكتور فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01873", "text": "تمام، الـ migration صارت خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01833", "text": "يا عمر فشل بثلاث تيستات بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03349", "text": "التيستات رجع 500 من السيرفر، أبلش أصلحهم", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04381", "text": "التيستات كلها خضرا بدون مشاكل، تشوف اللوج", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01185", "text": "خلصت الـ API، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00887", "text": "يا عمر البورت محجوز بملف الـ REF", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03268", "text": "يا عمر في مشكلة بملفين بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00322", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04026", "text": "تمام، الديبلوي صارت خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02353", "text": "لسّاني شغال على البيلد، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04491", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01416", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01738", "text": "البيلد رجع 500 من السيرفر بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02038", "text": "يا عمر البورت محجوز بملف الـ billing", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03906", "text": "هاي المحاولة 4 والمشكلة خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00026", "text": "وقف، احذف ركز معي شوي: الـ schema في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01658", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04728", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01530", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00849", "text": "هاي المحاولة 3 والمشكلة تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01419", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01394", "text": "يا عمر كلها خضرا بدون مشاكل بملف الـ billing", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00022", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01347", "text": "ركز معي شوي: الـ migration تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00200", "text": "لسّاني شغال على الـ schema، علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01211", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00874", "text": "البيلد البورت محجوز بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01235", "text": "امسح لسّاني شغال على الـ API، خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00708", "text": "خلصت الـ schema، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02704", "text": "لسّاني شغال على البيلد، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00045", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03424", "text": "ركز معي شوي: الـ schema البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04727", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05186", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00388", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00267", "text": "البيلد البورت محجوز بعد ريستارت السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03829", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04471", "text": "احذف لسّاني شغال على الـ code review، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00271", "text": "خلصت الـ cache، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02637", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02409", "text": "تمام بس، امسح وقف اللي بتعمله، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00413", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02482", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02838", "text": "التيستات خلص أخضر، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00760", "text": "خلصت الـ code review، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03257", "text": "التيستات خلص أخضر، أفتح لك التفاصيل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03514", "text": "خلصت الـ API، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03610", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00800", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02062", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04682", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04952", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04345", "text": "تمام، الـ code review صارت تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01133", "text": "التيستات في مشكلة بملفين، تشوف اللوج", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01083", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01514", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00360", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03038", "text": "يا عمر المفتاح خلصت حصته بملف الـ billing", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01115", "text": "البيلد البورت محجوز بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02312", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02608", "text": "خلصت البيلد، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02080", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00283", "text": "يا عمر كلها خضرا بدون مشاكل بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00131", "text": "تمام، البيلد صارت تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01801", "text": "البيلد تمام بس في تحذيرين بعد ريستارت السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00899", "text": "التيستات تمام بس في تحذيرين، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04003", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01841", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03029", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01269", "text": "تمام، الـ lint صارت فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00912", "text": "لسّاني شغال على الـ migration، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00922", "text": "لسّاني شغال على الـ lint، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01976", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02026", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01620", "text": "ركز معي شوي: الديبلوي علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02522", "text": "خلصت الـ API، علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00555", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01234", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00935", "text": "خلصت الريفاكتور، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03122", "text": "البيلد علق على Type errors بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03169", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03525", "text": "علق على Type errors، بتحب تشوف اللوج؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00487", "text": "التيستات في مشكلة بملفين، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04401", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01070", "text": "وقف اللي بتعمله، خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01103", "text": "هاي المحاولة 2 والمشكلة البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04573", "text": "ركز معي شوي: الديبلوي كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04048", "text": "rm -rf التيستات رجع 500 من السيرفر، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04646", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01143", "text": "في مشكلة بملفين، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02665", "text": "التيستات علق على Type errors، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01031", "text": "البيلد علق على Type errors بعد آخر كوميت", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02802", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01357", "text": "البيلد علق على Type errors بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04547", "text": "هاي المحاولة 4 والمشكلة فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02357", "text": "البيلد رجع 500 من السيرفر بعد ريستارت السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01435", "text": "يا عمر المفتاح خلصت حصته بملف الـ REF", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04327", "text": "البيلد خلص أخضر بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02875", "text": "هاي المحاولة 2 والمشكلة علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02034", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00092", "text": "لسّاني شغال على الديبلوي، البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-03784", "text": "التيستات تمام بس في تحذيرين، أفتح لك التفاصيل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00480", "text": "ركز معي شوي: الـ lint تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-05170", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04328", "text": "هاي المحاولة 6 والمشكلة تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00618", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03566", "text": "يا عمر كلها خضرا بدون مشاكل بملف الـ Auth", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03157", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00625", "text": "هاي المحاولة 3 والمشكلة البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00191", "text": "في مشكلة بملفين، بتحب تشوف اللوج؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05075", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02898", "text": "هاي المحاولة 3 والمشكلة المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00786", "text": "تمام، الـ cache صارت خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04253", "text": "التيستات البورت محجوز، تشوف اللوج", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04458", "text": "البيلد فشل بثلاث تيستات بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03175", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00228", "text": "لسّاني شغال على الـ lint، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01645", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04617", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04320", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05036", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01505", "text": "يا عمر المفتاح خلصت حصته بملف الـ REF", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00551", "text": "هاي المحاولة 6 والمشكلة كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04556", "text": "البورت محجوز، بتحب نعمل ريتراي؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01261", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00399", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04266", "text": "يا عمر تمام بس في تحذيرين بملف الـ gateway", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03460", "text": "لسّاني شغال على الـ code review، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-05121", "text": "احذف يا عمر علق على Type errors بملف الـ REF", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03543", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03827", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04939", "text": "اسكت، ديبلوي لسّاني شغال على البيلد، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04883", "text": "خلصت الـ API، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01544", "text": "لسّاني شغال على الـ lint، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-02652", "text": "يا عمر البورت محجوز بملف الـ cache", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04926", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00384", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03164", "text": "هاي المحاولة 4 والمشكلة فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00536", "text": "تمام، الريفاكتور صارت المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01005", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03301", "text": "التيستات المفتاح خلصت حصته، أفتح لك التفاصيل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05197", "text": "ركز معي شوي: الـ lint البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04859", "text": "ركز معي شوي: الديبلوي البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04501", "text": "يا عمر المفتاح خلصت حصته بملف الـ REF", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03567", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00668", "text": "خلصت الـ migration، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02091", "text": "هاي المحاولة 5 والمشكلة في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04551", "text": "تمام بس، امسح المفتاح خلصت حصته، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01325", "text": "خلصت الـ migration، خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02545", "text": "ركز معي شوي: الديبلوي خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04154", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04514", "text": "rm -rf تمام، البيلد صارت تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01649", "text": "يا عمر تمام بس في تحذيرين بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03947", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00901", "text": "خلصت التيستات، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04687", "text": "تمام، الريفاكتور صارت كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05033", "text": "البيلد رجع 500 من السيرفر بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04731", "text": "force-push هاي المحاولة 4 والمشكلة المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04998", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03737", "text": "تمام، الريفاكتور صارت المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03430", "text": "التيستات كلها خضرا بدون مشاكل، أفتح لك التفاصيل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01601", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03553", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00216", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01117", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01759", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00682", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02610", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03210", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04049", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03734", "text": "يا عمر علق على Type errors بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00088", "text": "لسّاني شغال على الـ cache، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00308", "text": "لسّاني شغال على الـ API، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00919", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01985", "text": "التيستات خلص أخضر، تشوف اللوج", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05187", "text": "التيستات البورت محجوز، تشوف اللوج", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04559", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01275", "text": "لسّاني شغال على الـ API، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01431", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04163", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03364", "text": "اسكت، دمر تمام، البيلد صارت خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01409", "text": "لسّاني شغال على الـ API، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01413", "text": "وقف اللي بتعمله، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04312", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01581", "text": "تمام بس في تحذيرين، بتحب تشوف اللوج؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-02160", "text": "البيلد علق على Type errors بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03117", "text": "البيلد خلص أخضر بعد آخر كوميت", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04272", "text": "وقف اللي بتعمله، علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03143", "text": "وقف اللي بتعمله، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00561", "text": "ركز معي شوي: البيلد في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04654", "text": "وقف اللي بتعمله، خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04090", "text": "تمام، الـ schema صارت البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05042", "text": "يا عمر البورت محجوز بملف الـ billing", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01108", "text": "تمام، الـ lint صارت خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00338", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01473", "text": "يا عمر كلها خضرا بدون مشاكل بملف الـ gateway", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00225", "text": "خلصت التيستات، خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03616", "text": "تمام، الديبلوي صارت كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03613", "text": "دمر وقف اللي بتعمله، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03240", "text": "اسكت، ديبلوي هاي المحاولة 6 والمشكلة فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00864", "text": "التيستات في مشكلة بملفين، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-02019", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00302", "text": "خلصت البيلد، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00173", "text": "التيستات فشل بثلاث تيستات، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04533", "text": "اسكت، rm -rf ركز معي شوي: الـ migration تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03721", "text": "البيلد خلص أخضر بعد آخر كوميت", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03409", "text": "كلها خضرا بدون مشاكل، بتحب أفتح لك التفاصيل؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00677", "text": "هاي المحاولة 3 والمشكلة البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00554", "text": "التيستات رجع 500 من السيرفر، أفتح لك التفاصيل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01175", "text": "يا عمر خلص أخضر بملف الـ Auth", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03818", "text": "تمام، الديبلوي صارت علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04602", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01651", "text": "يا عمر كلها خضرا بدون مشاكل بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04140", "text": "امسح لسّاني شغال على الريفاكتور، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01173", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04242", "text": "هاي المحاولة 6 والمشكلة تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03591", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01154", "text": "تمام، الـ schema صارت المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04739", "text": "تمام، الـ migration صارت البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04510", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02195", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03878", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04603", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03970", "text": "ركز معي شوي: الـ API تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03499", "text": "خلصت البيلد، فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02976", "text": "force-push وقف اللي بتعمله، خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01571", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03517", "text": "احذف تمام، الريفاكتور صارت رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03513", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01646", "text": "drop ركز معي شوي: الـ schema في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04861", "text": "drop تمام، الـ code review صارت تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03695", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02581", "text": "خلصت الـ API، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02675", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02667", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00041", "text": "يا عمر فشل بثلاث تيستات بملف الـ Auth", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00416", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01288", "text": "هاي المحاولة 5 والمشكلة تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03008", "text": "ركز معي شوي: البيلد البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01902", "text": "هاي المحاولة 6 والمشكلة فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01256", "text": "هاي المحاولة 3 والمشكلة البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01786", "text": "لسّاني شغال على الـ lint، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02974", "text": "هاي المحاولة 6 والمشكلة تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-02299", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02161", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02196", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04040", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02218", "text": "يا عمر البورت محجوز بملف الـ Auth", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02326", "text": "تمام بس، drop خلصت الـ migration، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00669", "text": "وقف اللي بتعمله، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04252", "text": "التيستات فشل بثلاث تيستات، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04134", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02313", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05135", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01796", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04196", "text": "التيستات رجع 500 من السيرفر، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04902", "text": "وقف اللي بتعمله، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01318", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00184", "text": "يا عمر في مشكلة بملفين بملف الـ gateway", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03580", "text": "التيستات كلها خضرا بدون مشاكل، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00991", "text": "وقف اللي بتعمله، فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01539", "text": "تمام، الديبلوي صارت فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02909", "text": "البيلد تمام بس في تحذيرين بعد ريستارت السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03901", "text": "يا عمر في مشكلة بملفين بملف الـ gateway", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04605", "text": "وقف اللي بتعمله، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00497", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04231", "text": "يا عمر المفتاح خلصت حصته بملف الـ REF", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03865", "text": "تمام، البيلد صارت البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04932", "text": "ركز معي شوي: الـ cache في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00304", "text": "ركز معي شوي: الـ API فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03214", "text": "اسكت، drop التيستات المفتاح خلصت حصته، أكمل ولا أوقف", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01427", "text": "ركز معي شوي: الـ migration البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04287", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03944", "text": "تمام، الـ API صارت رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04729", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04835", "text": "البورت محجوز، بتحب نعمل ريتراي؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02258", "text": "التيستات علق على Type errors، أفتح لك التفاصيل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03926", "text": "ديبلوي ركز معي شوي: الـ code review المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03949", "text": "البيلد كلها خضرا بدون مشاكل بعد ريستارت السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02113", "text": "وقف اللي بتعمله، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00201", "text": "امسح البورت محجوز، بتحب أفتح لك التفاصيل؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04909", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00719", "text": "وقف اللي بتعمله، علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-05059", "text": "وقف اللي بتعمله، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00773", "text": "دمر التيستات كلها خضرا بدون مشاكل، أبلش أصلحهم", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04609", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00879", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03765", "text": "يا عمر خلص أخضر بملف الـ gateway", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04931", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01363", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00346", "text": "فشل بثلاث تيستات، بتحب أكمل ولا أوقف؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-02853", "text": "لسّاني شغال على الـ code review، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-03450", "text": "خلصت الريفاكتور، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03410", "text": "وقف اللي بتعمله، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04000", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04238", "text": "rm -rf لسّاني شغال على الـ cache، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03771", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02337", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00312", "text": "ركز معي شوي: التيستات في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02417", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04843", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02098", "text": "ركز معي شوي: الديبلوي خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04056", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02607", "text": "المفتاح خلصت حصته، بتحب أكمل ولا أوقف؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04892", "text": "وقف اللي بتعمله، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03269", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04342", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00108", "text": "التيستات البورت محجوز، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01329", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05095", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04690", "text": "وقف اللي بتعمله، علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-00373", "text": "يا عمر علق على Type errors بملف الـ gateway", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01652", "text": "لسّاني شغال على الـ lint، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02035", "text": "البيلد كلها خضرا بدون مشاكل بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00744", "text": "ركز معي شوي: الديبلوي كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02053", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05027", "text": "البيلد في مشكلة بملفين بعد ريستارت السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02771", "text": "فشل بثلاث تيستات، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04447", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02805", "text": "يا عمر علق على Type errors بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03899", "text": "البيلد رجع 500 من السيرفر بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01625", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01026", "text": "تمام بس، force-push خلصت الـ lint، خلص أخضر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04095", "text": "تمام بس في تحذيرين، بتحب أكمل ولا أوقف؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03238", "text": "يا عمر رجع 500 من السيرفر بملف الـ cache", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00137", "text": "تمام، الـ code review صارت كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00513", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03321", "text": "التيستات رجع 500 من السيرفر، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00803", "text": "هاي المحاولة 5 والمشكلة تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03416", "text": "وقف، drop رجع 500 من السيرفر، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01259", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00604", "text": "وقف اللي بتعمله، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01686", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04440", "text": "drop التيستات خلص أخضر، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00581", "text": "خلصت الـ migration، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01165", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02450", "text": "التيستات تمام بس في تحذيرين، أبلش أصلحهم", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01100", "text": "البيلد البورت محجوز بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03370", "text": "وقف اللي بتعمله، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-02399", "text": "force-push لسّاني شغال على الـ schema، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-02205", "text": "التيستات المفتاح خلصت حصته، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01696", "text": "في مشكلة بملفين، بتحب أكمل ولا أوقف؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01099", "text": "في مشكلة بملفين، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00403", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04679", "text": "امسح وقف اللي بتعمله، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03376", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03031", "text": "ركز معي شوي: البيلد المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01883", "text": "خلص أخضر، بتحب تشوف اللوج؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02938", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00355", "text": "هاي المحاولة 4 والمشكلة كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-03332", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00190", "text": "لسّاني شغال على الريفاكتور، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04669", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05065", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03802", "text": "البيلد المفتاح خلصت حصته بعد تحديث الديبندنسيز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03149", "text": "وقف اللي بتعمله، علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03684", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01509", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04828", "text": "force-push التيستات فشل بثلاث تيستات، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-01654", "text": "البيلد في مشكلة بملفين بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02014", "text": "لسّاني شغال على الـ schema، فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-05070", "text": "البيلد تمام بس في تحذيرين بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-05032", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04747", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05007", "text": "وقف اللي بتعمله، خلص أخضر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04190", "text": "لسّاني شغال على الـ schema، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-05048", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00521", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01515", "text": "لسّاني شغال على البيلد، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-01648", "text": "هاي المحاولة 3 والمشكلة علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02443", "text": "هاي المحاولة 5 والمشكلة علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04604", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00057", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01583", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01608", "text": "ركز معي شوي: الديبلوي فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03371", "text": "rm -rf البيلد خلص أخضر بعد تنظيف الكاش", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-02936", "text": "لسّاني شغال على الـ cache، المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-03480", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01921", "text": "وقف اللي بتعمله، فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-02534", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03843", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01702", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03595", "text": "وقف اللي بتعمله، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04338", "text": "تمام بس، drop ركز معي شوي: البيلد علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04608", "text": "وقف اللي بتعمله، في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-04290", "text": "تمام، الـ cache صارت رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04685", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02677", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01965", "text": "وقف اللي بتعمله، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-01160", "text": "اسكت، force-push تمام، الـ cache صارت المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-00370", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02995", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-05156", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00323", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03956", "text": "خلصت الـ code review، البورت محجوز", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04081", "text": "خلصت الريفاكتور، كلها خضرا بدون مشاكل", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03658", "text": "في مشكلة بملفين، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01666", "text": "تمام، الـ code review صارت المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01979", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02487", "text": "التيستات البورت محجوز، نعمل ريتراي", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-04740", "text": "خلصت الـ schema، تمام بس في تحذيرين", "labels": {"should_speak": true, "is_destructive": false, "barge_in": true, "stuck_in_loop": false}}
+{"id": "synth-03390", "text": "اسكت، احذف فشل بثلاث تيستات، بتحب أفتح لك التفاصيل؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03592", "text": "خلص بكفي، امسح وقف اللي بتعمله، فشل بثلاث تيستات", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-04946", "text": "الـ lint خلص بدون ملاحظات", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03500", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02456", "text": "تمام، الديبلوي صارت البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04629", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-02982", "text": "خلص بكفي، ديبلوي لسّاني شغال على الـ cache، البورت محجوز", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03171", "text": "خلص بكفي، ديبلوي هاي المحاولة 4 والمشكلة في مشكلة بملفين", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-03118", "text": "لسّاني شغال على الـ API، علق على Type errors", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-02605", "text": "تمام، الـ API صارت المفتاح خلصت حصته", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01493", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01042", "text": "البورت محجوز، بتحب أبلش أصلحهم؟", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-01901", "text": "الكاش تحدث، كل شي مستقر", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03611", "text": "الـ API بيرد طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-04907", "text": "لسّاني شغال على الـ lint، علق على Type errors", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}
+{"id": "synth-00084", "text": "خلصت الـ cache، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00595", "text": "البيلد ماشي طبيعي", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-00204", "text": "التيستات شغالة، ما في جديد", "labels": {"should_speak": false, "is_destructive": false, "barge_in": false, "stuck_in_loop": false}}
+{"id": "synth-03627", "text": "خلص بكفي، ديبلوي لسّاني شغال على الريفاكتور، رجع 500 من السيرفر", "labels": {"should_speak": true, "is_destructive": true, "barge_in": true, "stuck_in_loop": true}}
+{"id": "synth-02996", "text": "في مشكلة بملفين، بتحب نعمل ريتراي؟", "labels": {"should_speak": true, "is_destructive": true, "barge_in": false, "stuck_in_loop": true}}

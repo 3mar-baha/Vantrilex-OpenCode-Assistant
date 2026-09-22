@@ -1,0 +1,16 @@
+# CPU-only ML stack for Milestone M7 (Laya System-1). Install with:
+#   .venv\Scripts\pip install -r ml/requirements-cpu.txt
+# torch CPU wheels via the PyTorch CPU index (see install note below).
+# Host invariant: NO CUDA packages anywhere in this file.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.7.1
+accelerate==1.7.0
+transformers==4.53.1
+datasets==3.6.0
+huggingface-hub==0.33.0
+onnx==1.18.0
+onnxruntime==1.22.0
+scikit-learn==1.7.0
+numpy==2.2.6
+tqdm==4.67.1
+pyyaml==6.0.2

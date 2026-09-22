@@ -25,6 +25,15 @@ diag*.zip
 .cache/
 audio-cache/
 
+# M7 ML artifacts (regenerable/heavy — scripts + configs ARE committed)
+.venv/
+models/*.onnx
+ml/checkpoints/
+ml/data/joda_raw/
+.hf_cache/
+__pycache__/
+*.pyc
+
 # OS / editor
 .vscode/*
 !.vscode/extensions.json
