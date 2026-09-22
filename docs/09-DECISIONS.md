@@ -180,6 +180,8 @@
   INT8 drop is a tracked number, not an assumed "≤ 1 pt". Phrase-level behaviour is
   weaker out-of-distribution than the split accuracy implies, which is acceptable for an
   advisory gate that never auto-acts.
+- **See also:** `LAYA-EVALUATION-AND-ROADMAP.md` — full health, vulnerability, data-gap and
+  evolution analysis (known failure modes V1–V11, dataset recommendations, roadmap).
 
 ## Decision Log (subsequent ADRs)
 
