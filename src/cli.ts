@@ -122,7 +122,7 @@ async function liveLoop(): Promise<number> {
     console.log(JSON.stringify(report, null, 2));
     return 0;
   } catch (err) {
-    console.log(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'unknown' }));
+    console.log(JSON.stringify({ ok: false, partial: report, error: err instanceof Error ? err.message : 'unknown' }));
     return 1;
   }
 }

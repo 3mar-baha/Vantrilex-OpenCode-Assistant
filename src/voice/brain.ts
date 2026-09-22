@@ -40,6 +40,20 @@ export const AMMANI_SYSTEM_PROMPT = [
   'Classify intent: newSession | followUp | control. Reply ONLY with the JSON shape. No prose outside JSON.',
 ].join('\n');
 
+/** Extract the first top-level JSON object (fences/prose tolerated, never trusted). */
+export function extractJson(content: string): unknown | null {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(content);
+  const candidate = (fenced?.[1] ?? content).trim();
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(candidate.slice(start, end + 1)) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 export interface BrainClient {
   respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean }>;
 }
@@ -71,10 +85,8 @@ export class GroqBrainClient implements BrainClient {
       );
       const elapsedMs = Date.now() - started;
       const content = completion.choices[0]?.message?.content ?? '';
-      let parsedJson: unknown;
-      try {
-        parsedJson = JSON.parse(content) as unknown;
-      } catch {
+      const parsedJson = extractJson(content);
+      if (parsedJson === null) {
         throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain returned non-JSON output — fallback briefing');
       }
       const output = BrainOutputSchema.parse(parsedJson);
