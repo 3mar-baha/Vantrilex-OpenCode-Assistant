@@ -4,8 +4,18 @@
     "servers": {
       "context7": {
         "type": "local",
-        "command": ["npx", "-y", "@upstash/context7-mcp"]
+        "command": ["cmd", "/c", "npx", "-y", "@upstash/context7-mcp"]
       }
+    }
+  },
+  "lsp": {
+    "typescript": {
+      "command": ["cmd", "/c", "npx", "-y", "typescript-language-server", "--stdio"],
+      "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+    },
+    "python": {
+      "command": ["cmd", "/c", "npx", "-y", "-p", "pyright", "pyright-langserver", "--stdio"],
+      "extensions": [".py"]
     }
   },
   "watcher": {

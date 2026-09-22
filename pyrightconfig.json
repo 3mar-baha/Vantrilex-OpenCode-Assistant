@@ -1,0 +1,8 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["ml"],
+  "exclude": [".venv", "node_modules", "models", ".hf_cache", "dist", "ml/checkpoints"],
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none"
+}
