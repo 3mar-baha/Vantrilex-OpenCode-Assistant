@@ -85,7 +85,7 @@ reconstruction, then resumes cadence.
 | Batch 2 | `08`–`14` (7 files) | `e8cb30b` → `7e71cb2` (7 commits) | 15/15 files; placeholder grep clean; tree clean |
 | Batch 3 | `15`, `17`–`20` (5 files; `16` shipped early) | `efd8917` → `38db258` (5 commits) | 20/20 files; grep 3 hits adjudicated self-referential (`16` rule quotes); tree clean |
 | Batch 4 | `21`–`28` (8 files) | `cd8058b` → *batch-4 close* (8 commits + ledger sync) | 28/28 files; full gate below; tree clean |
-| P-R revision pass | `01`, `02`, `04`, `16`, `17`, `18`, `20`, `21`, `25`, `26`, `28` + `10`, `11`, `03`, `06`, `09` (16 files) | *in progress* (16 atomic commits) | per-file commits; Gate-4 at pass end |
+| P-R revision pass | `01`, `02`, `04`, `16`, `17`, `18`, `20`, `21`, `25`, `26`, `28` + `10`, `11`, `03`, `06`, `09` (16 files) | `1b63239` → *P-R close* (16 revision commits + ledger sync) | per-file commits; Gate-4 at pass end |
 
 ---
 
