@@ -1,0 +1,115 @@
+import Groq from 'groq-sdk';
+import { nowIso } from '../common/brands.js';
+
+// STT engine — docs/18 §18.2, docs/06 §6.4. 16kHz mono 16-bit PCM chunked into
+// 5.0 s windows with 0.5 s overlap; Groq Whisper `whisper-large-v3-turbo`.
+// The Whisper client is injectable so tests run with zero network.
+export const SAMPLE_RATE = 16_000;
+export const BYTES_PER_SAMPLE = 2;
+export const CHUNK_MS = 5000;
+export const OVERLAP_MS = 500;
+export const CHUNK_BYTES = ((SAMPLE_RATE * BYTES_PER_SAMPLE * CHUNK_MS) / 1000);
+export const OVERLAP_BYTES = ((SAMPLE_RATE * BYTES_PER_SAMPLE * OVERLAP_MS) / 1000);
+
+export interface AudioChunk {
+  readonly index: number;
+  readonly startsAtMs: number;
+  readonly endsAtMs: number;
+  readonly bytes: Uint8Array;
+}
+
+export interface Transcript {
+  readonly text: string;
+  readonly chunkCount: number;
+  readonly roundTripMs: number;
+}
+
+export function chunkPcm(pcm: Uint8Array, startsAtMs = 0): AudioChunk[] {
+  const chunks: AudioChunk[] = [];
+  if (pcm.byteLength === 0) return chunks;
+  const step = CHUNK_BYTES - OVERLAP_BYTES;
+  let offset = 0;
+  let index = 0;
+  while (offset < pcm.byteLength) {
+    const end = Math.min(offset + CHUNK_BYTES, pcm.byteLength);
+    const slice = pcm.slice(offset, end);
+    const startMs = startsAtMs + Math.floor((offset / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000);
+    chunks.push({
+      index,
+      startsAtMs: startMs,
+      endsAtMs: startMs + Math.floor((slice.byteLength / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000),
+      bytes: slice,
+    });
+    if (end >= pcm.byteLength) break;
+    offset += step;
+    index += 1;
+  }
+  return chunks;
+}
+
+export interface WhisperClient {
+  transcribe(chunk: AudioChunk): Promise<string>;
+}
+
+export class GroqWhisperClient implements WhisperClient {
+  private readonly client: Groq;
+
+  constructor(apiKey: string) {
+    this.client = new Groq({ apiKey });
+  }
+
+  async transcribe(chunk: AudioChunk): Promise<string> {
+    const wav = pcmToWav(chunk.bytes);
+    const file = new File([Buffer.from(wav)], `chunk-${chunk.index}.wav`, { type: 'audio/wav' });
+    const res = await this.client.audio.transcriptions.create({
+      file,
+      model: 'whisper-large-v3-turbo',
+      language: 'ar',
+      response_format: 'verbose_json',
+    });
+    return res.text;
+  }
+}
+
+function pcmToWav(pcm: Uint8Array): Uint8Array {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const writeAscii = (offset: number, text: string): void => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 36 + pcm.byteLength, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, SAMPLE_RATE, true);
+  view.setUint32(28, SAMPLE_RATE * BYTES_PER_SAMPLE, true);
+  view.setUint16(32, BYTES_PER_SAMPLE, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, pcm.byteLength, true);
+  const out = new Uint8Array(44 + pcm.byteLength);
+  out.set(new Uint8Array(header), 0);
+  out.set(pcm, 44);
+  return out;
+}
+
+export async function transcribeStream(
+  pcm: Uint8Array,
+  client: WhisperClient,
+  startedAt: string = nowIso(),
+): Promise<Transcript> {
+  const chunks = chunkPcm(pcm);
+  const texts: string[] = [];
+  for (const chunk of chunks) {
+    texts.push(await client.transcribe(chunk));
+  }
+  const text = texts.map((t) => t.trim()).filter((t) => t.length > 0).join(' ');
+  return {
+    text,
+    chunkCount: chunks.length,
+    roundTripMs: Date.parse(nowIso()) - Date.parse(startedAt),
+  };
+}
