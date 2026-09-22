@@ -46,9 +46,10 @@ src/
   runtime/        # serve bootstrap, health probes, child supervision (FR-1)
   orchestrator/   # SSE subscription, briefing queue, session tracking (FR-3/FR-4)
   voice/          # stt.ts, brain.ts, tts.ts, cache.ts, keyring.ts (FR-5/6/7/8)
-  guidance/       # AGENTS.md + skills injection, 3-Case classifier, BLUF formatter (FR-9)
-  launcher/       # process supervisor, port policy, shutdown (FR-1, doc 26)
+  guidance/       # AGENTS.md + skills injection, 3-Case classifier, BLUF formatter, overseer (FR-9)
+  launcher/       # process supervisor (Job Objects), orphan sweeper, hot-restart, shutdown (FR-1, doc 26)
   mobile/         # relay client + approval queue (doc 19)
+  ui/             # mic status control, settings modal (FR-11, doc 02 §2.7)
   common/         # typed errors, logger (secret-redacting), config schema
 ```
 
@@ -95,6 +96,13 @@ src/
 Fish Audio is intentionally **not** an SDK dependency: the streaming TTS contract is
 implemented as a small typed HTTP client (`src/voice/tts.ts`) pinned to the documented
 wire format in `06-API-SPECIFICATION.md`, so upstream SDK drift cannot break synthesis.
+
+Keyring concurrency uses lock-free atomics (`node:worker_threads` `Atomics` or
+equivalent wait-free counter — no mutex dependency); see ADR-005 and `20-KEYRING.md`.
+
+RAG corpora (JODA, UD South Levantine MADAR, `camel_tools`, Prompt-Engineering-Guide,
+xl-sum) are build-time data pinned by a corpora manifest (versions + digests,
+ledger-recorded per release) — not runtime npm dependencies.
 
 ### 3.3.2 Native / OS bindings
 
@@ -165,6 +173,11 @@ BRAIN_GOLDEN_MS=2000
 BRAIN_CEILING_MS=5000
 TTS_CACHE_SIZE=50
 LOG_LEVEL=info
+CAPTURE_MODE=push-to-talk
+BRIEFINGS=bluf
+QUIET_HOURS=22:00-07:00
+MUTE_ON_CALL=on
+MIC_DEFAULT=armed
 ```
 
 Env sanitization rules (name allowlist, value redaction in logs, vault precedence over
