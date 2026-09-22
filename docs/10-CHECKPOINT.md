@@ -87,6 +87,19 @@ reconstruction, then resumes cadence.
 | Batch 4 | `21`–`28` (8 files) | `cd8058b` → *batch-4 close* (8 commits + ledger sync) | 28/28 files; full gate below; tree clean |
 | P-R revision pass | `01`, `02`, `04`, `16`, `17`, `18`, `20`, `21`, `25`, `26`, `28` + `10`, `11`, `03`, `06`, `09` (16 files) | `1b63239` → *P-R close* (16 revision commits + ledger sync) | per-file commits; Gate-4 at pass end |
 
+## 10.5 — Execution Ledger — Milestone M2 (living section)
+
+*Autonomous overseer run, 2026-09-22. Security: keys staged in gitignored `.env.local`
+only; `.gitignore` hardened first (`d06e54d`); zero real key prefixes in tracked files
+(outside `docs/` masked pattern references and the `logger.ts` redaction detector,
+which must name its targets by construction).*
+
+| Phase | Scope | Commits | Gate-4 evidence |
+|-------|-------|---------|-----------------|
+| P0 scaffold | package/tsconfig/vitest/eslint, `.env.example`, `common/` + tests, `voice/cache` + tests, RAG manifest, GuildSkills stub | `ebc65f0`, `ca5e764`, `458927d`, `8816c41`, `b7a8859`, `ff9a962` | tsc 0, lint 0, 5/5 tests |
+| P1 launcher+runtime | `launcher/` (supervised boot, tree-kill, sweeper, hot-restart), `runtime/` typed client + mock tests, `cli.ts` doctor | `67f868b`, `d544213` | tsc 0, lint 0, 10/10 tests |
+| P2 orchestrator | `orchestrator/` envelopes, ledger, queue, staggered SSE core + live mock-SSE tests | `3c7218d`, `ae24f7a` | tsc 0, lint 0, 12/12 tests |
+
 ---
 
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
