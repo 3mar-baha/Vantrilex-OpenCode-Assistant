@@ -101,21 +101,13 @@ def main() -> None:
     # (model.safetensors) at repo root, tokenizer.json under `tokenizer/`.
     # Stage weights next to the config, then load from the local path.
     # Tokenizer loads via the `tokenizers` lib (custom config breaks AutoTokenizer).
-    import shutil
+    import sys
 
-    from huggingface_hub import snapshot_download
-    from tokenizers import Tokenizer
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from laya_hub import stage_snapshot
 
-    snapshot = Path(
-        snapshot_download(
-            training["model_id"],
-            allow_patterns=["encoder/*", "model.safetensors", "tokenizer/tokenizer.json"],
-        )
-    )
+    snapshot = stage_snapshot(training["model_id"])
     encoder_dir = snapshot / "encoder"
-    staged_weights = encoder_dir / "model.safetensors"
-    if not staged_weights.exists():
-        shutil.copyfile(snapshot / "model.safetensors", staged_weights)
     tokenizer = Tokenizer.from_file(str(snapshot / "tokenizer" / "tokenizer.json"))
     backbone = AutoModel.from_pretrained(str(encoder_dir), trust_remote_code=True)
     # Root checkpoint prefixes backbone keys with `encoder.` and bundles RL heads

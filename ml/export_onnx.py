@@ -19,13 +19,8 @@ from transformers import AutoModel
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from laya_hub import stage_snapshot  # noqa: E402
 from train_laya import HEADS, LayaHeadDataset, LayaHeads  # noqa: E402
-
-
-def training_snapshot() -> Path:
-    from huggingface_hub import snapshot_download
-
-    return Path(snapshot_download("convaiinnovations/laya-multilingual", allow_patterns=["tokenizer/tokenizer.json"]))
 
 
 def main() -> None:
@@ -34,10 +29,8 @@ def main() -> None:
     training = cfg["training"]
     torch.set_num_threads(training["num_threads"] or 4)
 
-    tokenizer = Tokenizer.from_file(
-        str(Path(training_snapshot()) / "tokenizer" / "tokenizer.json")
-    )
-    backbone = AutoModel.from_pretrained(training["model_id"], trust_remote_code=True)
+    tokenizer = Tokenizer.from_file(str(stage_snapshot() / "tokenizer" / "tokenizer.json"))
+    backbone = AutoModel.from_pretrained(str(stage_snapshot() / "encoder"), trust_remote_code=True)
     model = LayaHeads(backbone, backbone.config.hidden_size)
     checkpoint = torch.load(root / cfg["output"]["dir"] / "best.pt", map_location="cpu", weights_only=True)
     for h in HEADS:
