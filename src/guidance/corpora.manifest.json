@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-22T00:00:00.000Z",
+  "note": "Build-time RAG corpora manifest (docs/18 §18.3.1). Versions and digests are ledger-recorded per release. Ingestion populates this file; the pipeline refuses to build prompts from an empty manifest.",
+  "corpora": [
+    { "id": "joda-ammani", "source": "Gheith-Abandah/JODA", "sentences": 59000, "version": null, "sha256": null, "status": "pending-ingest" },
+    { "id": "ud-south-levantine-madar", "source": "UniversalDependencies/UD_South_Levantine_Arabic-MADAR", "version": null, "sha256": null, "status": "pending-ingest" },
+    { "id": "camel-tools", "source": "CAMeL-Lab/camel_tools", "version": null, "sha256": null, "status": "pending-ingest" },
+    { "id": "prompt-engineering-guide", "source": "dair-ai/Prompt-Engineering-Guide", "version": null, "sha256": null, "status": "pending-ingest" },
+    { "id": "xl-sum", "source": "csebuetnlp/xl-sum", "version": null, "sha256": null, "status": "pending-ingest" }
+  ]
+}
