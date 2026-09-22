@@ -13,9 +13,13 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+*.local
 *.pem
 *.key
-vault/*.dat
+vault/
+credentials/
+*-credentials.json
+diag*.zip
 
 # Audio cache (regenerable LRU content)
 .cache/
