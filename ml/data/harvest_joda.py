@@ -31,7 +31,8 @@ def main() -> None:
     from datasets import load_dataset
     from datasets.exceptions import DatasetNotFoundError
 
-    root = Path(__file__).resolve().parents[1]
+    # This file lives at ml/data/ — repo root is two levels up.
+    root = Path(__file__).resolve().parents[2]
     out = root / "ml" / "data" / "joda_raw"
     out.mkdir(parents=True, exist_ok=True)
     used: str | None = None
