@@ -6,10 +6,12 @@
 ## 17.1 — Purpose and Boundary (normative)
 
 `guidance/` keeps each target repo's `.opencode/skills/` stocked with exactly the
-skills its 3-Case classification calls for — reading from the master catalog
-(`O:\Claude Code\vantrilex\vantrilex-registry\VANTRILEX_CATALOG.md`) and writing to
-**project-local paths only**. Global user configs (`~/.opencode/`, `~/.config/`) are
-never read for mutation and never written. Violating this boundary fails the release gate.
+skills its 3-Case classification calls for — reading from two sources: (a) the master
+catalog (`O:\Claude Code\vantrilex\vantrilex-registry\VANTRILEX_CATALOG.md`) and
+(b) the GuildSkills open catalog (`https://guildskills.com/data/guildskills.json`),
+and writing to **project-local paths only**. Global user configs (`~/.opencode/`,
+`~/.config/`) are never read for mutation and never written. Violating this boundary
+fails the release gate.
 
 ## 17.2 — Ingestion Pipeline
 
@@ -34,6 +36,7 @@ files are skipped — ingestion is incremental, not bulk re-copy.
 |--------|--------|---------|
 | Repo Case match | 3 | legacy repo (Case 2) scores `archify`, `backend-patterns`-class skills |
 | Milestone need | 2 | voice milestone scores `venice-audio-*`, `nemotron-voice-agent-deploy` |
+| Autonomy relevance | 2 | planning/translation/governance/overseer skills for away-mode operation |
 | Default-selected (✅ in catalog) | 1 | auto-included unless explicitly denied |
 | Operator deny-list | −∞ | `<repo>/.opencode/.harvest-deny` vetoes by name |
 
@@ -77,6 +80,22 @@ export interface CaseEvidence {
 
 Classification evidence is ledger-recorded; low-confidence classifications pause for
 operator confirmation rather than injecting the wrong skill set.
+
+## 17.5 — GuildSkills Integration (normative)
+
+GuildSkills entries are fetched from `guildskills.json`, scored by the same §17.2.2
+weights, and injected as pointer files. Every ingested tool is accompanied by a
+dedicated `tool--SKILL.md` detailing its invocation contract, best practices, and
+edge cases — a tool without its contract file fails verification (§17.2.4).
+
+## 17.6 — Cognitive and Overseer Skills (normative)
+
+Standalone cognitive skills ship with every injection set: autonomous planning,
+user-command prompt translation, and session governance. The **session-overseer**
+skill governs away-mode: the agent advances the active plan milestone by milestone
+using peer-grade judgment; with no plan, or at plan completion, it halts cleanly and
+suggests invoking `/prompt-master` to craft the next phase. The overseer stops only
+at safety-critical boundaries (FR-12 confirmations, secret handling, ledger writes).
 
 ---
 
