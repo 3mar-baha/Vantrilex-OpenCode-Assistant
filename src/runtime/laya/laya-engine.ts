@@ -30,6 +30,7 @@ function sigmoid(x: number): number {
 
 export class LayaEngine {
   private session: LayaSession | null = null;
+  private sessionPromise: Promise<LayaSession> | null = null;
 
   constructor(
     private readonly tokenizer: LayaTokenizer,
@@ -39,20 +40,28 @@ export class LayaEngine {
   ) {}
 
   private async getSession(): Promise<LayaSession> {
-    if (this.session === null) {
-      if (this.sessionFactory !== undefined) {
-        this.session = await this.sessionFactory(this.modelPath);
-      } else {
-        const real = await ort.InferenceSession.create(this.modelPath, {
-          executionProviders: ['cpu'],
-          intraOpNumThreads: 0,
-        });
-        this.session = {
-          run: (feeds) => real.run(feeds) as Promise<Record<string, ort.Tensor>>,
-        };
-      }
+    if (this.session !== null) return this.session;
+    // Cache the in-flight promise so concurrent decisions share one session
+    // instead of each racing to build their own (a real memory blow-up risk).
+    if (this.sessionPromise === null) {
+      this.sessionPromise = this.createSession();
     }
-    return this.session;
+    const session = await this.sessionPromise;
+    this.session = session;
+    return session;
+  }
+
+  private async createSession(): Promise<LayaSession> {
+    if (this.sessionFactory !== undefined) {
+      return this.sessionFactory(this.modelPath);
+    }
+    const real = await ort.InferenceSession.create(this.modelPath, {
+      executionProviders: ['cpu'],
+      intraOpNumThreads: 0,
+    });
+    return {
+      run: (feeds) => real.run(feeds) as Promise<Record<string, ort.Tensor>>,
+    };
   }
 
   async decide(text: string): Promise<LayaDecision> {
