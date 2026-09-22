@@ -118,6 +118,23 @@ def main() -> None:
         shutil.copyfile(snapshot / "model.safetensors", staged_weights)
     tokenizer = Tokenizer.from_file(str(snapshot / "tokenizer" / "tokenizer.json"))
     backbone = AutoModel.from_pretrained(str(encoder_dir), trust_remote_code=True)
+    # Root checkpoint prefixes backbone keys with `encoder.` and bundles RL heads
+    # (act_head/scorer/type_emb) — remap to the bare ModernBERT namespace.
+    from safetensors.torch import load_file
+
+    full_state = load_file(str(snapshot / "model.safetensors"))
+    remapped = {
+        key[len("encoder.") :]: value
+        for key, value in full_state.items()
+        if key.startswith("encoder.")
+    }
+    missing, unexpected = backbone.load_state_dict(remapped, strict=False)
+    backbone_keys = {n for n, _ in backbone.named_parameters()}
+    still_missing = [n for n in missing if n in backbone_keys]
+    print(f"weight remap: {len(remapped)} keys, still missing: {len(still_missing)}")
+    if still_missing:
+        print(f"missing sample: {still_missing[:5]}")
+        raise SystemExit("backbone weight load FAILED — aborting before random-init training")
     hidden = backbone.config.hidden_size
     model = LayaHeads(backbone, hidden)
 
