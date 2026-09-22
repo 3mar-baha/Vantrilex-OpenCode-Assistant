@@ -1,10 +1,16 @@
 import * as ort from 'onnxruntime-node';
 import { nowIso } from '../../common/brands.js';
-import type { WordPieceTokenizer } from './tokenizer.js';
+import type { LayaTokenizer } from './tokenizer.js';
 
 // Local Laya System-1 engine — M7 L3. Executes the fine-tuned ONNX model on CPU
 // via onnxruntime-node. Advisory-only: every decision is schema-gated downstream
 // (FR-12 confirmation still mandatory for destructive acts).
+//
+// Operating length 32 tokens: the corpus p99 is 32 (max 35) and masked mean
+// pooling makes logits invariant to pad length, so 32 is the latency-optimal
+// point that still covers 99% of utterances — p50 25.8 ms vs 66.4 ms at 128
+// (docs/09 ADR-008, ml/l2_report.json).
+export const LAYA_OPERATING_LENGTH = 32;
 export const LAYA_HEADS = ['should_speak', 'is_destructive', 'barge_in', 'stuck_in_loop'] as const;
 export type LayaHead = (typeof LAYA_HEADS)[number];
 
@@ -26,9 +32,9 @@ export class LayaEngine {
   private session: LayaSession | null = null;
 
   constructor(
-    private readonly tokenizer: WordPieceTokenizer,
+    private readonly tokenizer: LayaTokenizer,
     private readonly modelPath: string,
-    private readonly maxLength = 128,
+    private readonly maxLength = LAYA_OPERATING_LENGTH,
     private readonly sessionFactory?: (path: string) => Promise<LayaSession>,
   ) {}
 

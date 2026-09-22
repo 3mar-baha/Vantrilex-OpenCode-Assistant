@@ -1,82 +1,138 @@
 import { readFileSync } from 'node:fs';
 
-// Minimal WordPiece tokenizer over a HuggingFace tokenizer.json (wordpiece model).
-// No native deps; the file ships from the Laya checkpoint download (M7 L1).
+// Laya System-1 runtime tokenizer — M7 L3.
+//
+// The checkpoint tokenizer is SentencePiece-style BPE (model.type "BPE") with a
+// Replace normalizer (space -> "▁"), a Metaspace pre-tokenizer (prepend "▁",
+// split on "▁"), 256k vocab / 580k merges, and byte-fallback. This is NOT
+// WordPiece; implementing it here keeps the bridge dependency-free while the
+// golden-vector test (tokenizer_golden.json, emitted by the authoritative
+// Python `tokenizers` lib) proves byte-for-byte parity.
+export interface LayaTokenizer {
+  encode(text: string, maxLength: number): { inputIds: number[]; attentionMask: number[] };
+}
+
 export interface TokenizerJson {
   model: {
     type: string;
     vocab: Record<string, number>;
+    merges: Array<string[] | string>;
+    byte_fallback?: boolean;
     unk_token?: string;
-    continuing_subword_prefix?: string;
-    cls_token?: string;
-    sep_token?: string;
+  };
+  normalizer?: { type?: string; pattern?: { String?: string }; content?: string };
+  pre_tokenizer?: { type?: string; replacement?: string; prepend_scheme?: string; split?: boolean };
+  added_tokens?: Array<{ id: number; content: string; special: boolean }>;
+  post_processor?: {
+    special_tokens?: Record<string, { ids?: number[] }>;
   };
 }
 
-export class WordPieceTokenizer {
+const REPLACEMENT = '▁';
+
+export class LayaBpeTokenizer implements LayaTokenizer {
   private readonly vocab: Map<string, number>;
+  private readonly rank: Map<string, number>;
+  private readonly byteFallback: boolean;
   private readonly unk: number;
-  private readonly cls: number;
-  private readonly sep: number;
-  private readonly contPrefix: string;
+  private readonly bos: number;
+  private readonly eos: number;
+  private readonly pad = 0;
 
   constructor(spec: TokenizerJson) {
-    if (spec.model.type.toLowerCase() !== 'wordpiece') {
+    if (spec.model.type.toLowerCase() !== 'bpe') {
       throw new Error(`unsupported tokenizer model: ${spec.model.type}`);
     }
     this.vocab = new Map(Object.entries(spec.model.vocab));
-    const get = (token: string | undefined, fallback: string): number => {
-      const id = this.vocab.get(token ?? fallback);
-      if (id === undefined) throw new Error('tokenizer vocab missing special token');
-      return id;
-    };
-    this.unk = get(spec.model.unk_token, '[UNK]');
-    this.cls = get(spec.model.cls_token, '[CLS]');
-    this.sep = get(spec.model.sep_token, '[SEP]');
-    this.contPrefix = spec.model.continuing_subword_prefix ?? '##';
+    this.rank = new Map();
+    for (let i = 0; i < spec.model.merges.length; i += 1) {
+      const merge = spec.model.merges[i];
+      const pair = typeof merge === 'string' ? merge.split(' ') : merge;
+      if (pair.length === 2) this.rank.set(`${pair[0]}\u0000${pair[1]}`, i);
+    }
+    this.byteFallback = spec.model.byte_fallback === true;
+    this.unk = this.vocab.get(spec.model.unk_token ?? '<unk>') ?? 0;
+    const specials = spec.post_processor?.special_tokens ?? {};
+    this.bos = specials['<bos>']?.ids?.[0] ?? 2;
+    this.eos = specials['<eos>']?.ids?.[0] ?? 1;
   }
 
-  static load(path: string): WordPieceTokenizer {
+  static load(path: string): LayaBpeTokenizer {
     const spec = JSON.parse(readFileSync(path, 'utf8') as string) as TokenizerJson;
-    return new WordPieceTokenizer(spec);
+    return new LayaBpeTokenizer(spec);
   }
 
   encode(text: string, maxLength: number): { inputIds: number[]; attentionMask: number[] } {
-    const tokens = [this.cls];
-    for (const word of text.trim().split(/\s+/).filter((w) => w.length > 0)) {
-      tokens.push(...this.encodeWord(word.toLowerCase()));
-      if (tokens.length >= maxLength - 1) break;
+    const ids = [this.bos, ...this.encodeBody(text), this.eos];
+    const inputIds = ids.slice(0, maxLength);
+    const attentionMask = inputIds.map(() => 1);
+    while (inputIds.length < maxLength) {
+      inputIds.push(this.pad);
+      attentionMask.push(0);
     }
-    tokens.push(this.sep);
-    const inputIds = tokens.slice(0, maxLength);
-    while (inputIds.length < maxLength) inputIds.push(0);
-    const attentionMask = inputIds.map((id, i) => (i < tokens.length ? 1 : 0));
-    void this.sep;
     return { inputIds, attentionMask };
   }
 
-  private encodeWord(word: string): number[] {
+  /** Text -> token ids, excluding bos/eos. Mirrors normalizer + Metaspace + BPE. */
+  encodeBody(text: string): number[] {
+    if (text.length === 0) return [];
+    const normalized = text.replace(/ /g, REPLACEMENT);
+    const prefixed = normalized.startsWith(REPLACEMENT) ? normalized : REPLACEMENT + normalized;
+    const pieces = prefixed.match(new RegExp(`${REPLACEMENT}[^${REPLACEMENT}]*`, 'gu')) ?? [];
     const ids: number[] = [];
-    let start = 0;
-    while (start < word.length) {
-      let end = word.length;
-      let found: number | null = null;
-      while (start < end) {
-        const piece = (start === 0 ? '' : this.contPrefix) + word.slice(start, end);
-        const id = this.vocab.get(piece);
-        if (id !== undefined) {
-          found = id;
-          break;
-        }
-        end -= 1;
-      }
-      if (found === null) {
-        ids.push(this.unk);
-        break;
-      }
-      ids.push(found);
-      start = end;
-    }
+    for (const piece of pieces) ids.push(...this.encodePiece(piece));
     return ids;
+  }
+
+  private encodePiece(piece: string): number[] {
+    let symbols: string[] = [];
+    for (const char of piece) {
+      if (this.vocab.has(char)) {
+        symbols.push(char);
+      } else if (this.byteFallback) {
+        for (const byte of Buffer.from(char, 'utf8')) {
+          symbols.push(`<0x${byte.toString(16).padStart(2, '0')}>`);
+        }
+      } else {
+        symbols.push(this.unkTokenString());
+      }
+    }
+    symbols = this.merge(symbols);
+    return symbols.map((symbol) => this.vocab.get(symbol) ?? this.unk);
+  }
+
+  private merge(symbols: string[]): string[] {
+    let current = symbols;
+    for (;;) {
+      let bestRank = Infinity;
+      let bestIndex = -1;
+      for (let i = 0; i < current.length - 1; i += 1) {
+        const r = this.rank.get(`${current[i]}\u0000${current[i + 1]}`);
+        if (r !== undefined && r < bestRank) {
+          bestRank = r;
+          bestIndex = i;
+        }
+      }
+      if (bestIndex === -1) break;
+      const left = current[bestIndex];
+      const right = current[bestIndex + 1];
+      const merged: string[] = [];
+      for (let i = 0; i < current.length; ) {
+        if (i < current.length - 1 && current[i] === left && current[i + 1] === right) {
+          merged.push(left + right);
+          i += 2;
+        } else {
+          merged.push(current[i] as string);
+          i += 1;
+        }
+      }
+      current = merged;
+    }
+    return current;
+  }
+
+  private unkTokenString(): string {
+    for (const [token, id] of this.vocab) if (id === this.unk) return token;
+    return '<unk>';
   }
 }
