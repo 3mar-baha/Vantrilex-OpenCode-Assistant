@@ -30,7 +30,11 @@ upstream upgrades untouched — because it never patches OpenCode internals.
 
 ### P1 — Omar, the solo Arabic-speaking builder (primary)
 
-- Runs multi-minute agent sessions (refactors, test suites, scaffolds) while doing other work.
+- Runs multi-minute agent sessions (refactors, test suites, scaffolds) while gaming,
+  writing docs, or browsing in other windows — or away from the desk entirely.
+- Interaction mix is **85% fire-and-forget / 15% conversational**: listening suffices
+  ~90% of the time; the voice layer is an ambient briefing surface that becomes
+  dialogic only on errors or explicit follow-ups.
 - Thinks and speaks Ammani Jordanian Arabic (العامية الأردنية العمانية); reads/writes
   code, logs, and paths in technical English.
 - Wants: start a session by voice, walk away, hear a crisp Arabic briefing when it
@@ -40,6 +44,8 @@ upstream upgrades untouched — because it never patches OpenCode internals.
 ### P2 — Salma, the tech lead supervising parallel sessions (secondary)
 
 - Runs 3–5 concurrent sessions across repos; needs per-session identity in every briefing.
+- Single active project: briefings omit the project name. Multiple concurrent projects:
+  the project name is embedded naturally in conversational speech.
 - Wants: briefings that open with session identity and outcome (BLUF), mobile step-approval
   when away from desk (see `19-MOBILE-PAIRING.md`).
 - Anti-want: interleaved/overlapping speech from concurrent completions; ambiguous "it finished".
@@ -105,10 +111,15 @@ lost terminal events (`session:complete` never dropped — see edge matrix E-4).
 
 The system SHALL detect `session:complete` / `session:idle` in the background and enqueue
 a briefing job containing session identity, outcome, and BLUF summary — without moving OS
-focus, raising windows, or requiring acknowledgment. Full spec: `02-PRODUCT-SPECIFICATION.md`.
+focus, raising windows, or requiring acknowledgment. Speech gating rule (normative):
+if execution time < 60 s AND the terminal/IDE holds OS foreground focus, remain silent
+(status line + subtle earcon only); if execution time ≥ 60 s OR the terminal is in the
+background, speak the briefing. Failures and T2 approval gates always speak regardless
+of focus or elapsed time. Full spec: `02-PRODUCT-SPECIFICATION.md`.
 
 **Acceptance:** 50/50 completion injections produce 50 briefing jobs, zero foreground
-window activations (verified via focus-log harness, `11-TESTING.md`).
+window activations (verified via focus-log harness, `11-TESTING.md`); foreground
+short-run completions produce zero spoken output.
 
 ### FR-5 — Speech-to-text (Groq Whisper)
 
@@ -149,7 +160,7 @@ request #11 rolls over to the next key in the pool**. Zero plaintext secrets in 
 dumps, logs, or disk files. Full spec: `20-KEYRING.md`, `12-SECURITY.md`.
 
 **Acceptance:** 25-request sequence uses keys K1×10 → K2×10 → K3×5 with rollover
-exactly on requests #11 and #21 under concurrent load (mutex-verified, `11-TESTING.md`).
+exactly on requests #11 and #21 under concurrent load (lock-free slot proof, `11-TESTING.md`).
 
 ### FR-9 — Project guidance injection
 
@@ -157,7 +168,10 @@ The system SHALL inject behavioral guidance via standard `AGENTS.md` and
 `.opencode/skills/` (never global mutation, never OpenCode patching), implementing the
 Reasons-Not-Rules paradigm, 3-Case project context awareness (Case 1 Greenfield, Case 2
 Undocumented Legacy, Case 3 Outdated Docs Refresh), and BLUF executive summaries shaped
-for audio clarity. Full spec: `17-CATALOG-INGESTION.md`, `02-PRODUCT-SPECIFICATION.md`.
+for audio clarity. `AGENTS.md` additionally declares pre-authorization classes:
+read-only and non-destructive tasks (tests, linting, build inspections) are pre-approved;
+destructive tasks (migrations, pushes, deployments) hold indefinitely until explicitly
+approved. Full spec: `17-CATALOG-INGESTION.md`, `02-PRODUCT-SPECIFICATION.md`.
 
 **Acceptance:** all three cases produce correctly classified guidance in fixture repos;
 every briefing summary leads with outcome in ≤ 15 spoken words.
@@ -171,6 +185,30 @@ daemon restart reconstructs session state without operator archaeology.
 **Acceptance:** kill -9 mid-session → restart → state reconstruction matches ledger
 within one event (verified by chaos test, `23-STRESS-TESTING.md`).
 
+### FR-11 — Microphone and settings UI
+
+The system SHALL expose a status-bar microphone control in OpenCode's native UI styling:
+left-click toggles Armed (active listening, the launch default) vs Disarmed; a mute-listen
+mode silences microphone input while spoken briefings and alerts continue (Ambient Output
+Mode); right-click opens a centered modal (dark surface aesthetic) with voice persona
+selector, test-speech audition in Ammani phrasing, and credential pool management over
+the DPAPI vault. Full spec: `02-PRODUCT-SPECIFICATION.md` §2.7.
+
+**Acceptance:** default state Armed on launch; mute-listen yields zero capture callbacks
+with briefings unaffected; persona/test-speech/credential actions operable end-to-end
+from the modal.
+
+### FR-12 — High-stakes two-way confirmation
+
+Destructive actions (`destroy`, `delete`, `drop`, `force-push`, `deploy`, `rm -rf`
+and equivalents) SHALL require explicit two-way voice/text confirmation before execution,
+regardless of correction windows or autonomy level. Ambiguous destructive speech is never
+acted upon — the agent asks, then waits. Routine rollback windows apply solely to safe,
+non-destructive tasks. Full spec: `02-PRODUCT-SPECIFICATION.md`.
+
+**Acceptance:** destructive-intent drill: 50 ambiguous + 50 explicit destructive prompts,
+zero executions without confirmation, 100% ask-rate on ambiguous input.
+
 ## 1.5 — Non-Functional Requirements
 
 | ID | Category | Requirement | Verification |
@@ -178,13 +216,14 @@ within one event (verified by chaos test, `23-STRESS-TESTING.md`).
 | NFR-1 | Latency (STT) | p50 round-trip < 500 ms | Benchmark harness, `11` |
 | NFR-2 | Latency (brain) | p50 ≤ 2.0 s golden; p99 ≤ 5.0 s ceiling | Benchmark harness, `11` |
 | NFR-3 | Latency (TTS) | Streaming first-chunk p50 < 800 ms; cache-hit start < 50 ms | Harness, `11` |
-| NFR-4 | Concurrency | ≥ 5 parallel sessions with isolated briefings, no speech overlap | Stress suite, `23` |
-| NFR-5 | Memory | Daemon RSS ≤ 512 MB steady-state; audio cache bounded (50 clips, size-capped blobs) | Leak analysis, `23` |
-| NFR-6 | Security | Zero plaintext secrets at rest/in-log/in-dump; localhost-only bind; 10-request rotation invariant | Audit + tests, `12`/`20` |
-| NFR-7 | Reliability | `session:complete` never dropped; SSE reconnect ≤ 5 s; restart reconstruction within one event | Chaos tests, `23` |
+| NFR-4 | Concurrency | ≥ 5 parallel sessions with isolated briefings, no speech overlap; failure-first preemption (finish < 5 s in-progress, then failure) | Stress suite, `23` |
+| NFR-5 | Memory | Daemon RSS ≤ 512 MB steady-state; audio cache bounded (50 clips, size-capped blobs); orphan sweeper < 5 ms CPU per 60 s pass | Leak analysis, `23` |
+| NFR-6 | Security | Zero plaintext secrets at rest/in-log/in-dump; localhost-only bind; 10-request rotation invariant (lock-free) | Audit + tests, `12`/`20` |
+| NFR-7 | Reliability | `session:complete` never dropped; SSE reconnect ≤ 5 s (staggered, jittered); restart reconstruction within one event | Chaos tests, `23` |
 | NFR-8 | Update immunity | Upstream OpenCode minor+major upgrades require zero changes to voice/brain/keyring layers | Boundary test, `04` |
-| NFR-9 | Accessibility | Zero-focus-steal verified; briefings ≤ 45 s spoken; earcon signaling (`21`) | UX harness, `02` |
+| NFR-9 | Accessibility | Zero-focus-steal verified; briefings ≤ 45 s spoken (failures ≤ 15 s); earcon signaling (`21`); barge-in cut < 50 ms | UX harness, `02` |
 | NFR-10 | Operability | Cold boot ≤ 10 s; clean `git` tree after `/sync`; checkpoint ledger current | `10`/`16`/`26` |
+| NFR-11 | Reference baseline | Windows 11 x64, multi-core CPU, ≥ 16 GB RAM, NVMe SSD, low-jitter fiber (Amman); Groq LPU TTFT 250–350 ms, Fish streaming TTFB 400–600 ms — budgets in NFR-1–NFR-3 are measured against this profile | Benchmark harness, `11` |
 
 ## 1.6 — Edge-Case Matrix
 
@@ -202,13 +241,17 @@ within one event (verified by chaos test, `23-STRESS-TESTING.md`).
 | E-10 | Daemon kill -9 mid-briefing | Restart replays ledger; briefing re-enqueued once (dedupe by session + event id) | `10` |
 | E-11 | Secret file missing/corrupt | Refuse voice features requiring that pool; clear operator error; no plaintext fallback | `12` |
 | E-12 | Upstream OpenCode upgrades schema | Contract-version probe; adapterFuture log; voice/brain/keyring untouched | `04` |
+| E-13 | Screen-share / meeting in progress | Mic-in-use detection or DND toggle mutes speech entirely; discreet desktop notifications instead | `02` |
+| E-14 | Server password rotated | Hot-restart: checkpoint → fresh `serve` with new password → re-attach by session IDs → resume cursors | `10`, `26` |
+| E-15 | Agent retry loop fails 5 consecutive times | Circuit breaker halts loop, spoken guidance request; no silent sixth attempt | `02`, `10` |
 
 ## 1.7 — Requirements Traceability
 
 Each FR maps to owning specs: FR-1→`26`, FR-2→`06`, FR-3→`25`, FR-4→`02`, FR-5/6/7→`18`,
-FR-8→`20`+`12`, FR-9→`17`+`02`, FR-10→`10`+`14`. ADRs in `09-DECISIONS.md` record *why*
-each requirement took its current shape (OpenAPI over PTY, Groq LPU, DPAPI keyring,
-Fish Audio dual voice).
+FR-8→`20`+`12`, FR-9→`17`+`02`, FR-10→`10`+`14`, FR-11→`02` §2.7, FR-12→`02` §2.4.
+ADRs in `09-DECISIONS.md` record *why* each requirement took its current shape (OpenAPI
+over PTY, Groq LPU, DPAPI keyring, Fish Audio dual voice, lock-free rotation — ADR-005,
+autonomy-over-rules — ADR-006, ring-buffer elimination — ADR-007).
 
 ---
 
