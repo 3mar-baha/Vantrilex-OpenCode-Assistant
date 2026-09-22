@@ -134,11 +134,46 @@
   asserts the cap.
 - **Compliance test:** no `ring` audio-buffer code in `src/voice/`; excerpt-cap drill green.
 
+## ADR-008 — Laya System-1: local CPU speech-intent heads over cloud round-trips
+
+- **Status:** Accepted. **Date:** 2026-09-22. **Deciders:** Principal Architect + operator.
+- **Context:** The orchestrator must decide, per lifecycle event, whether a briefing is
+  worth speaking (`02` §2.2 tiering, FR-6) and must recognise destructive intent,
+  barge-in, and stuck-in-loop conditions *before* the cognitive brain is consulted.
+  The brain (ADR-002) is a 0.6–1.25 s cloud call: far too slow and too costly to run as
+  a pre-filter on tens of events per minute, and it would ship raw transcript spans
+  off-device just to answer a binary gate.
+- **Options considered:**
+  1. *Cloud LLM classifier per event* — accurate, but adds ≥0.6 s + network variance and
+     egress to every gate decision; cost scales with event volume.
+  2. *Lexical/heuristic rules* — zero latency, but brittle on Ammani Arabic/English
+     code-switching; no dialect robustness — the exact failure the product must avoid.
+  3. *Local fine-tuned small model* — frozen multilingual backbone
+     (`convaiinnovations/laya-multilingual`, 322M mmBERT) plus four linear heads
+     (`should_speak`, `is_destructive`, `barge_in`, `stuck_in_loop`), trained on 5.2k
+     Ammani software-engineering samples, exported to INT8 ONNX, executed on CPU through
+     `onnxruntime-node`.
+- **Decision:** Option 3. The model is **advisory-only**: `Orchestrator` consults a
+  `SpeechAdvisor` before enqueueing a T1 briefing, and an absent advisor preserves prior
+  behaviour exactly. A positive `is_destructive` never auto-acts — FR-12 two-way
+  confirmation remains mandatory (`02` §2.4, ADR-006 boundary 2).
+- **Consequences:** CPU-only invariant — no CUDA path exists in `ml/` or
+  `src/runtime/laya/` (the reference GTX 750 Ti is deliberately unused). Backbone weights
+  are loaded through a single remap helper (`ml/laya_hub.load_backbone`) that hard-aborts
+  on any missing key, so a silently random encoder can never train or ship. The four
+  heads share one frozen forward pass; the ONNX artifact is large and lives under the
+  gitignored `models/` directory.
+- **Compliance test:** (a) held-out eval gates — `should_speak` and `is_destructive`
+  accuracy ≥ 0.90, `barge_in` and `stuck_in_loop` ≥ 0.85; (b) ONNX parity max logit diff
+  < 1e-4 vs torch; (c) CPU latency p50 < 40 ms at the corpus operating length;
+  (d) unit + live integration tests green (Gate 4).
+
 ## Decision Log (subsequent ADRs)
 
 | ID | Title | Status | Date |
 |----|-------|--------|------|
-| ADR-008+ | *Reserved — fleet supervision (v2.0.0 RFC will extend this table)* | Proposed | — |
+| ADR-008 | Laya System-1: local CPU speech-intent heads over cloud round-trips | Accepted | 2026-09-22 |
+| ADR-009+ | *Reserved — fleet supervision (v2.0.0 RFC will extend this table)* | Proposed | — |
 
 ---
 
