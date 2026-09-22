@@ -28,7 +28,9 @@ Related canonical docs: `08-ROADMAP.md` (milestone sequencing), `10-CHECKPOINT.m
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ARM: milestone opened
+    [*] --> DISCOVER: open questions exist
+    DISCOVER --> ARM: answers recorded
+    [*] --> ARM: no open questions
     ARM --> PLAN: harvest verified
     PLAN --> CODE: plan approved / Build mode
     CODE --> TEST: implementation complete
@@ -40,6 +42,7 @@ stateDiagram-v2
 
 | Gate | Name (AR/EN) | Mode | Exit artifact |
 |------|--------------|------|---------------|
+| 0 | `/discover` — Discovery & Interrogation (الاستكشاف) | Discuss | Answered questions recorded; revision scope set (§16.2A) |
 | 1 | `/arm` — Self-Arming & Catalog Harvesting (تسليح الوكيل) | Read/provision | Harvest table verified on disk (§16.3) |
 | 2 | `/plan` — Architectural Planning (وضع الخطة) | Plan | Milestone plan with acceptance criteria (§16.4) |
 | 3 | `/code` — Execution & Implementation (وضع البناء) | Build | Complete code/docs, zero placeholders (§16.5) |
@@ -48,8 +51,13 @@ stateDiagram-v2
 
 **Global invariants (all gates):**
 
-1. **Reasons-Not-Rules:** every structural choice carries its reason in the artifact
-   (commit message body, doc rationale section, or code-adjacent `ARCHITECTURE.md` link).
+1. **Autonomy with judgment (Reasons-Not-Rules, upgraded):** the agent acts as an
+   experienced, proactive human peer with genuine situational awareness — never as a
+   brittle script executing micromanaged steps. Strict hard constraints apply
+   exclusively at non-negotiable security boundaries: secret handling (I-1–I-5),
+   destructive-action confirmation (FR-12), and ledger durability. Every other
+   decision is entrusted to peer-grade judgment, with its reason recorded in the
+   artifact (commit body, rationale section, or `ARCHITECTURE.md` link).
 2. **Non-destructive modification:** never rewrite history (`git push --force` is
    forbidden); never mutate OpenCode internals; never touch global user configs —
    project-local `.opencode/` only.
@@ -57,6 +65,19 @@ stateDiagram-v2
    empty-section stubs fail every gate.
 4. **Evidence before synthesis:** claims about the repo, the catalog, or upstream APIs
    must cite a file path with line number or a verified command output.
+
+## 16.2A — GATE 0: /discover — Discovery & Interrogation (normative)
+
+Mandatory before `/arm` for any milestone with open UX, behavioral, or architectural
+questions. The agent stress-tests requirements, user mental models, and edge cases
+through sharp conceptual and technical interrogation (minimum bar: 10 conceptual +
+5 technical questions, as exercised pre-M2). Code generation stays halted until
+answers are recorded and the revision scope is set. Exit criteria:
+
+- [ ] All questions answered in the operator's own words; illustrative examples marked
+  as anchors, never templates.
+- [ ] Affected canonical files enumerated with per-file revision directives.
+- [ ] Milestone roadmap recalibrated to the answers before Gate 1 opens.
 
 ## 16.3 — GATE 1: /arm — Self-Arming & Catalog Harvesting
 
@@ -131,6 +152,10 @@ stateDiagram-v2
 | plugin | `typescript-lsp` | TS language-server checks |
 | plugin | `context7` | Up-to-date docs lookup (mirrored in `.mcp.json`) |
 | mcp | `context7` (`@upstash/context7-mcp` via `.mcp.json`) | Live API reference for `@opencode/client`, Groq, Fish Audio |
+| catalog | GuildSkills open catalog (`guildskills.json`) | Dynamic skill ingestion for tools + cognitive skills (`17`) |
+| corpora | JODA (59k Ammani sentences), UD South Levantine MADAR, `camel_tools` | Dialect calibration for brain prompts (`18`) |
+| corpora | Prompt-Engineering-Guide, xl-sum | Planning methodology + BLUF summarization grounding (`18`) |
+| skill | `session-overseer` (harvested) | Autonomous milestone advancement; halt + suggest `/prompt-master` (`17`) |
 
 > **Note on skill availability:** the runtime skill IDs `backend-patterns` and
 > `coding-standards` are superseded in the live assistant environment; the registry
