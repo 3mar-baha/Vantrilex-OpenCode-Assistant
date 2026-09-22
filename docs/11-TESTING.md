@@ -7,9 +7,9 @@
 
 | Layer | Runner | Scope | Coverage expectation |
 |-------|--------|-------|---------------------|
-| Unit | `vitest run` (`src/**/*.test.ts`, colocated) | keyring rotation, LRU cache, BLUF formatter, 3-Case classifier, validators, speech queue | ≥ 80% lines, 100% of `keyring.ts` + `cache.ts` branches |
-| Integration | `vitest run` (`test/integration/`) | orchestrator vs mock `serve` (HTTP+SSe), voice vs mock Groq/Fish, vault round-trip on CI fixture | Every FR-1–FR-10 happy path + E-1–E-12 edge |
-| Benchmark | `pnpm bench` (harness below) | STT p50, brain p50/p99, TTS first-chunk, cache-hit start | Budgets in `01` NFR-1/2/3 |
+| Unit | `vitest run` (`src/**/*.test.ts`, colocated) | keyring slots, LRU cache, BLUF formatter, 3-Case classifier, validators, speech queue, 40-word cap | ≥ 80% lines, 100% of `keyring.ts` + `cache.ts` branches |
+| Integration | `vitest run` (`test/integration/`) | orchestrator vs mock `serve` (HTTP+SSE), voice vs mock Groq/Fish, vault round-trip on CI fixture, hot-restart drill | Every FR-1–FR-12 happy path + E-1–E-15 edge |
+| Benchmark | `pnpm bench` (harness below) | STT p50, brain p50/p99, TTS first-chunk, cache-hit start, barge-in cut | Budgets in `01` NFR-1/2/3/9/11 |
 | Chaos/stress | `pnpm stress` (see `23`) | kill -9, SSE gaps, 429 storms, 100k bursts, leak watch | SLAs in `10` §10.2, `23` |
 | Docs gates | PowerShell checks (`16` §16.6.1) | existence, placeholders, cross-refs, fences | Exact counts per batch |
 
@@ -69,20 +69,20 @@ export const BUDGETS = {
 ```
 
 Procedure: warm the path (10 samples discarded) → collect N samples through mocks at
-reference latency → compute percentiles → assert `pass`. Release runs repeat against
-live providers (sandbox keys, `27-CREDENTIALS.md`) and record before/after in the
-tuning log (`08` M5).
+reference latency (NFR-11 profile: Win11 x64, fiber-class loopback shim, Groq TTFT
+250–350 ms, Fish TTFB 400–600 ms) → compute percentiles → assert `pass`. Release runs
+repeat against live providers (sandbox keys, `27-CREDENTIALS.md`) and record
+before/after in the tuning log (`08` M5).
 
-## 11.4 — Rotation Exactness Test (normative, ADR-003 proof)
+## 11.4 — Rotation Distribution Proof (normative, ADR-005 proof)
 
 ```ts
-// src/voice/keyring.test.ts (illustrative core)
-test('25 requests over 3-key pool roll over exactly on #11 and #21', async () => {
+// src/voice/keyring.test.ts (illustrative core — lock-free, no mutex helper)
+test('25 concurrent acquisitions over 3-key pool resolve slots 0-9/10-19/20-24', async () => {
   const ring = await Keyring.load(fixtureVault(3));
-  const used: string[] = [];
-  await Promise.all(Array.from({ length: 25 }, (_, i) =>
-    withPoolMutex('groq', async () => {
-      const k = await ring.acquire('groq'); used[i] = k.id; await ring.release('groq', true);
+  const used: string[] = await Promise.all(
+    Array.from({ length: 25 }, () => ring.acquire('groq').then(async (k) => {
+      await ring.release('groq', true); return k.id;
     })));
   expect(used.slice(0, 10)).toEqual(all('K1'));
   expect(used.slice(10, 20)).toEqual(all('K2'));
@@ -90,16 +90,27 @@ test('25 requests over 3-key pool roll over exactly on #11 and #21', async () =>
 });
 ```
 
-Concurrency: 8-way parallel dispatch; the pool mutex guarantees no slot double-spend.
-Failure injection: scripted 429 on K1 at request 5 → forced rollover asserted
-(`lastRolloverReason: 'rate-limited'`).
+Concurrency: 25-way parallel dispatch with no lock — fetch-and-add ordering makes
+slot assignment structural. Failure injection: scripted 429 on K1 at slot 5 → forced
+advance asserted (`lastRolloverReason: 'rate-limited'`).
 
 ## 11.5 — Language-Audit Test (normative, `02` §2.3.3 proof)
 
 Brain outputs are scanned: narrative spans must contain zero non-technical English
 words (allowlist: code identifiers, paths, error codes, session names); code spans
-must contain zero Arabic-script characters. Fixture corpus: 100 representative
+must contain zero Arabic-script characters; zero MSA broadcast phrasing and zero
+foreign-dialect particles; trust-breaker scan (no hallucinated completion claims,
+tone matched to severity, no lectures). Fixture corpus: 100 representative
 briefings, bilingual. One violation fails the suite.
+
+## 11.5A — Excerpt-Cap, Barge-in, Destructive-Intent and Mute Drills (normative)
+
+- **40-word cap:** `bluf()` outputs quoting logs assert ≤ 40 spoken words per excerpt.
+- **Barge-in:** hotkey/verbal stop cuts playback in < 50 ms; session parks to idle.
+- **Destructive intent:** 50 ambiguous + 50 explicit destructive prompts — zero
+  executions without two-way confirmation, 100% ask-rate on ambiguous input (FR-12).
+- **Meeting mute:** simulated mic-in-use by a comms tool asserts zero speech output
+  with desktop-notification fallback delivered instead.
 
 ## 11.6 — Focus-Steal Harness (normative, `02` §2.2 proof)
 
