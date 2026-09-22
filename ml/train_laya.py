@@ -99,34 +99,16 @@ def main() -> None:
 
     # Laya repo layout: backbone config under `encoder/`, weights
     # (model.safetensors) at repo root, tokenizer.json under `tokenizer/`.
-    # Stage weights next to the config, then load from the local path.
     # Tokenizer loads via the `tokenizers` lib (custom config breaks AutoTokenizer).
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from laya_hub import stage_snapshot
+    from laya_hub import load_backbone, stage_snapshot
+    from tokenizers import Tokenizer
 
     snapshot = stage_snapshot(training["model_id"])
-    encoder_dir = snapshot / "encoder"
     tokenizer = Tokenizer.from_file(str(snapshot / "tokenizer" / "tokenizer.json"))
-    backbone = AutoModel.from_pretrained(str(encoder_dir), trust_remote_code=True)
-    # Root checkpoint prefixes backbone keys with `encoder.` and bundles RL heads
-    # (act_head/scorer/type_emb) — remap to the bare ModernBERT namespace.
-    from safetensors.torch import load_file
-
-    full_state = load_file(str(snapshot / "model.safetensors"))
-    remapped = {
-        key[len("encoder.") :]: value
-        for key, value in full_state.items()
-        if key.startswith("encoder.")
-    }
-    missing, unexpected = backbone.load_state_dict(remapped, strict=False)
-    backbone_keys = {n for n, _ in backbone.named_parameters()}
-    still_missing = [n for n in missing if n in backbone_keys]
-    print(f"weight remap: {len(remapped)} keys, still missing: {len(still_missing)}")
-    if still_missing:
-        print(f"missing sample: {still_missing[:5]}")
-        raise SystemExit("backbone weight load FAILED — aborting before random-init training")
+    backbone = load_backbone(training["model_id"])
     hidden = backbone.config.hidden_size
     model = LayaHeads(backbone, hidden)
 
