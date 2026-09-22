@@ -86,7 +86,7 @@ def make_sample(rng: random.Random, index: int) -> dict:
     )
     roll = rng.random()
     lowered = text
-    is_destructive = any(m in lowered for m in DESTRUCTIVE_MARKERS) or roll < 0.30
+    is_destructive = any(m in lowered for m in DESTRUCTIVE_MARKERS) or roll < 0.32
     if roll < 0.18:
         text = f"{rng.choice(DESTRUCTIVE_MARKERS)} {text}"
         is_destructive = True
