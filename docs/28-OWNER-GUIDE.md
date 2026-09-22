@@ -20,6 +20,7 @@
 | `opencode-voice doctor` | Pre-flight audit: keys (names only), devices, port, versions |
 | `opencode-voice pair` / `pair revoke` | Mobile pairing code / token revocation (`19`) |
 | `opencode-voice vault set\|add\|remove <pool>` | Credential lifecycle (`27` §27.1) |
+| `opencode-voice password rotate` | Hot-restart with new server password, sessions preserved (T6, `26` §26.6) |
 
 ## 28.2 — Voice Configuration Toggling
 
@@ -31,6 +32,14 @@
   permits one log excerpt; default `bluf` (≤ 45 s).
 - **Quiet hours:** `quiet: 22:00-07:00` mutes T1 speech (ledger + mobile digest only);
   T2 approvals still ping once, then honor the window.
+- **Meeting auto-mute:** `mute-on-call: on` (default) — active mic use by Zoom/Meet/
+  Discord/Teams or the global DND toggle mutes speech entirely with desktop-notification
+  fallback (`02` §2.2 rule 5).
+- **Mic states:** status-bar control — Armed (default on launch), Disarmed, mute-listen
+  (no capture, briefings continue). Right-click modal: persona selector, Ammani
+  test-speech audition, credential pools (`02` §2.7).
+- **Pre-authorization:** edit `AGENTS.md` classes — pre-approved (tests, lint, build
+  inspection) vs hold-for-approval (migrations, pushes, deploys) (`01` FR-9).
 
 ## 28.3 — Diagnostic Scripts
 
@@ -60,6 +69,7 @@
 | Ledger disk corrupt | Snapshot `.bak` → ledger-only rebuild; missing tail reconciled vs `serve` | Tail since last good snapshot, reconciled |
 | Total data loss | Fresh `init`; sessions re-created by voice; providers untouched | Local history only — no provider-side state ever depended upon |
 | Key compromise | R-C (`14` §14.3): rotate at provider → `vault` refresh → audit I-1–I-5 | Revoked key's remaining quota only |
+| Password rotation | `password rotate`: checkpoint → fresh `serve` → re-attach IDs → resume cursors (`26` §26.6) | Pause window only; zero session loss |
 
 **Backup rule:** `<dataDir>/ledger/` + `snapshot.json` copied daily to operator backup
 (vault excluded — it is machine-bound by design; re-entry is the restore path).
