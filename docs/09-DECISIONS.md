@@ -62,6 +62,9 @@
   every provider call goes through `acquire`/`release`; vault file is `0600`/ACL'd.
 - **Compliance test:** 25-request sequence asserts K1×10 → K2×10 → K3×5 with rollover
   exactly on #11 and #21 under 8-way concurrency (`11`, `20`).
+- **Supersession note (P-R):** the mutex mechanism is superseded by ADR-005 (lock-free
+  slots); the invariant and this compliance shape survive with the proof upgraded to a
+  25-way distribution assertion.
 
 ## ADR-004 — Fish Audio dual voice selection (`s2.1-pro-free`)
 
@@ -82,11 +85,60 @@
 - **Compliance test:** cache-hit playback < 50 ms; first-chunk p50 < 800 ms;
   toggle effective within one utterance boundary (`11`, `18`).
 
+## ADR-005 — Lock-free keyring slots superseding the pool mutex
+
+- **Status:** Accepted. **Date:** 2026-09-22 (P-R revision pass, discovery T3).
+- **Context:** ADR-003 specified a pool mutex serializing acquire/dispatch/increment.
+  Under 20-way concurrency the mutex becomes a throughput bottleneck on every provider
+  call. The invariant (rollover deterministically on request #11) does not require
+  mutual exclusion — only unique slot numbering.
+- **Options considered:**
+  1. *Mutex per pool* — simple proof, but serializes all provider traffic per pool.
+  2. *Lock-free atomic sequence counter* (`slot = fetch-and-add; keyIndex =
+     floor(slot/10) % n`) — sub-microsecond wait-free acquisition; exactness holds
+     structurally via arithmetic, never statistically.
+- **Decision:** Option 2. The mutex is removed from the acquisition path; secret
+  handling (zeroed buffers, DPAPI persistence) is unchanged — only the counter is
+  lock-free, never the secret custody.
+- **Consequences:** `20-KEYRING.md` rewritten around slots; `11` §11.4 proof becomes a
+  25-way distribution assertion; `05` §5.6 counter shapes migrate in M2.
+- **Compliance test:** 25 concurrent acquisitions resolve slots 0–9→K1, 10–19→K2,
+  20–24→K3 with zero double-spent slots.
+
+## ADR-006 — Autonomous intelligence over rigid rules
+
+- **Status:** Accepted. **Date:** 2026-09-22 (P-R revision pass, discovery Gates 0–1).
+- **Context:** Over-specified deterministic micromanagement makes the agent brittle
+  outside scripted paths and contradicts the product thesis (an ambient peer, not a
+  notification script). But unbounded autonomy risks destructive acts and leaks.
+- **Decision:** Peer-grade autonomous judgment everywhere EXCEPT three non-negotiable
+  hard boundaries: (1) secret handling I-1–I-5 (`12`), (2) destructive-action two-way
+  confirmation FR-12 (`02` §2.4), (3) ledger durability (`10`). Trust-breakers
+  (hallucinated completion, cheerful tone on failure, ambiguous destructive acts,
+  briefing lectures) are prohibited outputs, enforced by audit tests (`11` §11.5).
+- **Consequences:** `16` Gate invariants rewritten as autonomy doctrine; `04` carries
+  the doctrine banner; session-overseer skill (`17` §17.6) exercises away-mode agency.
+- **Compliance test:** destructive-intent drill (FR-12 acceptance) + trust-breaker scan
+  green on every release.
+
+## ADR-007 — Ring-buffer elimination for terminal audio
+
+- **Status:** Accepted. **Date:** 2026-09-22 (P-R revision pass, discovery T4).
+- **Context:** A raw terminal audio ring buffer was hypothesized for massive compiler
+  bursts — but no such buffer exists in the architecture, and piping raw bytes into
+  audio conflates the log plane with the speech plane.
+- **Decision:** The concept is deprecated and SHALL NOT be implemented. The brain
+  consumes structured JSON lifecycle events; raw stdout/stderr is observable via
+  file-based log tailing with a 40-spoken-word excerpt cap enforced in `bluf()`.
+- **Consequences:** `18` §18.6 specifies the event-feed/log-tail split; `11` §11.5A
+  asserts the cap.
+- **Compliance test:** no `ring` audio-buffer code in `src/voice/`; excerpt-cap drill green.
+
 ## Decision Log (subsequent ADRs)
 
 | ID | Title | Status | Date |
 |----|-------|--------|------|
-| ADR-005+ | *Reserved — fleet supervision (v2.0.0 RFC will extend this table)* | Proposed | — |
+| ADR-008+ | *Reserved — fleet supervision (v2.0.0 RFC will extend this table)* | Proposed | — |
 
 ---
 
