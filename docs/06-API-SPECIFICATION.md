@@ -202,19 +202,21 @@ Model: `s2.1-pro-free`. Voices resolved from logical IDs (`05` §5.1):
 | `female-toggle` | `88c0375e46fa4e3b929755fa077ca5ad` | User toggle |
 
 ```http
-POST https://api.fish.audio/v1/tts/stream HTTP/1.1
+POST https://api.fish.audio/v1/tts HTTP/1.1
 Authorization: Bearer [REDACTED — pool key, keyring-supplied]
 Content-Type: application/json
+model: s2.1-pro-free
 Accept: audio/mpeg
 ```
 
 ```json
 {
-  "model": "s2.1-pro-free",
-  "voice": "5b90451e0cd34b2788841744af7c55c3",
-  "input": "…briefing text (Ammani + EN technical spans)…",
+  "text": "…briefing text (Ammani + EN technical spans)…",
+  "reference_id": "5b90451e0cd34b2788841744af7c55c3",
   "format": "mp3",
-  "chunk": true
+  "latency": "balanced",
+  "chunk_length": 200,
+  "normalize": true
 }
 ```
 
@@ -223,6 +225,10 @@ HTTP/1.1 200 OK
 Content-Type: audio/mpeg
 Transfer-Encoding: chunked
 ```
+
+Contract source: official Fish Audio OpenAPI schema (`api.fish.audio/openapi.json`,
+verified live 2026-09-22 — prior draft path `/v1/tts/stream` with `voice`/`input`
+fields returned 404 and was corrected).
 
 Playback starts on first chunk (target p50 < 800 ms after text ready, NFR-3).
 Cache lookup (`05` §5.4) precedes synthesis: hit → local blob playback (< 50 ms),

@@ -102,7 +102,30 @@ which must name its targets by construction).*
 | M3 trust layer | P3 `voice/vault` + `voice/keyring` + proofs; P5 `guidance/` BLUF/agents/overseer/resolver + proofs | `fc1ea7c`, `77dfbbf`, `a593832`, `402bd6b` (+ `25c29e0` ledger marker) | tsc 0, lint 0, 23/23 tests |
 | M4 voice pipeline | `voice/stt` + `voice/brain` + `voice/tts` + disambiguation + proofs | `c429e8e`, `7b054cc`, `5344e75`, `0b8b068` | tsc 0, lint 0, 28/28 tests |
 | M5 mic UI | `ui/` mic control, speech policy, settings store, modal view-model + proofs | `dc2fbb0`, `0b6b47b` | tsc 0, lint 0, 34/34 tests |
+| Live verification | Vault bootstrap, Fish contract fix, brain normalization + retry + prompt compression, full provider loop | `e21529a`, `f85a4aa`, `b6d1f26`, `831116b`, `aa36fb8`, `aee2f81`, `9e59540` | live TTS/STT/brain/TTS loop green (see §10.6) |
 
 ---
+
+---
+
+## 10.6 — Live Provider Verification (2026-09-22, Amman fiber)
+
+*Keys migrated `.env.local` → `vault/keyring.dat` (AES-GCM, leak-scan clean);
+`.env.local` values cleared — vault is the single source. Full loop
+`node dist/cli.js live` (Fish TTS → Whisper STT → brain → reply TTS → speaker):*
+
+| Stage | Measured | Budget | Verdict |
+|-------|----------|--------|---------|
+| Fish TTS synthesis (full request) | ~1.7–2.4 s | first-chunk < 800 ms (streaming; transport buffers — chunk timing not yet instrumented) | Partial: synthesis works, chunk instrumentation open |
+| Whisper STT round-trip (1 chunk) | ~230–300 ms | p50 < 500 ms | **Pass** |
+| Brain `gpt-oss-120b` | ~600–1250 ms | p50 ≤ 2.0 s golden | **Pass** |
+| Reply TTS | ~3.3–5.2 s (longer text) | — | Informational |
+| Speaker playback | 111 KB Ammani MP3 handed to OS player | audible briefing | **Pass** |
+
+*Findings fixed live: (1) Fish path is `POST /v1/tts` + `model` header + `reference_id`
+(`06` §6.6 corrected); (2) model emits near-miss JSON keys → normalizer + exact-key
+prompt; (3) long constraint-heavy prompts yield empty completions → 10-line dense
+contract (2/2 clean at ~650 ms) + bounded 3-attempt resilience. STT of silent probe
+returns 16 chars (ambient model output, harmless). Total loop ~7 s end-to-end.*
 
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
