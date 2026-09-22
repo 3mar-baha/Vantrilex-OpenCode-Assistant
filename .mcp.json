@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/spec/main/schema/mcp.json",
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "description": "Up-to-date library and framework documentation lookup (Context7). Used for @opencode/client, Groq, Fish Audio API reference verification during implementation."
+    }
+  },
+  "harvestNotes": {
+    "registry": "O:/Claude Code/vantrilex/vantrilex-registry/VANTRILEX_CATALOG.md",
+    "provisionedSkills": 16,
+    "provisionedAgents": 7,
+    "provisionedHooks": 4,
+    "provisionedPlugins": 5,
+    "memoryServer": "Deferred to implementation phase (candidate: contextforge-mcp persistent memory or zipmem-mcp local-first). Not required for documentation milestone."
+  }
+}

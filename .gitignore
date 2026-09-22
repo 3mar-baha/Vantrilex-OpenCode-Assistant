@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+dist/
+build/
+coverage/
+
+# Runtime artifacts
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets — NEVER commit plaintext keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+vault/*.dat
+
+# Audio cache (regenerable LRU content)
+.cache/
+audio-cache/
+
+# OS / editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
