@@ -130,4 +130,38 @@ prompt; (3) long constraint-heavy prompts yield empty completions → 10-line de
 contract (2/2 clean at ~650 ms) + bounded 3-attempt resilience. STT of silent probe
 returns 16 chars (ambient model output, harmless). Total loop ~7 s end-to-end.*
 
+## 10.7 — Execution Ledger — Milestone M7 (Laya System-1, living section)
+
+*Autonomous overseer run, 2026-09-22. CPU-only invariant held throughout
+(`torch.cuda.is_available()` asserted False at every training/export entry; the
+reference GTX 750 Ti was never used). Heavy artifacts (`models/*.onnx`, `.venv/`,
+`ml/checkpoints/`, `.hf_cache/`) are gitignored; scripts, configs, splits, and gate
+reports are tracked. Decision record: `09` ADR-008.*
+
+| Phase | Scope | Commits | Gate evidence |
+|-------|-------|---------|---------------|
+| L0 data | JODA fallback harvest (1,685 rows), 5.2k Ammani SE synth + splits, seed-8 deterministic label surfaces | `9902c24` → `60530b6` | every head ≥ 20% minority; `ml/data/synth_meta.json` |
+| L1 train | frozen mmBERT backbone (`encoder.*` remap with hard abort) + 4 linear heads, class-weighted BCE, early stop | `d332fa2`, `e05c40c`, `7c428c5` | held-out acc 1.0000 / 0.9673 / 0.9865 / 1.0000 — all PASS (`ml/eval_report.md`) |
+| L2 export | FP32 + dynamic-INT8 ONNX, dynamic batch+seq dims, parity vs torch | `fbf8531`, `0d08d1e` | parity 3.24e-05 < 1e-4; INT8 all gates PASS (`ml/quant_report.json`) |
+| L2 latency | ORT_ENABLE_ALL sweep; operating length 32 (corpus p99) | `0d08d1e` | p50 **25.84 ms** < 40 ms (`ml/l2_report.json`) |
+| L3 bridge | real SentencePiece-BPE tokenizer (golden-vector parity), onnxruntime-node engine, race-safe session | `428fd98`, `93f5adf`, `d622b32` | 3/3 live tests green; tokenizer byte-for-byte vs Python |
+| L4 docs | ADR-008 + this ledger | `df3a9c1`, *m7 close* | Gate-4: tsc 0, lint 0, 41 unit tests green |
+
+**Findings fixed in-flight (each was release-blocking):**
+
+1. The root checkpoint namespaces the backbone under `encoder.` — the first training
+   *and* the first export silently ran on randomly initialized weights. A single
+   `ml/laya_hub.load_backbone` now remaps and hard-aborts on any missing key.
+2. ~12% of true labels carried no surface marker — unlearnable noise that capped
+   `is_destructive`. Every true label now carries a deterministic marker.
+3. The checkpoint tokenizer is SentencePiece **BPE**, not WordPiece — the TS bridge was
+   re-implemented and proved byte-for-byte against golden vectors from the authoritative
+   Python `tokenizers` lib.
+4. Dynamic INT8 trades up to ~7 points vs FP32 (`should_speak` 1.0000→0.9308,
+   `is_destructive` 0.9673→0.9038, `barge_in` 0.9865→0.9481, `stuck_in_loop`
+   1.0000→0.9923) but every head still clears its gate; the drop is measured and
+   recorded, not assumed.
+
+---
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

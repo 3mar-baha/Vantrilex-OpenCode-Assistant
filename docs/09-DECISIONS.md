@@ -167,6 +167,19 @@
   accuracy ≥ 0.90, `barge_in` and `stuck_in_loop` ≥ 0.85; (b) ONNX parity max logit diff
   < 1e-4 vs torch; (c) CPU latency p50 < 40 ms at the corpus operating length;
   (d) unit + live integration tests green (Gate 4).
+- **Measured at M7 close (2026-09-22):** (a) FP32 held-out (n=520) — `should_speak`
+  1.0000, `is_destructive` 0.9673, `barge_in` 0.9865, `stuck_in_loop` 1.0000 — all PASS;
+  (b) parity `3.24e-05`; (c) INT8 p50 **25.84 ms** at the 32-token operating length
+  (66.4 ms at 128) — the corpus p99 is 32 tokens and masked mean pooling makes logits
+  invariant to pad length, so 32 is latency-optimal without loss; (d) 41 unit tests + 3
+  live integration tests green.
+- **Known cost (accepted):** dynamic INT8 quantization trades accuracy for the latency
+  budget — the drop vs FP32 is up to ~7 points (`should_speak` 1.0000→0.9308,
+  `is_destructive` 0.9673→0.9038, `barge_in` 0.9865→0.9481, `stuck_in_loop`
+  1.0000→0.9923) and **every head still clears its gate** (`ml/quant_report.json`). The
+  INT8 drop is a tracked number, not an assumed "≤ 1 pt". Phrase-level behaviour is
+  weaker out-of-distribution than the split accuracy implies, which is acceptable for an
+  advisory gate that never auto-acts.
 
 ## Decision Log (subsequent ADRs)
 
