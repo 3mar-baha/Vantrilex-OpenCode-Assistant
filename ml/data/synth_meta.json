@@ -1,11 +1,79 @@
 {
   "seed": 8,
-  "count": 5200,
+  "count": 5180,
   "splits": {
-    "train": 4160,
-    "val": 520,
-    "test": 520
+    "train": 4440,
+    "val": 370,
+    "test": 370
   },
-  "balance_overall": "should_speak: true=61.52% false=38.48%\nis_destructive: true=21.35% false=78.65%\nbarge_in: true=22.83% false=77.17%\nstuck_in_loop: true=24.63% false=75.37%",
-  "balance_train": "should_speak: true=61.35% false=38.65%\nis_destructive: true=21.59% false=78.41%\nbarge_in: true=22.57% false=77.43%\nstuck_in_loop: true=24.57% false=75.43%"
+  "balance_overall": "should_speak: true=57.14% false=42.86%\nis_destructive: true=26.68% false=73.32%\nbarge_in: true=21.93% false=78.07%\nstuck_in_loop: true=25.21% false=74.79%",
+  "balance_train": "should_speak: true=58.33% false=41.67%\nis_destructive: true=26.55% false=73.45%\nbarge_in: true=22.00% false=78.00%\nstuck_in_loop: true=25.20% false=74.80%",
+  "hygiene": {
+    "markerless_positives": 0,
+    "marker_free_paraphrase_contains_marker": 0,
+    "loop_markerless": 0,
+    "barge_markerless": 0
+  },
+  "negation_coverage": 390,
+  "marker_free_positives": 551,
+  "head_correlation": {
+    "should_speak~is_destructive": 0.0241,
+    "should_speak~barge_in": -0.003,
+    "should_speak~stuck_in_loop": -0.0227,
+    "is_destructive~barge_in": 0.0041,
+    "is_destructive~stuck_in_loop": -0.0045,
+    "barge_in~stuck_in_loop": 0.0049
+  },
+  "split_integrity": {
+    "cross_split_frames": 0,
+    "frames_per_split": {
+      "train": [
+        "outcome-00",
+        "outcome-01",
+        "outcome-02",
+        "outcome-03",
+        "outcome-05",
+        "outcome-06",
+        "outcome-07",
+        "outcome-08",
+        "outcome-10",
+        "outcome-11",
+        "outcome-12",
+        "outcome-13",
+        "outcome-14",
+        "outcome-15",
+        "routine-00",
+        "routine-01",
+        "routine-02",
+        "routine-03",
+        "routine-05",
+        "routine-06",
+        "routine-07",
+        "routine-08",
+        "routine-10",
+        "routine-11"
+      ],
+      "val": [
+        "outcome-04",
+        "outcome-09"
+      ],
+      "test": [
+        "routine-04",
+        "routine-09"
+      ]
+    }
+  },
+  "destructive_markers": [
+    "امسح",
+    "احذف",
+    "دمر",
+    "force-push",
+    "rm -rf",
+    "drop"
+  ],
+  "loop_markers": [
+    "المحاولة",
+    "لسّاني شغال",
+    "ريتراي"
+  ]
 }
