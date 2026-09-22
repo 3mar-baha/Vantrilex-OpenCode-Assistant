@@ -35,7 +35,7 @@ export interface FishTransport {
 export class FishHttpTransport implements FishTransport {
   constructor(
     private readonly keyring: Keyring,
-    private readonly endpoint = 'https://api.fish.audio/v1/tts/stream',
+    private readonly endpoint = 'https://api.fish.audio/v1/tts',
   ) {}
 
   async synthesize(text: string, fishVoiceId: string): Promise<Uint8Array> {
@@ -43,8 +43,20 @@ export class FishHttpTransport implements FishTransport {
     try {
       const res = await fetch(this.endpoint, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${Buffer.from(key.material).toString('utf8')}`, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-        body: JSON.stringify({ model: TTS_MODEL, voice: fishVoiceId, input: text, format: 'mp3', chunk: true }),
+        headers: {
+          Authorization: `Bearer ${Buffer.from(key.material).toString('utf8')}`,
+          'Content-Type': 'application/json',
+          model: TTS_MODEL,
+          Accept: 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text,
+          reference_id: fishVoiceId,
+          format: 'mp3',
+          latency: 'balanced',
+          chunk_length: 200,
+          normalize: true,
+        }),
       });
       if (res.status === 429) {
         this.keyring.release(key, false, 429);
