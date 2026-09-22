@@ -9,7 +9,10 @@ P0 hardening (docs/16 §16.8B.1):
   V3  `should_speak` is driven by frame family only, decoupled from the other heads.
   V2  group-aware split by frame template — no template crosses train/val/test.
 
-Frames are seeded and varied; the seed is logged for reproducibility. Pure stdlib.
+Head labels other than `should_speak` are assigned **stratified per split** (exactly
+`round(rate * n)` positives per head in each split) so every split clears the 20%
+minority floor deterministically rather than by Bernoulli luck. Frames are seeded and
+varied; the seed is logged for reproducibility. Pure stdlib.
 
 Usage:
     python ml/data/generate_synth.py --count 5200 --seed 8 --out ml/data
@@ -41,6 +44,10 @@ OUTCOME_FRAMES = [
     "خلّصت الـ {task}، {followup}",
     "الـ {module} {result}",
     "{task} صارت {result}، {followup}",
+    "الـ {module} خلص، {result}",
+    "الديبلوي صار، {result}",
+    "الـ migration خلصت، {result}",
+    "البيلد خلص بعد {detail}، {result}",
 ]
 # ROUTINE frames are unremarkable ticks that stay silent.
 ROUTINE_FRAMES = [
@@ -56,6 +63,14 @@ ROUTINE_FRAMES = [
     "{detail} صار، كل شي تمام",
     "السيرفر مستقر، ما في ملاحظات",
     "الـ queue فاضية، كل شي هادي",
+    "{task} شغالة على {module}",
+    "الـ {module} ماشي طبيعي",
+    "ما في أخطاء، {task} ماشية",
+    "الـ API مستقر، ما في جديد",
+    "الـ cache ماشي عادي",
+    "الـ lint ماشي، ما في ملاحظات",
+    "{task} مستقرة، ما في جديد",
+    "الوضع هادي، {module} شغالة",
 ]
 
 TECH_TASKS = [
@@ -104,60 +119,13 @@ NEGATION_TEMPLATES = [
     "لا تلمس الداتابيز",
 ]
 
-# --- Sampling rates (independent across heads -> low correlation, V3) -------------
+# --- Target head rates (stratified per split) ------------------------------------
 DESTRUCTIVE_RATE = 0.25
 MARKER_FREE_SHARE = 0.40   # of destructive positives
 NEGATION_RATE = 0.10       # of non-destructive samples
 BARGE_RATE = 0.22
 LOOP_RATE = 0.24
-
-
-def make_sample(rng: random.Random, index: int, frame_id: str, family: str, template: str) -> dict:
-    text = template.format(
-        task=rng.choice(TECH_TASKS),
-        result=rng.choice(RESULTS),
-        module=rng.choice(MODULES),
-        followup=rng.choice(FOLLOWUPS),
-        detail=rng.choice(DETAILS),
-        attempt=rng.randint(2, 6),
-    )
-    should_speak = family == "outcome"
-
-    is_destructive = rng.random() < DESTRUCTIVE_RATE
-    marker_free = False
-    if is_destructive:
-        if rng.random() < MARKER_FREE_SHARE:
-            text = f"{rng.choice(MARKER_FREE_DESTRUCTIVE)}، {text}"
-            marker_free = True
-        else:
-            text = f"{rng.choice(DESTRUCTIVE_MARKERS)} {text}"
-
-    negated = False
-    if not is_destructive and rng.random() < NEGATION_RATE:
-        text = f"{rng.choice(NEGATION_TEMPLATES)}. {text}"
-        negated = True
-
-    barge_in = rng.random() < BARGE_RATE
-    if barge_in:
-        text = f"{rng.choice(BARGE_MARKERS)}، {text}"
-
-    stuck_in_loop = rng.random() < LOOP_RATE
-    if stuck_in_loop:
-        text = f"{text}{rng.choice(LOOP_SUFFIXES)}"
-
-    return {
-        "id": f"synth-{index:05d}",
-        "text": text,
-        "frame": frame_id,
-        "marker_free": marker_free,
-        "negated": negated,
-        "labels": {
-            "should_speak": should_speak,
-            "is_destructive": is_destructive,
-            "barge_in": barge_in,
-            "stuck_in_loop": stuck_in_loop,
-        },
-    }
+HEADS = ("should_speak", "is_destructive", "barge_in", "stuck_in_loop")
 
 
 def build_frames() -> list[tuple[str, str, str]]:
@@ -172,12 +140,80 @@ def build_frames() -> list[tuple[str, str, str]]:
 
 
 def split_of_frame(frames: list[tuple[str, str, str]]) -> dict[str, str]:
-    """Deterministic 80/10/10 assignment by interleaved frame index (V2)."""
+    """Deterministic 80/10/10 assignment per family (V2).
+
+    Assigning within each family guarantees every split receives both outcome and
+    routine frames, so per-split should_speak balance holds. No frame crosses a
+    split boundary.
+    """
     assignment: dict[str, str] = {}
-    for i, (fid, _family, _template) in enumerate(frames):
-        bucket = i % 10
+    counters = {"outcome": 0, "routine": 0}
+    for fid, family, _template in frames:
+        idx = counters[family]
+        counters[family] += 1
+        bucket = idx % 10
         assignment[fid] = "train" if bucket < 8 else ("val" if bucket == 8 else "test")
     return assignment
+
+
+def stratify_labels(rng: random.Random, slots: list[dict]) -> None:
+    """Assign is_destructive / barge_in / stuck_in_loop per split with exactly
+    round(rate * n) positives each, independently across heads (V3 + balance)."""
+    by_split: dict[str, list[dict]] = {}
+    for slot in slots:
+        by_split.setdefault(slot["split"], []).append(slot)
+    for items in by_split.values():
+        n = len(items)
+        order = list(range(n))
+        for head, rate in (
+            ("is_destructive", DESTRUCTIVE_RATE),
+            ("barge_in", BARGE_RATE),
+            ("stuck_in_loop", LOOP_RATE),
+        ):
+            rng.shuffle(order)
+            chosen = set(order[: round(rate * n)])
+            for i, slot in enumerate(items):
+                slot["labels"][head] = i in chosen
+
+
+def render_sample(rng: random.Random, slot: dict) -> dict:
+    text = slot["template"].format(
+        task=rng.choice(TECH_TASKS),
+        result=rng.choice(RESULTS),
+        module=rng.choice(MODULES),
+        followup=rng.choice(FOLLOWUPS),
+        detail=rng.choice(DETAILS),
+        attempt=rng.randint(2, 6),
+    )
+    labels = slot["labels"]
+
+    marker_free = False
+    if labels["is_destructive"]:
+        if rng.random() < MARKER_FREE_SHARE:
+            text = f"{rng.choice(MARKER_FREE_DESTRUCTIVE)}، {text}"
+            marker_free = True
+        else:
+            text = f"{rng.choice(DESTRUCTIVE_MARKERS)} {text}"
+
+    negated = False
+    if not labels["is_destructive"] and rng.random() < NEGATION_RATE:
+        text = f"{rng.choice(NEGATION_TEMPLATES)}. {text}"
+        negated = True
+
+    if labels["barge_in"]:
+        text = f"{rng.choice(BARGE_MARKERS)}، {text}"
+
+    if labels["stuck_in_loop"]:
+        text = f"{text}{rng.choice(LOOP_SUFFIXES)}"
+
+    return {
+        "id": slot["id"],
+        "text": text,
+        "frame": slot["frame"],
+        "marker_free": marker_free,
+        "negated": negated,
+        "labels": labels,
+    }
 
 
 def phi(a: list[bool], b: list[bool]) -> float:
@@ -192,7 +228,7 @@ def phi(a: list[bool], b: list[bool]) -> float:
 def hygiene_check(samples: list[dict]) -> dict:
     """Fail-closed: raise on any hygiene violation."""
     markerless_positives = 0
-    marker_bearing_paraphrase = 0
+    marker_free_contains_marker = 0
     loop_markerless = 0
     barge_markerless = 0
     for s in samples:
@@ -202,7 +238,7 @@ def hygiene_check(samples: list[dict]) -> dict:
         if labels["is_destructive"]:
             if s["marker_free"]:
                 if has_marker:
-                    marker_bearing_paraphrase += 1
+                    marker_free_contains_marker += 1
             elif not has_marker:
                 markerless_positives += 1
         if labels["stuck_in_loop"] and not any(m in text for m in LOOP_MARKERS):
@@ -211,7 +247,7 @@ def hygiene_check(samples: list[dict]) -> dict:
             barge_markerless += 1
     problems = {
         "markerless_positives": markerless_positives,
-        "marker_free_paraphrase_contains_marker": marker_bearing_paraphrase,
+        "marker_free_paraphrase_contains_marker": marker_free_contains_marker,
         "loop_markerless": loop_markerless,
         "barge_markerless": barge_markerless,
     }
@@ -222,7 +258,7 @@ def hygiene_check(samples: list[dict]) -> dict:
 
 def balance_report(samples: list[dict]) -> str:
     lines = []
-    for head in ("should_speak", "is_destructive", "barge_in", "stuck_in_loop"):
+    for head in HEADS:
         counts = Counter(s["labels"][head] for s in samples)
         total = len(samples)
         lines.append(f"{head}: true={counts[True] / total:.2%} false={counts[False] / total:.2%}")
@@ -230,11 +266,10 @@ def balance_report(samples: list[dict]) -> str:
 
 
 def correlation_report(samples: list[dict]) -> dict:
-    heads = ("should_speak", "is_destructive", "barge_in", "stuck_in_loop")
-    cols = {h: [s["labels"][h] for s in samples] for h in heads}
+    cols = {h: [s["labels"][h] for s in samples] for h in HEADS}
     out: dict[str, float] = {}
-    for i, a in enumerate(heads):
-        for b in heads[i + 1 :]:
+    for i, a in enumerate(HEADS):
+        for b in HEADS[i + 1 :]:
             out[f"{a}~{b}"] = round(phi(cols[a], cols[b]), 4)
     return out
 
@@ -251,18 +286,31 @@ def main() -> None:
     assignment = split_of_frame(frames)
     per_frame = max(1, args.count // len(frames))
 
-    splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    slots: list[dict] = []
     index = 0
     for fid, family, template in frames:
-        target = assignment[fid]
         for _ in range(per_frame):
-            splits[target].append(make_sample(rng, index, fid, family, template))
+            slots.append(
+                {
+                    "id": f"synth-{index:05d}",
+                    "frame": fid,
+                    "family": family,
+                    "template": template,
+                    "split": assignment[fid],
+                    "labels": {"should_speak": family == "outcome"},
+                }
+            )
             index += 1
 
-    samples = splits["train"] + splits["val"] + splits["test"]
+    stratify_labels(rng, slots)
+    samples = [render_sample(rng, slot) for slot in slots]
     rng.shuffle(samples)
 
     hygiene = hygiene_check(samples)
+
+    splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    for s in samples:
+        splits[assignment[s["frame"]]].append(s)
 
     # V2: no frame template may cross splits.
     frame_sets = {name: {s["frame"] for s in rows} for name, rows in splits.items()}
@@ -292,17 +340,15 @@ def main() -> None:
             "\n".join(json.dumps(s, ensure_ascii=False) for s in subset), encoding="utf-8"
         )
 
-    negation_coverage = sum(1 for s in samples if s["negated"])
-    marker_free_positives = sum(1 for s in samples if s["marker_free"])
     meta = {
         "seed": args.seed,
         "count": len(samples),
         "splits": {k: len(v) for k, v in splits.items()},
         "balance_overall": balance_report(samples),
-        "balance_train": balance_report(splits["train"]),
+        "balance_splits": {k: balance_report(v) for k, v in splits.items()},
         "hygiene": hygiene,
-        "negation_coverage": negation_coverage,
-        "marker_free_positives": marker_free_positives,
+        "negation_coverage": sum(1 for s in samples if s["negated"]),
+        "marker_free_positives": sum(1 for s in samples if s["marker_free"]),
         "head_correlation": correlations,
         "split_integrity": {
             "cross_split_frames": len(cross),
@@ -316,7 +362,7 @@ def main() -> None:
     print(f"wrote {len(samples)} samples (seed={args.seed}, {len(frames)} frames)")
     print("splits:", meta["splits"])
     print("overall balance:\n" + meta["balance_overall"])
-    print(f"negation_coverage={negation_coverage} marker_free_positives={marker_free_positives}")
+    print(f"negation_coverage={meta['negation_coverage']} marker_free_positives={meta['marker_free_positives']}")
     print(f"hygiene={hygiene}")
     print(f"max |phi| with should_speak={max_should_speak_phi:.4f}")
     print(f"cross_split_frames={len(cross)}")

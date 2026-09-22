@@ -39,16 +39,24 @@ def main() -> None:
     max_phi = max((abs(v) for k, v in corr.items() if k.startswith("should_speak")), default=1.0)
     results.append((f"G1.5 head independence (max |phi| < {MAX_PHI})", max_phi < MAX_PHI, f"max|phi|={max_phi:.4f}"))
 
-    balance = meta.get("balance_overall", "")
-    minorities = {}
-    for line in balance.splitlines():
-        m = re.match(r"(\w+): true=([\d.]+)% false=([\d.]+)%", line.strip())
-        if m:
-            head, t, f = m.group(1), float(m.group(2)), float(m.group(3))
-            minorities[head] = min(t, f) / 100.0
-    balance_ok = len(minorities) == len(HEADS) and all(v >= MIN_MINORITY for v in minorities.values())
-    detail = ", ".join(f"{h}={v:.2%}" for h, v in minorities.items())
-    results.append((f"G1.6 balance (every head >= {MIN_MINORITY:.0%} minority)", balance_ok, detail))
+    def parse_minorities(block: str) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for line in block.splitlines():
+            m = re.match(r"(\w+): true=([\d.]+)% false=([\d.]+)%", line.strip())
+            if m:
+                out[m.group(1)] = min(float(m.group(2)), float(m.group(3))) / 100.0
+        return out
+
+    per_split = meta.get("balance_splits", {})
+    parsed = {name: parse_minorities(block) for name, block in per_split.items()}
+    balance_ok = bool(parsed) and all(
+        len(mins) == len(HEADS) and all(v >= MIN_MINORITY for v in mins.values())
+        for mins in parsed.values()
+    )
+    detail = "; ".join(
+        f"{name}[" + ",".join(f"{h}={v:.0%}" for h, v in mins.items()) + "]" for name, mins in parsed.items()
+    )
+    results.append((f"G1.6 balance per split (every head >= {MIN_MINORITY:.0%} minority)", balance_ok, detail))
 
     width = max(len(name) for name, _, _ in results)
     failed = False
