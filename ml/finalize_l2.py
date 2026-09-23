@@ -21,8 +21,8 @@ import yaml
 from tokenizers import Tokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from laya_hub import load_backbone, stage_snapshot  # noqa: E402
-from train_laya import HEADS, LayaHeads  # noqa: E402
+from laya_hub import stage_snapshot  # noqa: E402
+from train_laya import HEADS, load_trained_laya  # noqa: E402
 
 PARITY_SAMPLES = 50
 SWEEP_LENGTHS = (128, 64, 32, 24)
@@ -67,14 +67,7 @@ def main() -> None:
     ]
 
     # ---- Parity gate (torch vs FP32 ONNX) ------------------------------------
-    backbone = load_backbone(training["model_id"])
-    model = LayaHeads(backbone, backbone.config.hidden_size)
-    checkpoint = torch.load(
-        root / cfg["output"]["dir"] / "best.pt", map_location="cpu", weights_only=True
-    )
-    for h in HEADS:
-        model.heads[h].load_state_dict(checkpoint["heads"][h])
-    model.eval()
+    model = load_trained_laya(root, training, cfg["output"])
 
     fp32 = ort.InferenceSession(str(fp32_path), providers=["CPUExecutionProvider"])
     max_diff = 0.0
@@ -86,7 +79,7 @@ def main() -> None:
                 axis=1,
             )
         ort_logits = np.stack(
-            fp32.run(None, {"input_ids": ids, "attention_mask": mask}), axis=1
+            [np.asarray(out) for out in fp32.run(None, {"input_ids": ids, "attention_mask": mask})], axis=1
         )
         max_diff = max(max_diff, float(np.abs(torch_logits - ort_logits).max()))
     print(f"parity max_diff={max_diff:.2e}")

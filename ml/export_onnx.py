@@ -16,8 +16,7 @@ import yaml
 from onnxruntime.quantization import QuantType, quantize_dynamic
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from laya_hub import load_backbone  # noqa: E402
-from train_laya import HEADS, LayaHeads  # noqa: E402
+from train_laya import HEADS, LayaHeads, load_trained_laya  # noqa: E402
 
 
 class _Wrapper(torch.nn.Module):
@@ -36,11 +35,7 @@ def main() -> None:
     training = cfg["training"]
     torch.set_num_threads(training["num_threads"] or 4)
 
-    backbone = load_backbone(training["model_id"])
-    model = LayaHeads(backbone, backbone.config.hidden_size)
-    checkpoint = torch.load(root / cfg["output"]["dir"] / "best.pt", map_location="cpu", weights_only=True)
-    for h in HEADS:
-        model.heads[h].load_state_dict(checkpoint["heads"][h])
+    model = load_trained_laya(root, training, cfg["output"])
     model.eval()
 
     models_dir = root / "models"
