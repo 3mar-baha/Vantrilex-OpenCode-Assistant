@@ -1,19 +1,19 @@
 {
   "seed": 8,
-  "count": 7680,
+  "count": 10008,
   "frames_total": 384,
   "frames_outcome": 224,
   "frames_routine": 160,
   "splits": {
-    "train": 6160,
-    "val": 760,
-    "test": 760
+    "train": 8024,
+    "val": 992,
+    "test": 992
   },
-  "balance_overall": "should_speak: true=58.33% false=41.67%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=21.99% false=78.01%\nstuck_in_loop: true=23.98% false=76.02%",
+  "balance_overall": "should_speak: true=68.03% false=31.97%\nis_destructive: true=24.58% false=75.42%\nbarge_in: true=22.85% false=77.15%\nstuck_in_loop: true=24.70% false=75.30%",
   "balance_splits": {
-    "train": "should_speak: true=58.44% false=41.56%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=22.00% false=78.00%\nstuck_in_loop: true=23.99% false=76.01%",
-    "val": "should_speak: true=57.89% false=42.11%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=21.97% false=78.03%\nstuck_in_loop: true=23.95% false=76.05%",
-    "test": "should_speak: true=57.89% false=42.11%\nis_destructive: true=25.00% false=75.00%\nbarge_in: true=21.97% false=78.03%\nstuck_in_loop: true=23.95% false=76.05%"
+    "train": "should_speak: true=68.10% false=31.90%\nis_destructive: true=24.58% false=75.42%\nbarge_in: true=22.76% false=77.24%\nstuck_in_loop: true=24.64% false=75.36%",
+    "val": "should_speak: true=67.74% false=32.26%\nis_destructive: true=24.60% false=75.40%\nbarge_in: true=22.58% false=77.42%\nstuck_in_loop: true=24.90% false=75.10%",
+    "test": "should_speak: true=67.74% false=32.26%\nis_destructive: true=24.60% false=75.40%\nbarge_in: true=23.89% false=76.11%\nstuck_in_loop: true=25.00% false=75.00%"
   },
   "hygiene": {
     "markerless_positives": 0,
@@ -21,28 +21,44 @@
     "loop_markerless": 0,
     "barge_markerless": 0
   },
-  "negation_coverage": 766,
-  "marker_free_positives": 814,
+  "over_budget_rows": 1,
+  "negation_coverage": 992,
+  "marker_free_positives": 884,
   "head_correlation": {
-    "should_speak~is_destructive": 0.0146,
-    "should_speak~barge_in": -0.0084,
-    "should_speak~stuck_in_loop": 0.0139,
-    "is_destructive~barge_in": -0.0125,
-    "is_destructive~stuck_in_loop": -0.0067,
-    "barge_in~stuck_in_loop": -0.0251
+    "should_speak~is_destructive": -0.0007,
+    "should_speak~barge_in": 0.0103,
+    "should_speak~stuck_in_loop": 0.0082,
+    "is_destructive~barge_in": 0.0043,
+    "is_destructive~stuck_in_loop": 0.0029,
+    "barge_in~stuck_in_loop": 0.0089
   },
   "split_integrity": {
     "cross_split_frames": 0,
     "frames_per_split": {
-      "train": 308,
-      "val": 38,
-      "test": 38
+      "train": 1932,
+      "val": 240,
+      "test": 240
     }
+  },
+  "contrastive": {
+    "benign_marker_rows": 1248,
+    "negation_pairs": 300,
+    "confusable_rows": 480,
+    "marker_conditionals": {
+      "امسح": 0.5,
+      "احذف": 0.5,
+      "دمر": 0.5,
+      "force-push": 0.5,
+      "rm -rf": 0.5,
+      "drop": 0.5
+    },
+    "pairs_file": "ml/data/contrastive_pairs.json"
   },
   "grounding": {
     "joda_raw": "KareemBb/Jordanian-Dialect-Instruct-QA (ml/data/joda_raw/sentences.jsonl, 1685 rows)",
     "particles": "Levantine negation/particle inventory (لا/ما/مش/مو/بلاش/دير بالك)",
     "msa": "MSA structural templates (تم/انتهى/فشل)",
+    "contrastive": "Phase-2 contrastive rebalance (benign marker actions, negation pairs, confusable pairs)",
     "madar_amman": "not locally available — not used (no fabrication)",
     "massive_ar": "not locally available — not used (no fabrication)"
   },

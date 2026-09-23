@@ -18,6 +18,10 @@ MIN_MINORITY = 0.20
 MIN_NEGATIONS = 40
 MIN_MARKER_FREE = 60
 MIN_FRAMES = 200
+MIN_BENIGN_MARKER = 900
+MIN_NEG_PAIRS = 300
+MIN_CONFUSABLE = 480
+COND_LO, COND_HI = 0.40, 0.60
 MAX_PHI = 0.30
 MAX_P99_TOKENS = 32
 HEADS = ("should_speak", "is_destructive", "barge_in", "stuck_in_loop")
@@ -88,6 +92,22 @@ def main() -> None:
         length_ok = False
         detail = f"tokenizer/length check failed: {exc}"
     results.append((f"G1.8 token length p99 <= {MAX_P99_TOKENS}", length_ok, detail))
+
+    con = meta.get("contrastive", {})
+    conds = con.get("marker_conditionals", {})
+    cond_ok = bool(conds) and all(COND_LO <= p <= COND_HI for p in conds.values())
+    cond_detail = ", ".join(f"{m}={p:.2f}" for m, p in conds.items()) or "missing"
+    results.append((f"G1.9 per-marker P(destructive|marker) in [{COND_LO:.2f}, {COND_HI:.2f}]", cond_ok, cond_detail))
+
+    bq = (
+        con.get("benign_marker_rows", 0) >= MIN_BENIGN_MARKER
+        and con.get("negation_pairs", 0) >= MIN_NEG_PAIRS
+        and con.get("confusable_rows", 0) >= MIN_CONFUSABLE
+    )
+    q_detail = (f"benign_marker={con.get('benign_marker_rows', 0)} "
+                f"neg_pairs={con.get('negation_pairs', 0)} "
+                f"confusable={con.get('confusable_rows', 0)}")
+    results.append(("G1.10 contrastive quotas (benign>=900, pairs>=300, confusable>=480)", bq, q_detail))
 
     width = max(len(name) for name, _, _ in results)
     failed = False
