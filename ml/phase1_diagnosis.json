@@ -1,0 +1,268 @@
+{
+  "model": "laya-m7-int8.onnx",
+  "length": 32,
+  "corpus_train": {
+    "n": 6160,
+    "p_destructive": 0.25,
+    "p_destructive_given_no_marker": 0.1252,
+    "benign_marker_bearing_share": 0.1121,
+    "per_marker": {
+      "\u0627\u0645\u0633\u062d": {
+        "n_with": 179,
+        "p_marker": 0.0291,
+        "p_destructive_given_marker": 1.0,
+        "pmi": 1.3863
+      },
+      "\u0627\u062d\u0630\u0641": {
+        "n_with": 151,
+        "p_marker": 0.0245,
+        "p_destructive_given_marker": 1.0,
+        "pmi": 1.3863
+      },
+      "\u062f\u0645\u0631": {
+        "n_with": 129,
+        "p_marker": 0.0209,
+        "p_destructive_given_marker": 1.0,
+        "pmi": 1.3863
+      },
+      "force-push": {
+        "n_with": 195,
+        "p_marker": 0.0317,
+        "p_destructive_given_marker": 0.7744,
+        "pmi": 1.1306
+      },
+      "rm -rf": {
+        "n_with": 173,
+        "p_marker": 0.0281,
+        "p_destructive_given_marker": 0.815,
+        "pmi": 1.1818
+      },
+      "drop": {
+        "n_with": 181,
+        "p_marker": 0.0294,
+        "p_destructive_given_marker": 0.7956,
+        "pmi": 1.1576
+      }
+    }
+  },
+  "model_test_conditionals": {
+    "n_test": 760,
+    "acc_all": 0.8645,
+    "acc_given_marker": 0.7193,
+    "n_marker": 114,
+    "acc_given_no_marker": 0.8901,
+    "n_no_marker": 646,
+    "acc_marker_bearing_benign": 0.6667,
+    "n_marker_benign": 15,
+    "acc_markerfree_destructive": 0.7033,
+    "n_markerfree_destructive": 91,
+    "acc_negated": 0.8615,
+    "n_negated": 621
+  },
+  "per_frame_acc": {
+    "outcome-009": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "outcome-019": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "outcome-029": {
+      "n": 20,
+      "acc": 0.9
+    },
+    "outcome-039": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-049": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-059": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-069": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "outcome-079": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-089": {
+      "n": 20,
+      "acc": 0.55
+    },
+    "outcome-099": {
+      "n": 20,
+      "acc": 0.75
+    },
+    "outcome-109": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "outcome-119": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-129": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-139": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "outcome-149": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-159": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-169": {
+      "n": 20,
+      "acc": 0.7
+    },
+    "outcome-179": {
+      "n": 20,
+      "acc": 0.7
+    },
+    "outcome-189": {
+      "n": 20,
+      "acc": 0.75
+    },
+    "outcome-199": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "outcome-209": {
+      "n": 20,
+      "acc": 0.9
+    },
+    "outcome-219": {
+      "n": 20,
+      "acc": 0.55
+    },
+    "routine-009": {
+      "n": 20,
+      "acc": 0.8
+    },
+    "routine-019": {
+      "n": 20,
+      "acc": 0.75
+    },
+    "routine-029": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "routine-039": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "routine-049": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "routine-059": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "routine-069": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "routine-079": {
+      "n": 20,
+      "acc": 1.0
+    },
+    "routine-089": {
+      "n": 20,
+      "acc": 1.0
+    },
+    "routine-099": {
+      "n": 20,
+      "acc": 0.9
+    },
+    "routine-109": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "routine-119": {
+      "n": 20,
+      "acc": 0.85
+    },
+    "routine-129": {
+      "n": 20,
+      "acc": 1.0
+    },
+    "routine-139": {
+      "n": 20,
+      "acc": 0.9
+    },
+    "routine-149": {
+      "n": 20,
+      "acc": 0.95
+    },
+    "routine-159": {
+      "n": 20,
+      "acc": 0.8
+    }
+  },
+  "worst_frames": [
+    {
+      "frame": "outcome-089",
+      "n": 20,
+      "acc": 0.55
+    },
+    {
+      "frame": "outcome-219",
+      "n": 20,
+      "acc": 0.55
+    },
+    {
+      "frame": "outcome-169",
+      "n": 20,
+      "acc": 0.7
+    },
+    {
+      "frame": "outcome-179",
+      "n": 20,
+      "acc": 0.7
+    },
+    {
+      "frame": "outcome-099",
+      "n": 20,
+      "acc": 0.75
+    },
+    {
+      "frame": "outcome-189",
+      "n": 20,
+      "acc": 0.75
+    },
+    {
+      "frame": "routine-019",
+      "n": 20,
+      "acc": 0.75
+    },
+    {
+      "frame": "routine-009",
+      "n": 20,
+      "acc": 0.8
+    },
+    {
+      "frame": "routine-159",
+      "n": 20,
+      "acc": 0.8
+    },
+    {
+      "frame": "outcome-039",
+      "n": 20,
+      "acc": 0.85
+    }
+  ]
+}
