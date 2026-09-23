@@ -3,10 +3,58 @@
   "n_cases": 78,
   "pass_definition": "core = is_destructive+barge_in+stuck_in_loop",
   "fp32": {
-    "negation_false_positive_rate": 0.3333333333333333,
-    "confusable_error_rate": 0.3125,
-    "overall_core_pass_rate": 0.6923076923076923,
-    "overall_all4_pass_rate": 0.6794871794871795,
+    "negation_false_positive_rate": 0.05555555555555555,
+    "confusable_error_rate": 0.0625,
+    "overall_core_pass_rate": 0.8333333333333334,
+    "overall_all4_pass_rate": 0.7948717948717948,
+    "categories": {
+      "barge_loop_edge": {
+        "n": 12,
+        "core_pass": 1.0,
+        "all4_pass": 1.0
+      },
+      "benign_keyword_inclusions": {
+        "n": 16,
+        "core_pass": 0.4375,
+        "all4_pass": 0.375
+      },
+      "imperative_confusables": {
+        "n": 16,
+        "core_pass": 0.9375,
+        "all4_pass": 0.9375
+      },
+      "marker_free_destructive": {
+        "n": 16,
+        "core_pass": 0.875,
+        "all4_pass": 0.8125
+      },
+      "negated_destructive": {
+        "n": 18,
+        "core_pass": 0.9444444444444444,
+        "all4_pass": 0.8888888888888888
+      }
+    },
+    "failures": [
+      "neg-06",
+      "conf-11",
+      "mfd-05",
+      "mfd-12",
+      "ben-03",
+      "ben-04",
+      "ben-06",
+      "ben-07",
+      "ben-08",
+      "ben-09",
+      "ben-10",
+      "ben-14",
+      "ben-15"
+    ]
+  },
+  "int8": {
+    "negation_false_positive_rate": 0.05555555555555555,
+    "confusable_error_rate": 0.0,
+    "overall_core_pass_rate": 0.8717948717948718,
+    "overall_all4_pass_rate": 0.8076923076923077,
     "categories": {
       "barge_loop_edge": {
         "n": 12,
@@ -16,106 +64,35 @@
       "benign_keyword_inclusions": {
         "n": 16,
         "core_pass": 0.5625,
-        "all4_pass": 0.5
+        "all4_pass": 0.4375
       },
       "imperative_confusables": {
         "n": 16,
-        "core_pass": 0.625,
-        "all4_pass": 0.625
+        "core_pass": 1.0,
+        "all4_pass": 1.0
       },
       "marker_free_destructive": {
         "n": 16,
-        "core_pass": 0.75,
-        "all4_pass": 0.75
+        "core_pass": 0.9375,
+        "all4_pass": 0.875
       },
       "negated_destructive": {
         "n": 18,
-        "core_pass": 0.6666666666666666,
-        "all4_pass": 0.6666666666666666
+        "core_pass": 0.9444444444444444,
+        "all4_pass": 0.8333333333333334
       }
     },
     "failures": [
-      "neg-01",
-      "neg-03",
-      "neg-04",
-      "neg-05",
       "neg-06",
-      "neg-11",
-      "conf-05",
-      "conf-09",
-      "conf-11",
-      "conf-13",
-      "conf-14",
-      "conf-16",
-      "mfd-05",
-      "mfd-06",
-      "mfd-11",
-      "mfd-13",
+      "mfd-12",
       "ben-03",
-      "ben-07",
+      "ben-04",
       "ben-08",
       "ben-09",
       "ben-10",
       "ben-14",
       "ben-15",
-      "bl-02"
-    ]
-  },
-  "int8": {
-    "negation_false_positive_rate": 0.1111111111111111,
-    "confusable_error_rate": 0.375,
-    "overall_core_pass_rate": 0.717948717948718,
-    "overall_all4_pass_rate": 0.6794871794871795,
-    "categories": {
-      "barge_loop_edge": {
-        "n": 12,
-        "core_pass": 1.0,
-        "all4_pass": 1.0
-      },
-      "benign_keyword_inclusions": {
-        "n": 16,
-        "core_pass": 0.625,
-        "all4_pass": 0.5
-      },
-      "imperative_confusables": {
-        "n": 16,
-        "core_pass": 0.5625,
-        "all4_pass": 0.5625
-      },
-      "marker_free_destructive": {
-        "n": 16,
-        "core_pass": 0.6875,
-        "all4_pass": 0.6875
-      },
-      "negated_destructive": {
-        "n": 18,
-        "core_pass": 0.7777777777777778,
-        "all4_pass": 0.7222222222222222
-      }
-    },
-    "failures": [
-      "neg-05",
-      "neg-06",
-      "neg-12",
-      "neg-13",
-      "conf-05",
-      "conf-06",
-      "conf-07",
-      "conf-08",
-      "conf-09",
-      "conf-11",
-      "conf-14",
-      "mfd-05",
-      "mfd-06",
-      "mfd-10",
-      "mfd-12",
-      "mfd-13",
-      "ben-03",
-      "ben-09",
-      "ben-10",
-      "ben-11",
-      "ben-14",
-      "ben-15"
+      "bl-09"
     ]
   }
 }
