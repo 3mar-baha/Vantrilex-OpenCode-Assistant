@@ -1,0 +1,1137 @@
+{
+  "n_cases": 66,
+  "length": 32,
+  "latency": {
+    "n": 120,
+    "text": "امسح جدول الطلبات، البيلد ماشي طبيعي",
+    "p50": 39.07,
+    "p90": 65.23,
+    "p99": 95.18,
+    "mean": 43.02,
+    "max": 108.09
+  },
+  "cases": [
+    {
+      "id": "asr-01",
+      "category": "asr_noise",
+      "text": "ااامسح جدول الطلبات",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -0.458,
+        "prob": 0.3875
+      },
+      "fp32": {
+        "logit": 1.2621,
+        "prob": 0.7794
+      },
+      "verdict": "FAIL",
+      "rationale": "stuttered onset"
+    },
+    {
+      "id": "asr-02",
+      "category": "asr_noise",
+      "text": "امسح يعني الداتابيز",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 20.4907,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 18.3877,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "filler يعني mid-command"
+    },
+    {
+      "id": "asr-03",
+      "category": "asr_noise",
+      "text": "شوف امسح السيرفر",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -1.927,
+        "prob": 0.1271
+      },
+      "fp32": {
+        "logit": 4.1509,
+        "prob": 0.9845
+      },
+      "verdict": "FAIL",
+      "rationale": "filler شوف onset"
+    },
+    {
+      "id": "asr-04",
+      "category": "asr_noise",
+      "text": "ألو امسح ملفات الشغل",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 0.7667,
+        "prob": 0.6828
+      },
+      "fp32": {
+        "logit": 5.4425,
+        "prob": 0.9957
+      },
+      "verdict": "pass",
+      "rationale": "greeting ألو onset"
+    },
+    {
+      "id": "asr-05",
+      "category": "asr_noise",
+      "text": "امسح لا لا خلص الداتابيز",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 17.8187,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 20.7907,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "false start + repair"
+    },
+    {
+      "id": "asr-06",
+      "category": "asr_noise",
+      "text": "داتابيز امسح كلها",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 6.1521,
+        "prob": 0.9979
+      },
+      "fp32": {
+        "logit": 3.7878,
+        "prob": 0.9779
+      },
+      "verdict": "pass",
+      "rationale": "ungrammatical word order"
+    },
+    {
+      "id": "asr-07",
+      "category": "asr_noise",
+      "text": "امسح امسح الجدول",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 10.565,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 12.2908,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "verb repetition"
+    },
+    {
+      "id": "asr-08",
+      "category": "asr_noise",
+      "text": "احذف هاي ال ال الـ branch",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 7.9662,
+        "prob": 0.9997
+      },
+      "fp32": {
+        "logit": 11.7784,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "stuttered article"
+    },
+    {
+      "id": "asr-09",
+      "category": "asr_noise",
+      "text": "rm rf الداتابيز",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 7.5039,
+        "prob": 0.9994
+      },
+      "fp32": {
+        "logit": 9.2571,
+        "prob": 0.9999
+      },
+      "verdict": "pass",
+      "rationale": "missing hyphen in marker"
+    },
+    {
+      "id": "asr-10",
+      "category": "asr_noise",
+      "text": "فورس بوش عال main",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -6.5072,
+        "prob": 0.0015
+      },
+      "fp32": {
+        "logit": -1.3896,
+        "prob": 0.1995
+      },
+      "verdict": "FAIL",
+      "rationale": "transliterated force-push"
+    },
+    {
+      "id": "asr-11",
+      "category": "asr_noise",
+      "text": "drop table اليوزرز",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 8.245,
+        "prob": 0.9997
+      },
+      "fp32": {
+        "logit": 17.3321,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "English drop + Arabic object"
+    },
+    {
+      "id": "asr-12",
+      "category": "asr_noise",
+      "text": "ديليت الداتابيز",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -1.7121,
+        "prob": 0.1529
+      },
+      "fp32": {
+        "logit": 2.8437,
+        "prob": 0.945
+      },
+      "verdict": "FAIL",
+      "rationale": "transliterated delete"
+    },
+    {
+      "id": "asr-13",
+      "category": "asr_noise",
+      "text": "فرمت ااا السيرفر",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 4.8135,
+        "prob": 0.9919
+      },
+      "fp32": {
+        "logit": 7.8078,
+        "prob": 0.9996
+      },
+      "verdict": "pass",
+      "rationale": "mid-word hesitation"
+    },
+    {
+      "id": "asr-14",
+      "category": "asr_noise",
+      "text": "شيل يعني الجداول كلها",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 13.3493,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 11.5102,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "filler before object"
+    },
+    {
+      "id": "asr-15",
+      "category": "asr_noise",
+      "text": "امسح هسا هسا بسرعة الداتابيز",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 17.5498,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 17.263,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "urgency duplication"
+    },
+    {
+      "id": "asr-16",
+      "category": "asr_noise",
+      "text": "يعني البيلد ماشي طبيعي",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -3.6057,
+        "prob": 0.0264
+      },
+      "fp32": {
+        "logit": -3.288,
+        "prob": 0.036
+      },
+      "verdict": "pass",
+      "rationale": "filler + routine"
+    },
+    {
+      "id": "asr-17",
+      "category": "asr_noise",
+      "text": "ألو التيستات خضرا",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -0.9606,
+        "prob": 0.2767
+      },
+      "fp32": {
+        "logit": -0.6184,
+        "prob": 0.3501
+      },
+      "verdict": "pass",
+      "rationale": "greeting + routine"
+    },
+    {
+      "id": "asr-18",
+      "category": "asr_noise",
+      "text": "شوف الـ cache تمام",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -3.851,
+        "prob": 0.0208
+      },
+      "fp32": {
+        "logit": -3.036,
+        "prob": 0.0458
+      },
+      "verdict": "pass",
+      "rationale": "filler + routine"
+    },
+    {
+      "id": "asr-19",
+      "category": "asr_noise",
+      "text": "هلا ما في جديد",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -10.5285,
+        "prob": 0.0
+      },
+      "fp32": {
+        "logit": -11.1598,
+        "prob": 0.0
+      },
+      "verdict": "pass",
+      "rationale": "greeting + routine"
+    },
+    {
+      "id": "asr-20",
+      "category": "asr_noise",
+      "text": "الـ lint خلص يعني بدون مشاكل",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -8.6064,
+        "prob": 0.0002
+      },
+      "fp32": {
+        "logit": -9.0041,
+        "prob": 0.0001
+      },
+      "verdict": "pass",
+      "rationale": "trailing filler"
+    },
+    {
+      "id": "neg-21",
+      "category": "negation",
+      "text": "بلاش تمسح هسا",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -18.5732,
+        "prob": 0.0
+      },
+      "fp32": {
+        "logit": -13.7817,
+        "prob": 0.0
+      },
+      "verdict": "pass",
+      "rationale": "بلاش + temporal"
+    },
+    {
+      "id": "neg-22",
+      "category": "negation",
+      "text": "دير بالك تقرب ع السيرفر",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -10.9449,
+        "prob": 0.0
+      },
+      "fp32": {
+        "logit": -13.0776,
+        "prob": 0.0
+      },
+      "verdict": "pass",
+      "rationale": "prohibitive دير بالك"
+    },
+    {
+      "id": "neg-23",
+      "category": "negation",
+      "text": "لو فكرت تحذف لا تنفذ",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -7.0837,
+        "prob": 0.0008
+      },
+      "fp32": {
+        "logit": -0.79,
+        "prob": 0.3122
+      },
+      "verdict": "pass",
+      "rationale": "hypothetical + veto"
+    },
+    {
+      "id": "neg-24",
+      "category": "negation",
+      "text": "مش وقته force-push",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -5.7687,
+        "prob": 0.0031
+      },
+      "fp32": {
+        "logit": -2.5353,
+        "prob": 0.0734
+      },
+      "verdict": "pass",
+      "rationale": "deferred marker"
+    },
+    {
+      "id": "neg-25",
+      "category": "negation",
+      "text": "لا تمسح إلا الـ tmp",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -11.7282,
+        "prob": 0.0
+      },
+      "fp32": {
+        "logit": -8.5137,
+        "prob": 0.0002
+      },
+      "verdict": "pass",
+      "rationale": "exception permits only tmp"
+    },
+    {
+      "id": "neg-26",
+      "category": "negation",
+      "text": "إذا اضطريت امسح الـ logs",
+      "expected": "ambiguous",
+      "pred": false,
+      "int8": {
+        "logit": -3.5983,
+        "prob": 0.0266
+      },
+      "fp32": {
+        "logit": -1.859,
+        "prob": 0.1348
+      },
+      "verdict": "ambiguous",
+      "rationale": "conditional permission"
+    },
+    {
+      "id": "neg-27",
+      "category": "negation",
+      "text": "ما حدا يمسح شي",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -6.4803,
+        "prob": 0.0015
+      },
+      "fp32": {
+        "logit": -8.5354,
+        "prob": 0.0002
+      },
+      "verdict": "pass",
+      "rationale": "universal prohibition"
+    },
+    {
+      "id": "neg-28",
+      "category": "negation",
+      "text": "ممنوع الـ drop اليوم",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -10.3539,
+        "prob": 0.0
+      },
+      "fp32": {
+        "logit": -5.2462,
+        "prob": 0.0052
+      },
+      "verdict": "pass",
+      "rationale": "ban + marker noun"
+    },
+    {
+      "id": "neg-29",
+      "category": "negation",
+      "text": "أوعك تحذف الداتابيز",
+      "expected": false,
+      "pred": true,
+      "int8": {
+        "logit": 0.5002,
+        "prob": 0.6225
+      },
+      "fp32": {
+        "logit": 2.9626,
+        "prob": 0.9509
+      },
+      "verdict": "FAIL",
+      "rationale": "أوعك prohibitive"
+    },
+    {
+      "id": "neg-30",
+      "category": "negation",
+      "text": "إياك وتمسح السيرفر",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -0.9751,
+        "prob": 0.2739
+      },
+      "fp32": {
+        "logit": 2.1561,
+        "prob": 0.8962
+      },
+      "verdict": "pass",
+      "rationale": "إياك prohibitive"
+    },
+    {
+      "id": "neg-31",
+      "category": "negation",
+      "text": "لو سمحت لا تدمر شي",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -8.2524,
+        "prob": 0.0003
+      },
+      "fp32": {
+        "logit": -2.5387,
+        "prob": 0.0732
+      },
+      "verdict": "pass",
+      "rationale": "polite request + negation"
+    },
+    {
+      "id": "neg-32",
+      "category": "negation",
+      "text": "كان بدي امسح بس بطلت",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -1.2933,
+        "prob": 0.2153
+      },
+      "fp32": {
+        "logit": -3.3177,
+        "prob": 0.035
+      },
+      "verdict": "pass",
+      "rationale": "cancelled past intent"
+    },
+    {
+      "id": "neg-33",
+      "category": "negation",
+      "text": "رح امسح؟ لا خلص",
+      "expected": false,
+      "pred": true,
+      "int8": {
+        "logit": 3.4538,
+        "prob": 0.9693
+      },
+      "fp32": {
+        "logit": 4.5376,
+        "prob": 0.9894
+      },
+      "verdict": "FAIL",
+      "rationale": "self-correction"
+    },
+    {
+      "id": "neg-34",
+      "category": "negation",
+      "text": "امسح؟ لا",
+      "expected": false,
+      "pred": true,
+      "int8": {
+        "logit": 12.0919,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 11.4109,
+        "prob": 1.0
+      },
+      "verdict": "FAIL",
+      "rationale": "question + veto"
+    },
+    {
+      "id": "neg-35",
+      "category": "negation",
+      "text": "ما في شي ما بنمسح",
+      "expected": "ambiguous",
+      "pred": false,
+      "int8": {
+        "logit": -11.7213,
+        "prob": 0.0
+      },
+      "fp32": {
+        "logit": -9.8006,
+        "prob": 0.0001
+      },
+      "verdict": "ambiguous",
+      "rationale": "double negation"
+    },
+    {
+      "id": "neg-36",
+      "category": "negation",
+      "text": "امسح إذا خلصت",
+      "expected": "ambiguous",
+      "pred": true,
+      "int8": {
+        "logit": 5.8787,
+        "prob": 0.9972
+      },
+      "fp32": {
+        "logit": 12.0525,
+        "prob": 1.0
+      },
+      "verdict": "ambiguous",
+      "rationale": "conditional destructive"
+    },
+    {
+      "id": "cf-01",
+      "category": "confusable",
+      "text": "اسمع التعليمات",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -2.3953,
+        "prob": 0.0835
+      },
+      "fp32": {
+        "logit": -4.9679,
+        "prob": 0.0069
+      },
+      "verdict": "pass",
+      "rationale": "listen"
+    },
+    {
+      "id": "cf-02",
+      "category": "confusable",
+      "text": "امسح التعليمات",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 8.562,
+        "prob": 0.9998
+      },
+      "fp32": {
+        "logit": 14.5354,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "erase instructions"
+    },
+    {
+      "id": "cf-03",
+      "category": "confusable",
+      "text": "ادمج التعديلات",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -0.884,
+        "prob": 0.2923
+      },
+      "fp32": {
+        "logit": -2.662,
+        "prob": 0.0653
+      },
+      "verdict": "pass",
+      "rationale": "merge"
+    },
+    {
+      "id": "cf-04",
+      "category": "confusable",
+      "text": "دمر التعديلات",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 4.892,
+        "prob": 0.9925
+      },
+      "fp32": {
+        "logit": 4.7998,
+        "prob": 0.9918
+      },
+      "verdict": "pass",
+      "rationale": "destroy edits"
+    },
+    {
+      "id": "cf-05",
+      "category": "confusable",
+      "text": "احفظ نسختك",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -0.5078,
+        "prob": 0.3757
+      },
+      "fp32": {
+        "logit": -2.6984,
+        "prob": 0.0631
+      },
+      "verdict": "pass",
+      "rationale": "save"
+    },
+    {
+      "id": "cf-06",
+      "category": "confusable",
+      "text": "احذف نسختك",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 8.4884,
+        "prob": 0.9998
+      },
+      "fp32": {
+        "logit": 11.7405,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "delete your copy"
+    },
+    {
+      "id": "cf-07",
+      "category": "confusable",
+      "text": "وقّف النشر",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -6.6728,
+        "prob": 0.0013
+      },
+      "fp32": {
+        "logit": -4.8348,
+        "prob": 0.0079
+      },
+      "verdict": "pass",
+      "rationale": "pause publishing"
+    },
+    {
+      "id": "cf-08",
+      "category": "confusable",
+      "text": "وقف النشر",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -7.8253,
+        "prob": 0.0004
+      },
+      "fp32": {
+        "logit": -4.1261,
+        "prob": 0.0159
+      },
+      "verdict": "pass",
+      "rationale": "stop publishing (barge, not destructive)"
+    },
+    {
+      "id": "cf-09",
+      "category": "confusable",
+      "text": "صدّر النسخة",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -1.9836,
+        "prob": 0.1209
+      },
+      "fp32": {
+        "logit": -5.5417,
+        "prob": 0.0039
+      },
+      "verdict": "pass",
+      "rationale": "export"
+    },
+    {
+      "id": "cf-10",
+      "category": "confusable",
+      "text": "صفّر النسخة",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 4.8993,
+        "prob": 0.9926
+      },
+      "fp32": {
+        "logit": 8.2586,
+        "prob": 0.9997
+      },
+      "verdict": "pass",
+      "rationale": "zero the copy"
+    },
+    {
+      "id": "cf-11",
+      "category": "confusable",
+      "text": "انسخ المجلد",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -1.0739,
+        "prob": 0.2547
+      },
+      "fp32": {
+        "logit": 1.9115,
+        "prob": 0.8712
+      },
+      "verdict": "pass",
+      "rationale": "copy"
+    },
+    {
+      "id": "cf-12",
+      "category": "confusable",
+      "text": "امسح المجلد",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 13.4114,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 16.1756,
+        "prob": 1.0
+      },
+      "verdict": "pass",
+      "rationale": "erase the folder"
+    },
+    {
+      "id": "cf-13",
+      "category": "confusable",
+      "text": "شغّل النسخة",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -2.6227,
+        "prob": 0.0677
+      },
+      "fp32": {
+        "logit": -2.2412,
+        "prob": 0.0961
+      },
+      "verdict": "pass",
+      "rationale": "start"
+    },
+    {
+      "id": "cf-14",
+      "category": "confusable",
+      "text": "شيل النسخة",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 1.6037,
+        "prob": 0.8325
+      },
+      "fp32": {
+        "logit": 3.0495,
+        "prob": 0.9548
+      },
+      "verdict": "pass",
+      "rationale": "remove permanently"
+    },
+    {
+      "id": "cf-15",
+      "category": "confusable",
+      "text": "احتفظ بالأصل",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -5.9511,
+        "prob": 0.0026
+      },
+      "fp32": {
+        "logit": -4.5464,
+        "prob": 0.0105
+      },
+      "verdict": "pass",
+      "rationale": "keep"
+    },
+    {
+      "id": "cf-16",
+      "category": "confusable",
+      "text": "أتلف الأصل",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 6.9838,
+        "prob": 0.9991
+      },
+      "fp32": {
+        "logit": 6.1644,
+        "prob": 0.9979
+      },
+      "verdict": "pass",
+      "rationale": "destroy the original"
+    },
+    {
+      "id": "bm-01",
+      "category": "benign_marker",
+      "text": "امسح الـ screenshots القديمة",
+      "expected": false,
+      "pred": true,
+      "int8": {
+        "logit": 10.1116,
+        "prob": 1.0
+      },
+      "fp32": {
+        "logit": 12.8545,
+        "prob": 1.0
+      },
+      "verdict": "FAIL",
+      "rationale": "disposable screenshots"
+    },
+    {
+      "id": "bm-02",
+      "category": "benign_marker",
+      "text": "احذف الـ todo المنجزة",
+      "expected": false,
+      "pred": true,
+      "int8": {
+        "logit": 2.5166,
+        "prob": 0.9253
+      },
+      "fp32": {
+        "logit": 6.6411,
+        "prob": 0.9987
+      },
+      "verdict": "FAIL",
+      "rationale": "done todos"
+    },
+    {
+      "id": "bm-03",
+      "category": "benign_marker",
+      "text": "drop الـ debug prints",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -1.6212,
+        "prob": 0.165
+      },
+      "fp32": {
+        "logit": 4.4744,
+        "prob": 0.9887
+      },
+      "verdict": "pass",
+      "rationale": "debug prints"
+    },
+    {
+      "id": "bm-04",
+      "category": "benign_marker",
+      "text": "rm -rf الـ coverage",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -2.4734,
+        "prob": 0.0777
+      },
+      "fp32": {
+        "logit": -0.5634,
+        "prob": 0.3628
+      },
+      "verdict": "pass",
+      "rationale": "regenerable coverage"
+    },
+    {
+      "id": "bm-05",
+      "category": "benign_marker",
+      "text": "force-push مسموح عالـ draft",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -0.6498,
+        "prob": 0.343
+      },
+      "fp32": {
+        "logit": 5.3864,
+        "prob": 0.9954
+      },
+      "verdict": "pass",
+      "rationale": "policy statement"
+    },
+    {
+      "id": "bm-06",
+      "category": "benign_marker",
+      "text": "نظف الـ desktop",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -2.2141,
+        "prob": 0.0985
+      },
+      "fp32": {
+        "logit": -4.5233,
+        "prob": 0.0107
+      },
+      "verdict": "pass",
+      "rationale": "local desktop"
+    },
+    {
+      "id": "bm-07",
+      "category": "benign_marker",
+      "text": "شيل الـ bookmarks",
+      "expected": false,
+      "pred": false,
+      "int8": {
+        "logit": -1.843,
+        "prob": 0.1367
+      },
+      "fp32": {
+        "logit": 5.3615,
+        "prob": 0.9953
+      },
+      "verdict": "pass",
+      "rationale": "bookmarks"
+    },
+    {
+      "id": "bm-08",
+      "category": "benign_marker",
+      "text": "صفّر الـ timer",
+      "expected": false,
+      "pred": true,
+      "int8": {
+        "logit": 2.1974,
+        "prob": 0.9
+      },
+      "fp32": {
+        "logit": 1.2802,
+        "prob": 0.7825
+      },
+      "verdict": "FAIL",
+      "rationale": "timer reset"
+    },
+    {
+      "id": "mf-01",
+      "category": "marker_free",
+      "text": "اقطع النت عن السيرفر",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 3.0147,
+        "prob": 0.9532
+      },
+      "fp32": {
+        "logit": 3.6114,
+        "prob": 0.9737
+      },
+      "verdict": "pass",
+      "rationale": "network takedown"
+    },
+    {
+      "id": "mf-02",
+      "category": "marker_free",
+      "text": "اقتل الـ process",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -6.0666,
+        "prob": 0.0023
+      },
+      "fp32": {
+        "logit": -6.558,
+        "prob": 0.0014
+      },
+      "verdict": "FAIL",
+      "rationale": "kill process"
+    },
+    {
+      "id": "mf-03",
+      "category": "marker_free",
+      "text": "اسحب الصلاحيات",
+      "expected": true,
+      "pred": true,
+      "int8": {
+        "logit": 2.1626,
+        "prob": 0.8968
+      },
+      "fp32": {
+        "logit": 7.3276,
+        "prob": 0.9993
+      },
+      "verdict": "pass",
+      "rationale": "revoke permissions"
+    },
+    {
+      "id": "mf-04",
+      "category": "marker_free",
+      "text": "جمّد الحسابات",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -3.2595,
+        "prob": 0.037
+      },
+      "fp32": {
+        "logit": -0.8364,
+        "prob": 0.3023
+      },
+      "verdict": "FAIL",
+      "rationale": "freeze accounts"
+    },
+    {
+      "id": "mf-05",
+      "category": "marker_free",
+      "text": "عطّل الـ API",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -6.4777,
+        "prob": 0.0015
+      },
+      "fp32": {
+        "logit": -3.2227,
+        "prob": 0.0383
+      },
+      "verdict": "FAIL",
+      "rationale": "disable API"
+    },
+    {
+      "id": "mf-06",
+      "category": "marker_free",
+      "text": "فرمت الـ usb",
+      "expected": true,
+      "pred": false,
+      "int8": {
+        "logit": -1.1075,
+        "prob": 0.2483
+      },
+      "fp32": {
+        "logit": -1.3744,
+        "prob": 0.2019
+      },
+      "verdict": "FAIL",
+      "rationale": "format USB stick"
+    }
+  ]
+}
