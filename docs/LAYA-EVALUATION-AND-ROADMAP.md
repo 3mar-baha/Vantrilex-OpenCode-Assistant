@@ -89,6 +89,16 @@ why its accuracy cost must be managed rather than waived.
 
 ## 2. Identified Vulnerabilities & Edge Cases
 
+> **Resolution status (2026-09-23, P0 remediation complete):** V1, V2, V4, V5, V6,
+> V8 are **resolved** — per-marker conditional forced to 0.50, group-aware splits
+> with 0 cross-split frames, `ديبلوي` removed from destructive markers, loop-marker
+> hygiene asserted, negation FP 0.50→0.056, confusable error 0.250→0.000
+> (`ml/adversarial_report.json`, `ml/phase1_diagnosis.json`). V3 was carried as P1
+> data hygiene (head de-correlation, max |φ| 0.0103). V7 is covered by the 78-case
+> gold suite (core pass 0.872). **Open backlog:** V9 (truncation past 32 tokens),
+> V10 (no ASR realism), V11 (unmonitored false negatives) — see §5 and the
+> synthesis report `docs/LAYA-FINAL-SYNTHESIS-AND-FUTURE-ROADMAP.md`.
+
 ### V1 — The model is a lexical marker detector, not an intent classifier (critical)
 
 Training labels are injected by marker presence: every `is_destructive=true` sample is

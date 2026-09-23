@@ -180,6 +180,20 @@
   INT8 drop is a tracked number, not an assumed "≤ 1 pt". Phrase-level behaviour is
   weaker out-of-distribution than the split accuracy implies, which is acceptable for an
   advisory gate that never auto-acts.
+- **P0 remediation addendum (2026-09-23, dataset v3 + unfrozen top-2 blocks):** the
+  M7-close numbers above were measured on a leaked split against a marker-memorizing
+  model and are superseded. The remediation rebuilt the corpus (10,008 samples, 384
+  frames, group-aware splits, per-marker `P(destructive|marker)` forced to 0.50 via
+  1,248 benign marker-bearing actions + 300 negation minimal pairs + 480 confusable
+  training rows) and unfroze backbone blocks 20–21 at `2e-5` (heads at `1e-3`).
+  Held-out FP32 (n=992): `should_speak` 0.9970, `is_destructive` 0.9889, `barge_in`
+  0.9990, `stuck_in_loop` 1.0000 — all PASS. Adversarial suite (78 gold cases,
+  INT8): negation FP **0.056**, confusable error **0.000**, core pass **0.872** —
+  all PASS. Parity `5.67e-05`; INT8 p50 **24.86 ms** @32 (p99=32). INT8 deltas
+  (`ml/quant_report.json`): `should_speak` 0.9970→0.9728, `is_destructive`
+  0.9889→0.9758, `barge_in` 0.9990→0.9909, `stuck_in_loop` 1.0000→0.9960 — every
+  head still clears its gate. Benign-marker remains the weakest adversarial
+  category (0.56) and is tracked as the next iteration's target.
 - **See also:** `LAYA-EVALUATION-AND-ROADMAP.md` — full health, vulnerability, data-gap and
   evolution analysis (known failure modes V1–V11, dataset recommendations, roadmap).
 

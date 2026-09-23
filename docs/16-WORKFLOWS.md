@@ -371,6 +371,10 @@ For milestone `v1.0.0 MVP — voice loop` (`08-ROADMAP.md`):
 
 ## 16.8B — Mission workflow: Laya P0 remediation (V1, V2, V4, V5, V6, V8)
 
+> **Status (2026-09-23): VERIFIED AND COMPLETE.** All five phases exited through
+> their gates: G1 10/10, G2 6/6, G3 all sub-gates, Gate-4 (tsc 0, lint 0,
+> 44 hermetic + 3/3 live), G5 governance. Evidence in `ml/` reports + §10.7.
+
 Instantiation of §16.8A for the P0 fixes in `LAYA-EVALUATION-AND-ROADMAP.md` §2. Scope:
 the model currently behaves as a **lexical marker detector** and its headline metrics are
 inflated by a leaked split; negation is not understood and one marker is semantically wrong.

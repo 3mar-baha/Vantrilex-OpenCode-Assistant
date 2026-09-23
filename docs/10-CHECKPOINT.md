@@ -147,6 +147,9 @@ reports are tracked. Decision record: `09` ADR-008.*
 | L3 bridge | real SentencePiece-BPE tokenizer (golden-vector parity), onnxruntime-node engine, race-safe session | `428fd98`, `93f5adf`, `d622b32` | 3/3 live tests green; tokenizer byte-for-byte vs Python |
 | L3 wiring | `LayaSpeechAdvisor` implements the orchestrator `SpeechAdvisor` gate | `3482f23` | 3/3 adapter tests green |
 | L4 docs | ADR-008 + this ledger | `df3a9c1`, *m7 close* | Gate-4: tsc 0, lint 0, 44 unit tests green |
+| P0 data v3 | 384 grounded frames, contrastive rebalance (1,248 benign-marker + 300 negation pairs + 480 confusables), per-marker conditional 0.50, group-aware splits | `072c393`, `c455ca7` (+ Phase-1/2 diagnosis commits) | G1 10/10, G2 6/6, p99=32 |
+| P0 retrain | unfrozen top-2 blocks (2e-5) + heads (1e-3), shared trained-model loader | `8eea63a`, `e3dba91` | G3.1 all PASS (is_destructive 0.9889); G3.2 negation 0.056 / confusable 0.000 / core 0.872; parity 5.67e-05; p50 24.86 ms; G3.5 all INT8 PASS |
+| P0 verify | runtime unchanged; full Gate-4 re-run + live model | *this ledger entry* | tsc 0, lint 0, 44 hermetic + 3/3 live green |
 
 **Findings fixed in-flight (each was release-blocking):**
 
