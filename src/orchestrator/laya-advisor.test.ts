@@ -35,4 +35,9 @@ describe('LayaSpeechAdvisor', () => {
     const advisor = new LayaSpeechAdvisor(engine({ should_speak: 0.4 }), 0.3);
     expect(await advisor.shouldSpeak('maybe')).toBe(true);
   });
+
+  test('exposes the raw destructive score', async () => {
+    const advisor = new LayaSpeechAdvisor(engine({ is_destructive: 0.62 }));
+    expect(await advisor.destructiveScore('maybe')).toBeCloseTo(0.62, 5);
+  });
 });

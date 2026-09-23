@@ -72,4 +72,64 @@ describe('LayaEngine with stubbed session', () => {
     expect(decision.scores.barge_in).toBeCloseTo(0.5, 5);
     expect(decision.elapsedMs).toBeLessThan(40);
   });
+
+  test('self-heals: retries session creation after a transient failure', async () => {
+    const tokenizer = new LayaBpeTokenizer(SPEC);
+    let calls = 0;
+    const engine = new LayaEngine(tokenizer, 'models/laya-m7-int8.onnx', 8, async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('transient load failure');
+      return {
+        run: async () => ({
+          logit_should_speak: new Tensor('float32', [2.0], [1]),
+          logit_is_destructive: new Tensor('float32', [0.0], [1]),
+          logit_barge_in: new Tensor('float32', [0.0], [1]),
+          logit_stuck_in_loop: new Tensor('float32', [0.0], [1]),
+        }),
+      };
+    });
+    await expect(engine.decide('first')).rejects.toThrow('transient load failure');
+    const retry = await engine.decide('second');
+    expect(calls).toBe(2);
+    expect(retry.scores.should_speak).toBeGreaterThan(0.85);
+  });
+
+  test('concurrency cap sheds bursts fast instead of queueing', async () => {
+    const tokenizer = new LayaBpeTokenizer(SPEC);
+    let factoryCalls = 0;
+    const engine = new LayaEngine(tokenizer, 'models/laya-m7-int8.onnx', 8, async () => {
+      factoryCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return {
+        run: async () => ({
+          logit_should_speak: new Tensor('float32', [1.0], [1]),
+          logit_is_destructive: new Tensor('float32', [0.0], [1]),
+          logit_barge_in: new Tensor('float32', [0.0], [1]),
+          logit_stuck_in_loop: new Tensor('float32', [0.0], [1]),
+        }),
+      };
+    }, 2);
+    const timed = Array.from({ length: 5 }, (_, i) => {
+      const startedAt = Date.now();
+      return engine.decide(`burst ${i}`).then(
+        (d) => ({ ok: true as const, ms: Date.now() - startedAt, decision: d }),
+        (e: unknown) => ({ ok: false as const, ms: Date.now() - startedAt, error: e }),
+      );
+    });
+    const outcomes = await Promise.all(timed);
+    const succeeded = outcomes.filter((o) => o.ok);
+    const rejected = outcomes.filter((o) => !o.ok);
+    expect(factoryCalls).toBe(1);
+    expect(succeeded).toHaveLength(2);
+    expect(rejected).toHaveLength(3);
+    for (const r of rejected) {
+      if (r.ok) continue;
+      expect(String(r.error)).toContain('LAYA_CONCURRENCY_LIMIT');
+      // Shed load must fail fast — nowhere near the 100 ms session latency.
+      expect(r.ms).toBeLessThan(50);
+    }
+    // Engine stays usable after the burst.
+    const after = await engine.decide('after burst');
+    expect(after.scores.should_speak).toBeGreaterThan(0.5);
+  });
 });

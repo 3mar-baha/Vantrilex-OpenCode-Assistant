@@ -29,4 +29,10 @@ export class LayaSpeechAdvisor implements SpeechAdvisor {
     const decision = await this.engine.decide(text);
     return decision.scores.is_destructive >= this.destructiveThreshold;
   }
+
+  /** Raw destructive score for the orchestrator's FR-12 band policy. */
+  async destructiveScore(text: string): Promise<number> {
+    const decision = await this.engine.decide(text);
+    return decision.scores.is_destructive;
+  }
 }
