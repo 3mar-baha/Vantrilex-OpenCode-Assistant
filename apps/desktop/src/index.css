@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Voxaura design tokens — obsidian glass shell. */
+:root {
+  --voxaura-obsidian: #141413;
+  --voxaura-coal: #181715;
+  --voxaura-graphite: #2a2825;
+  --voxaura-glass: rgba(24, 23, 21, 0.75);
+  --voxaura-sky: #38bdf8;
+  --voxaura-amber: #f59e0b;
+  --voxaura-emerald: #10b981;
+  --voxaura-purple: #8b5cf6;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--voxaura-obsidian);
+  color: #e7e5e4;
+  font-family: Tajawal, 'Readex Pro', system-ui, sans-serif;
+}

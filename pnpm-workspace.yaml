@@ -2,3 +2,5 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: true
   onnxruntime-node: true
+packages:
+  - apps/*

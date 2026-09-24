@@ -19,7 +19,8 @@
     "lint": "eslint . --max-warnings 0",
     "lint:ox": "oxlint",
     "test": "vitest run",
-    "test:vantrilex": "npm run typecheck && npm run lint && npm run lint:ox && npm run test",
+    "test:desktop": "npm --prefix apps/desktop run test",
+    "test:vantrilex": "npm run typecheck && npm run lint && npm run lint:ox && npm run test && npm run test:desktop",
     "doctor": "node dist/cli.js doctor"
   },
   "dependencies": {
