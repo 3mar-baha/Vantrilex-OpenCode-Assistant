@@ -3,19 +3,21 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
   ACK_KIND,
-  decodeFrames,
   encodeTextFrame,
   ERROR_KIND,
+  FrameReassembler,
   HelloFrameSchema,
   IPC_TOKEN_ENV,
   MISSED_PINGS_LIMIT,
   Opcode,
+  parseSeq,
   PING_INTERVAL_MS,
   RESUME_BUFFER_CAP,
   SERVE_PORT,
   UiCommandSchema,
   UI_SUBPROTOCOL,
   UI_WS_PATH,
+  WsProtocolError,
   type HelloFrame,
   type UiCommand,
   type UiEvent,
@@ -33,8 +35,33 @@ export interface UiServerOptions {
 
 interface Conn {
   socket: Duplex;
-  buffer: Buffer;
+  reassembler: FrameReassembler;
   missedPongs: number;
+}
+
+/** Best-effort write: a dead peer destroys its connection instead of the daemon. */
+function safeWrite(conn: Conn, conns: Set<Conn>, data: Uint8Array): boolean {
+  if (conn.socket.destroyed) {
+    conns.delete(conn);
+    return false;
+  }
+  try {
+    conn.socket.write(data);
+    return true;
+  } catch {
+    try {
+      conn.socket.destroy();
+    } catch {
+      // best-effort
+    }
+    conns.delete(conn);
+    return false;
+  }
+}
+
+/** RFC 6455 close frame (0x88), not a text frame. */
+function encodeCloseFrame(code = 1000): Buffer {
+  return Buffer.from([0x88, 0x02, (code >> 8) & 0xff, code & 0xff]);
 }
 
 function wsAccept(key: string): string {
@@ -73,12 +100,14 @@ export class UiServer {
 
   /** Start on 127.0.0.1. `port: 0` binds an ephemeral port (tests). Resolves the bound port. */
   async start(port: number): Promise<number> {
+    if (this.server !== null) throw new Error('UiServer already started');
     this.server = createServer((_req, res) => {
       res.writeHead(404);
       res.end();
     });
     this.server.on('upgrade', (req, socket) => this.handleUpgrade(req, socket));
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      this.server!.once('error', reject);
       this.server!.listen(port, '127.0.0.1', () => resolve());
     });
     const addr = this.server.address();
@@ -96,7 +125,7 @@ export class UiServer {
     if (this.resume.length > RESUME_BUFFER_CAP) this.resume.shift();
     const wire = encodeTextFrame(JSON.stringify(frame));
     for (const conn of this.conns) {
-      if (!conn.socket.destroyed) conn.socket.write(wire);
+      safeWrite(conn, this.conns, wire);
     }
     return frame;
   }
@@ -106,13 +135,14 @@ export class UiServer {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
+    const bye = encodeCloseFrame(1000);
     for (const conn of this.conns) {
+      safeWrite(conn, this.conns, bye);
       try {
-        conn.socket.write(encodeTextFrame(''));
+        conn.socket.destroy();
       } catch {
-        // best-effort close frame; destroy below regardless
+        // best-effort
       }
-      conn.socket.destroy();
     }
     this.conns.clear();
     if (this.server !== null) {
@@ -143,23 +173,16 @@ export class UiServer {
 
   private lastSeqOf(req: IncomingMessage): number {
     const header = req.headers['last-seq'];
-    if (typeof header === 'string') {
-      const parsed = Number.parseInt(header, 10);
-      if (Number.isInteger(parsed) && parsed >= 0) return parsed;
-    }
+    const fromHeader = parseSeq(Array.isArray(header) ? header[0] : header);
+    if (Number.isInteger(fromHeader) && fromHeader >= 0) return fromHeader;
     // Browsers cannot set upgrade headers either; the renderer resumes with
     // ?lastSeq=N. Sequence numbers are not secret.
     try {
       const url = new URL(req.url ?? '', 'http://127.0.0.1');
-      const query = url.searchParams.get('lastSeq');
-      if (query !== null) {
-        const parsed = Number.parseInt(query, 10);
-        if (Number.isInteger(parsed) && parsed >= 0) return parsed;
-      }
+      return parseSeq(url.searchParams.get('lastSeq'));
     } catch {
-      // malformed URL — fall through to NaN
+      return Number.NaN;
     }
-    return Number.NaN;
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex): void {
@@ -195,7 +218,7 @@ export class UiServer {
       ].join('\r\n'),
       'utf8',
     );
-    const conn: Conn = { socket, buffer: Buffer.alloc(0), missedPongs: 0 };
+    const conn: Conn = { socket, reassembler: new FrameReassembler(), missedPongs: 0 };
     this.conns.add(conn);
     socket.on('data', (chunk: Buffer) => this.onData(conn, chunk));
     socket.on('close', () => void this.conns.delete(conn));
@@ -214,27 +237,42 @@ export class UiServer {
     const lastSeq = this.lastSeqOf(req);
     if (Number.isInteger(lastSeq) && lastSeq >= 0 && lastSeq < this.seq) {
       for (const frame of this.resume) {
-        if (frame.seq > lastSeq) socket.write(encodeTextFrame(JSON.stringify(frame)));
+        if (frame.seq > lastSeq) safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(frame)));
       }
     }
   }
 
   private onData(conn: Conn, chunk: Buffer): void {
-    conn.buffer = Buffer.concat([conn.buffer, chunk]);
-    const { frames, remaining } = decodeFrames(conn.buffer);
-    conn.buffer = Buffer.from(remaining);
+    let frames;
+    try {
+      frames = conn.reassembler.push(chunk);
+    } catch (err) {
+      // Protocol violation (absurd length, reserved opcode, bad control
+      // frame): kill the connection fail-closed instead of buffering forever.
+      if (err instanceof WsProtocolError) {
+        safeWrite(conn, this.conns, encodeCloseFrame(1009));
+      }
+      try {
+        conn.socket.destroy();
+      } catch {
+        // best-effort
+      }
+      this.conns.delete(conn);
+      return;
+    }
     for (const frame of frames) {
       if (frame.opcode === Opcode.Close) {
-        conn.socket.destroy();
+        safeWrite(conn, this.conns, encodeCloseFrame(1000));
+        try {
+          conn.socket.destroy();
+        } catch {
+          // best-effort
+        }
         this.conns.delete(conn);
         return;
       }
       if (frame.opcode === Opcode.Ping) {
-        const pong = Buffer.alloc(frame.payload.byteLength + 2);
-        pong[0] = 0x8a;
-        pong[1] = frame.payload.byteLength;
-        Buffer.from(frame.payload).copy(pong, 2);
-        conn.socket.write(pong);
+        this.pong(conn, frame.payload);
         continue;
       }
       if (frame.opcode === Opcode.Pong) {
@@ -246,17 +284,34 @@ export class UiServer {
       try {
         parsed = JSON.parse(Buffer.from(frame.payload).toString('utf8'));
       } catch {
-        conn.socket.write(encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'invalid JSON' })));
+        safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'invalid JSON' })));
         continue;
       }
       const cmd = UiCommandSchema.safeParse(parsed);
       if (!cmd.success) {
-        conn.socket.write(encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'unknown command' })));
+        safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'unknown command' })));
         continue;
       }
       this.onCommand?.(cmd.data);
-      conn.socket.write(encodeTextFrame(JSON.stringify({ type: ACK_KIND, id: cmd.data.id, ok: true })));
+      safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ACK_KIND, id: cmd.data.id, ok: true })));
     }
+  }
+
+  /** Pong with a correctly-sized header (extended lengths included). */
+  private pong(conn: Conn, payload: Uint8Array): void {
+    const body = Buffer.from(payload);
+    let header: Buffer;
+    if (body.byteLength <= 125) {
+      header = Buffer.from([0x8a, body.byteLength]);
+    } else if (body.byteLength <= 0xffff) {
+      header = Buffer.alloc(4);
+      header[0] = 0x8a;
+      header[1] = 126;
+      header.writeUInt16BE(body.byteLength, 2);
+    } else {
+      return; // absurd ping payload — ignore rather than misframe
+    }
+    safeWrite(conn, this.conns, Buffer.concat([header, body]));
   }
 
   private pingAll(): void {
@@ -267,11 +322,15 @@ export class UiServer {
       }
       conn.missedPongs += 1;
       if (conn.missedPongs > MISSED_PINGS_LIMIT) {
-        conn.socket.destroy();
+        try {
+          conn.socket.destroy();
+        } catch {
+          // best-effort
+        }
         this.conns.delete(conn);
         continue;
       }
-      conn.socket.write(Buffer.from([0x89, 0x00])); // ping, empty payload
+      safeWrite(conn, this.conns, Buffer.from([0x89, 0x00])); // ping, empty payload
     }
   }
 }

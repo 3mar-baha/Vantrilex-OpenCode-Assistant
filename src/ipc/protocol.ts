@@ -52,6 +52,7 @@ export function encodeTextFrame(text: string): Buffer {
 
 /** Test helper — build a masked client frame (browsers always mask, §5.3). */
 export function maskFrame(opcode: Opcode, payload: Buffer, mask: Buffer, fin = true): Buffer {
+  if (mask.byteLength < 4) throw new Error('mask must be at least 4 bytes');
   const len = payload.byteLength;
   const first = (fin ? 0x80 : 0x00) | opcode;
   let header: Buffer;
@@ -77,6 +78,10 @@ export function maskFrame(opcode: Opcode, payload: Buffer, mask: Buffer, fin = t
  * Incremental frame parser. Returns complete messages (continuations
  * reassembled); control frames pass through as single-frame messages.
  * Incomplete trailing bytes come back in `remaining`.
+ *
+ * NOTE: reassembly state must persist across TCP chunks — use
+ * FrameReassembler for socket input. Calling decodeFrames per chunk drops
+ * fragments split across packets.
  */
 export function decodeFrames(input: Uint8Array): { frames: WsFrame[]; remaining: Uint8Array } {
   const frames: WsFrame[] = [];
@@ -142,7 +147,121 @@ export function decodeFrames(input: Uint8Array): { frames: WsFrame[]; remaining:
   return { frames, remaining: buf.subarray(offset) };
 }
 
+/** Thrown when a peer violates the frame contract — the connection must die. */
+export class WsProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WsProtocolError';
+  }
+}
+
+function parseHeader(
+  buf: Buffer,
+  offset: number,
+): { fin: boolean; opcode: Opcode; masked: boolean; length: number; head: number } | null {
+  if (offset + 2 > buf.byteLength) return null;
+  const fin = (buf[offset]! & 0x80) !== 0;
+  const opcode = (buf[offset]! & 0x0f) as Opcode;
+  const masked = (buf[offset + 1]! & 0x80) !== 0;
+  let length = buf[offset + 1]! & 0x7f;
+  let head = offset + 2;
+  if (length === 126) {
+    if (head + 2 > buf.byteLength) return null;
+    length = buf.readUInt16BE(head);
+    head += 2;
+  } else if (length === 127) {
+    if (head + 8 > buf.byteLength) return null;
+    const hi = buf.readUInt32BE(head);
+    const lo = buf.readUInt32BE(head + 4);
+    if (hi !== 0 || lo > 0x7fffffff) {
+      throw new WsProtocolError('absurd frame length — refusing allocation');
+    }
+    length = lo;
+    head += 8;
+  }
+  return { fin, opcode, masked, length, head };
+}
+
+const CONTROL_OPCODES: ReadonlySet<number> = new Set([Opcode.Close, Opcode.Ping, Opcode.Pong]);
+const KNOWN_OPCODES: ReadonlySet<number> = new Set([
+  Opcode.Continuation,
+  Opcode.Text,
+  Opcode.Binary,
+  Opcode.Close,
+  Opcode.Ping,
+  Opcode.Pong,
+]);
+
+/**
+ * Connection-scoped reassembler — the fix for fragments split across TCP
+ * chunks. Feed every inbound chunk to push(); complete messages come out.
+ * Protocol violations throw WsProtocolError; the caller must destroy the
+ * connection (fail-closed, no unbounded buffering).
+ */
+export class FrameReassembler {
+  private buffer = Buffer.alloc(0);
+  private pendingOpcode: Opcode | null = null;
+  private readonly pendingParts: Uint8Array[] = [];
+
+  push(chunk: Uint8Array): WsFrame[] {
+    this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
+    const frames: WsFrame[] = [];
+    for (;;) {
+      const header = parseHeader(this.buffer, 0);
+      if (header === null) return frames; // need more bytes
+      if (!KNOWN_OPCODES.has(header.opcode)) {
+        throw new WsProtocolError(`reserved opcode ${header.opcode}`);
+      }
+      const isControl = CONTROL_OPCODES.has(header.opcode);
+      if (isControl && (!header.fin || header.length > 125)) {
+        throw new WsProtocolError('fragmented or oversized control frame');
+      }
+      let head = header.head;
+      if (header.masked) {
+        if (head + 4 > this.buffer.byteLength) return frames;
+        head += 4;
+      }
+      if (head + header.length > this.buffer.byteLength) return frames; // need more bytes
+      let payload = this.buffer.subarray(head, head + header.length);
+      if (header.masked) {
+        const mask = this.buffer.subarray(header.head, header.head + 4);
+        const out = Buffer.alloc(header.length);
+        for (let i = 0; i < header.length; i += 1) out[i] = payload[i]! ^ mask[i % 4]!;
+        payload = out;
+      }
+      this.buffer = this.buffer.subarray(head + header.length);
+
+      if (header.opcode === Opcode.Continuation) {
+        if (this.pendingOpcode === null) continue; // stray continuation — drop
+        this.pendingParts.push(payload);
+        if (header.fin) {
+          frames.push({ fin: true, opcode: this.pendingOpcode, payload: Buffer.concat(this.pendingParts) });
+          this.pendingOpcode = null;
+          this.pendingParts.length = 0;
+        }
+        continue;
+      }
+      if (header.opcode === Opcode.Text || header.opcode === Opcode.Binary) {
+        if (!header.fin) {
+          this.pendingOpcode = header.opcode;
+          this.pendingParts.push(payload);
+          continue;
+        }
+        frames.push({ fin: true, opcode: header.opcode, payload });
+        continue;
+      }
+      frames.push({ fin: true, opcode: header.opcode, payload });
+    }
+  }
+}
+
 // --- Versioned frames (zod boundaries) ---
+
+/** Strict non-negative integer parse for Last-Seq values (header + query). */
+export function parseSeq(raw: string | null | undefined): number {
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return Number.NaN;
+  return Number.parseInt(raw, 10);
+}
 
 export const HelloFrameSchema = z.object({
   type: z.literal('hello'),

@@ -4,13 +4,16 @@ import {
   decodeFrames,
   encodeTextFrame,
   ERROR_KIND,
+  FrameReassembler,
   HelloFrameSchema,
   IPC_TOKEN_ENV,
   maskFrame,
   Opcode,
+  parseSeq,
   UI_SUBPROTOCOL,
   UI_WS_PORT,
   UiCommandSchema,
+  WsProtocolError,
 } from './protocol.js';
 
 // G2 TDD — pure RFC 6455 codec + protocol constants. Zero sockets here.
@@ -80,6 +83,51 @@ describe('masked client frames (browsers always mask)', () => {
     const close = maskFrame(Opcode.Close, Buffer.from([0x03, 0xe8]), Buffer.from([0, 0, 0, 0]));
     expect(decodeFrames(ping).frames[0]!.opcode).toBe(Opcode.Ping);
     expect(decodeFrames(close).frames[0]!.opcode).toBe(Opcode.Close);
+  });
+});
+
+describe('parseSeq (strict Last-Seq)', () => {
+  test('digits parse; trailing garbage, empties, and nulls do not', () => {
+    expect(parseSeq('12')).toBe(12);
+    expect(parseSeq('0')).toBe(0);
+    expect(Number.isNaN(parseSeq('12abc'))).toBe(true);
+    expect(Number.isNaN(parseSeq(''))).toBe(true);
+    expect(Number.isNaN(parseSeq(null))).toBe(true);
+    expect(Number.isNaN(parseSeq(undefined))).toBe(true);
+  });
+});
+
+describe('FrameReassembler (cross-chunk fragments)', () => {
+  test('fragment split across two pushes reassembles', () => {
+    const re = new FrameReassembler();
+    const mask = Buffer.from([1, 2, 3, 4]);
+    const first = maskFrame(Opcode.Text, Buffer.from('hel', 'utf8'), mask, false);
+    const second = maskFrame(Opcode.Continuation, Buffer.from('lo', 'utf8'), mask, true);
+    // Split mid-frame: first byte alone, then the rest.
+    expect(re.push(first.subarray(0, 1))).toHaveLength(0);
+    const frames = re.push(Buffer.concat([first.subarray(1), second]));
+    expect(frames).toHaveLength(1);
+    expect(Buffer.from(frames[0]!.payload).toString('utf8')).toBe('hello');
+  });
+
+  test('reserved opcode throws WsProtocolError (fail-closed)', () => {
+    const re = new FrameReassembler();
+    expect(() => re.push(Buffer.from([0x83, 0x00]))).toThrow(WsProtocolError);
+  });
+
+  test('absurd 64-bit length throws instead of allocating', () => {
+    const re = new FrameReassembler();
+    const header = Buffer.alloc(10);
+    header[0] = 0x82;
+    header[1] = 127;
+    header.writeUInt32BE(1, 2); // hi != 0
+    header.writeUInt32BE(0, 6);
+    expect(() => re.push(header)).toThrow(WsProtocolError);
+  });
+
+  test('fragmented control frame throws', () => {
+    const re = new FrameReassembler();
+    expect(() => re.push(Buffer.from([0x09, 0x00]))).toThrow(WsProtocolError); // FIN=false ping
   });
 });
 
