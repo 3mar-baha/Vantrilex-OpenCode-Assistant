@@ -151,3 +151,27 @@ export function converged(current: Float32Array, target: Float32Array, eps: numb
   }
   return true;
 }
+
+/**
+ * Map a daemon lifecycle state to a matrix state for the Voxaura shell.
+ * Returns null when the event carries no visual change. Persona colors apply
+ * only at completion/idle (who spoke); errors and aborts snap to idle.
+ */
+export function matrixForDaemonState(
+  daemonState: string,
+  persona: 'kareem' | 'nour',
+): MatrixState | null {
+  switch (daemonState) {
+    case 'awaiting-approval':
+    case 'running':
+      return 2;
+    case 'complete':
+    case 'idle':
+      return persona === 'kareem' ? 3 : 4;
+    case 'error':
+    case 'aborted':
+      return 0;
+    default:
+      return null;
+  }
+}

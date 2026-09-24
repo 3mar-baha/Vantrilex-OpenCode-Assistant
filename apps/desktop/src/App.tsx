@@ -3,6 +3,7 @@ import { VoxauraBridge } from './bridge/ws.js';
 import { ActionBar } from './components/actionbar/ActionBar.js';
 import { Crest } from './components/brand/Crest.js';
 import { PixelMatrix } from './matrix/PixelMatrix.js';
+import { matrixForDaemonState } from './matrix/matrix-state.js';
 import { SettingsPortal } from './components/portals/SettingsPortal.js';
 import type { ClusterAction } from './components/sidebar/IconCluster.js';
 import type { MatrixState } from './matrix/matrix-state.js';
@@ -32,6 +33,10 @@ export function App(): JSX.Element {
   const [matrix, setMatrix] = useState<MatrixState>(0);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const cmdCounter = useRef(0);
+  const personaRef = useRef(persona);
+  useEffect(() => {
+    personaRef.current = persona;
+  }, [persona]);
 
   const nextCmdId = (): string => {
     cmdCounter.current += 1;
@@ -46,6 +51,10 @@ export function App(): JSX.Element {
       token,
       contractVersion: '3.1.0',
       onHello: () => setBridge('live'),
+      onEvent: (event) => {
+        const mapped = matrixForDaemonState(event.state, personaRef.current);
+        if (mapped !== null) setMatrix(mapped);
+      },
       onClose: () => setBridge((s) => (s === 'live' ? 'degraded' : s)),
       onRefusal: () => setBridge('refused'),
     });

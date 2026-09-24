@@ -5,6 +5,7 @@ import {
   createField,
   LERP_ALPHA,
   lerpToward,
+  matrixForDaemonState,
   MATRIX_SIZE,
   stateBase,
   targetFor,
@@ -79,6 +80,18 @@ describe('targetFor (pattern field)', () => {
     const a = targetFor(3, 0.0, 0.5, stubNoise, true);
     const b = targetFor(3, 99.0, 0.5, stubNoise, true);
     expect(a).toEqual(b);
+  });
+});
+
+describe('matrixForDaemonState (4B surface)', () => {
+  test('approval/running attend, completion colors by persona, errors idle', () => {
+    expect(matrixForDaemonState('awaiting-approval', 'kareem')).toBe(2);
+    expect(matrixForDaemonState('running', 'nour')).toBe(2);
+    expect(matrixForDaemonState('complete', 'kareem')).toBe(3);
+    expect(matrixForDaemonState('idle', 'nour')).toBe(4);
+    expect(matrixForDaemonState('error', 'kareem')).toBe(0);
+    expect(matrixForDaemonState('aborted', 'nour')).toBe(0);
+    expect(matrixForDaemonState('something-else', 'kareem')).toBeNull();
   });
 });
 
