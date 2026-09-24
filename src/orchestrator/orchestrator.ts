@@ -1,6 +1,7 @@
 import { nowIso } from '../common/brands.js';
 import type { SessionId } from '../common/brands.js';
 import type { ServeClient } from '../runtime/client.js';
+import { requiresConfirmation } from '../voice/brain.js';
 import { LifecycleEventType, parseSseFrame, type EventEnvelope } from './events.js';
 import { Ledger } from './ledger.js';
 import { SpeechQueue } from './queue.js';
@@ -10,7 +11,15 @@ import { SpeechQueue } from './queue.js';
 // append-before-effect ledger; tiered speech queue.
 export interface Speaker {
   speak(text: string): Promise<void>;
+  /** Hard Abort hook (G4A). Absent = fire-and-forget speaker; abort drops the queue only. */
+  abort?(): Promise<void>;
 }
+
+/** Lifecycle sink (G4B) — the Voxaura bridge subscribes to surface state. */
+export type LifecycleSignal =
+  | { readonly kind: 'enqueued'; readonly tier: 'T1' | 'T2'; readonly eventId: string }
+  | { readonly kind: 'spoken'; readonly tier: 'T1' | 'T2' }
+  | { readonly kind: 'aborted'; readonly dropped: number; readonly reason: string };
 
 /** Advisory System-1 gate (M7 Laya). Absent advisor = prior behavior, unchanged. */
 export interface SpeechAdvisor {
@@ -48,6 +57,7 @@ export class Orchestrator {
     dataDir: string,
     private readonly speaker: Speaker,
     private readonly advisor?: SpeechAdvisor,
+    private readonly onLifecycle?: (signal: LifecycleSignal) => void,
   ) {
     this.ledger = new Ledger(dataDir);
   }
@@ -59,6 +69,18 @@ export class Orchestrator {
   stop(): void {
     this.stopped = true;
     void this.activeReader?.cancel().catch(() => undefined);
+  }
+
+  /**
+   * Hard Abort (G4A): drop every queued briefing and ask the speaker to stop.
+   * Returns the dropped count. In-flight speech cannot be preempted through
+   * the Speaker interface — speakers that can stop implement `abort()`.
+   */
+  async abort(reason: string): Promise<number> {
+    const dropped = this.queue.purge();
+    await this.speaker.abort?.().catch(() => undefined);
+    this.onLifecycle?.({ kind: 'aborted', dropped, reason });
+    return dropped;
   }
 
   /** Subscribe with staggered reconnect; resolves only on stop() or fatal auth. */
@@ -148,13 +170,19 @@ export class Orchestrator {
       // ambiguity band [0.35, 0.70) and destructive scores ≥0.70 escalate to an
       // explicit T2 confirmation briefing instead of routine T1 speech. Nothing
       // here executes a system command — the briefing ASKS, then waits.
-      // Unknown scores (advisor error) stay on the routine path (fail-open).
+      // Fail-closed (G4A): a concurrency-shed scorer error means the neural
+      // gate is blind under load — escalate to T2 rather than bypass it.
+      // Generic scorer errors keep the legacy fail-open routine path, with the
+      // lexical requiresConfirmation() verbs as the backstop when no neural
+      // score exists at all.
       const scorer = asScoringAdvisor(this.advisor);
       let destructiveScore: number | null = null;
+      let gateDegraded = false;
       if (scorer !== undefined) {
         try {
           destructiveScore = await scorer.destructiveScore(text);
-        } catch {
+        } catch (err) {
+          gateDegraded = err instanceof Error && err.message.startsWith('LAYA_CONCURRENCY_LIMIT');
           destructiveScore = null;
         }
       }
@@ -169,6 +197,19 @@ export class Orchestrator {
           outcome: payload.outcome ?? 'unknown',
           text: confirmation,
         });
+        if (enqueued) this.onLifecycle?.({ kind: 'enqueued', tier: 'T2', eventId: envelope.id });
+      } else if (gateDegraded || requiresConfirmation(text)) {
+        const confirmation = gateDegraded
+          ? `Confirm before acting — safety gate degraded (overload), please confirm: ${text}`
+          : `Confirm before acting — high-stakes request, please confirm: ${text}`;
+        enqueued = this.queue.enqueue({
+          sessionId: envelope.sessionId as SessionId,
+          eventId: envelope.id,
+          tier: 'T2',
+          outcome: payload.outcome ?? 'unknown',
+          text: confirmation,
+        });
+        if (enqueued) this.onLifecycle?.({ kind: 'enqueued', tier: 'T2', eventId: envelope.id });
       } else {
         enqueued = this.queue.enqueue({
           sessionId: envelope.sessionId as SessionId,
@@ -177,6 +218,7 @@ export class Orchestrator {
           outcome: payload.outcome ?? 'unknown',
           text,
         });
+        if (enqueued) this.onLifecycle?.({ kind: 'enqueued', tier: 'T1', eventId: envelope.id });
       }
     }
     this.ledger.append({ event: envelope, receivedAt: nowIso(), briefingEnqueued: enqueued, gap });
@@ -184,8 +226,10 @@ export class Orchestrator {
       const job = this.queue.dequeue();
       if (job !== null && !('digest' in job)) {
         await this.speaker.speak(job.text).catch(() => undefined);
+        this.onLifecycle?.({ kind: 'spoken', tier: job.tier });
       } else if (job !== null) {
         await this.speaker.speak(job.digest.text).catch(() => undefined);
+        this.onLifecycle?.({ kind: 'spoken', tier: 'T1' });
       }
     }
   }

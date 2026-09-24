@@ -35,8 +35,7 @@ export class SpeechQueue {
   }
 
   /** Drain one job; collapses stale T1 tail into a digest when depth > 3. */
-  dequeue(): BriefingJob | { digest: BriefingJob } | null {
-    const next = this.pending.shift();
+  dequeue(): BriefingJob | { digest: BriefingJob } | null {    const next = this.pending.shift();
     if (next === undefined) return null;
     if (next.tier === 'T1' && this.pending.length > 3) {
       const collapsed = this.pending.splice(0, this.pending.length - 2);
@@ -55,5 +54,16 @@ export class SpeechQueue {
 
   get depth(): number {
     return this.pending.length;
+  }
+
+  /**
+   * Drop every pending job (Hard Abort path). Returns the dropped count.
+   * The event-id dedupe memory is intentionally retained: already-seen ids
+   * must never re-enqueue and double-speak after an abort.
+   */
+  purge(): number {
+    const dropped = this.pending.length;
+    this.pending.length = 0;
+    return dropped;
   }
 }

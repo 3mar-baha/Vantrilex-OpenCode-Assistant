@@ -73,4 +73,31 @@ describe('ServeClient vs mock serve', () => {
     const client = new ServeClient(baseUrl, 'test-password');
     await expect(client.getSession('ses_nope' as never)).rejects.toMatchObject({ code: 'SESSION_NOT_FOUND' });
   });
+
+  test('prompt retries reuse a stable idempotency key per (session, text)', async () => {
+    const seen: string[] = [];
+    const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'POST' && req.url === '/session/ses_k/prompt') {
+        seen.push(req.headers['idempotency-key'] as string);
+        json(res, 202, { sessionId: 'ses_k', state: 'running', receipt: 'evt_k' });
+        return;
+      }
+      json(res, 404, { error: 'not found' });
+    });
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const addr = probe.address();
+    if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
+    try {
+      const client = new ServeClient(`http://127.0.0.1:${addr.port}`, 'test-password');
+      await client.promptSession('ses_k' as never, 'same text', { origin: 'cli', actor: 'test' });
+      await client.promptSession('ses_k' as never, 'same text', { origin: 'cli', actor: 'test' });
+      await client.promptSession('ses_k' as never, 'other text', { origin: 'cli', actor: 'test' });
+      expect(seen).toHaveLength(3);
+      expect(seen[0]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(seen[1]).toBe(seen[0]); // retry reuses the key
+      expect(seen[2]).not.toBe(seen[0]); // distinct prompt, distinct key
+    } finally {
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
+  });
 });

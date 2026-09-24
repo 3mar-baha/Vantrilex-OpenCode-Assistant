@@ -42,6 +42,23 @@ export class ServeClient {
     private readonly password: string,
   ) {}
 
+  /** Stable prompt keys: retries of the same (session, text) reuse one UUID so
+   * serve-side idempotency actually dedupes. Bounded to 256 entries. */
+  private readonly promptKeys = new Map<string, string>();
+
+  private promptKey(sessionId: SessionId, text: string): string {
+    const slot = `${sessionId}\n${text}`;
+    const existing = this.promptKeys.get(slot);
+    if (existing !== undefined) return existing;
+    const fresh = randomUUID();
+    this.promptKeys.set(slot, fresh);
+    if (this.promptKeys.size > 256) {
+      const oldest = this.promptKeys.keys().next();
+      if (!oldest.done) this.promptKeys.delete(oldest.value);
+    }
+    return fresh;
+  }
+
   private async request(path: string, init: RequestInit, idempotencyKey?: string): Promise<Response> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -75,7 +92,7 @@ export class ServeClient {
     const res = await this.request(`/session/${sessionId}/prompt`, {
       method: 'POST',
       body: JSON.stringify({ text, provenance }),
-    }, randomUUID());
+    }, this.promptKey(sessionId, text));
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.prompt failed with HTTP ${res.status}`);
     const parsed = PromptResponse.parse(await res.json());
