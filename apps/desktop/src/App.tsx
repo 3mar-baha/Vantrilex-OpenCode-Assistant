@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { VoxauraBridge } from './bridge/ws.js';
 import { ActionBar } from './components/actionbar/ActionBar.js';
 import { Crest } from './components/brand/Crest.js';
 import { PixelMatrix } from './matrix/PixelMatrix.js';
 import { matrixForDaemonState } from './matrix/matrix-state.js';
 import { SettingsPortal } from './components/portals/SettingsPortal.js';
-import { SessionChip, type ChipSession } from './components/session/SessionChip.js';
+import { SessionChip } from './components/session/SessionChip.js';
+import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import type { ClusterAction } from './components/sidebar/IconCluster.js';
 import type { MatrixState } from './matrix/matrix-state.js';
 import './index.css';
@@ -34,8 +35,8 @@ export function App(): JSX.Element {
   const [matrix, setMatrix] = useState<MatrixState>(0);
   // Sessions surface from the daemon inventory (Phase 2 follow-up); until
   // then the chip renders the active id only — never fabricated entries.
-  const [sessions] = useState<readonly ChipSession[]>([]);
-  const [activeSession, setActiveSession] = useState<string | null>(null);
+  const [sessionState, dispatchSession] = useReducer(sessionsReducer, initialSessionsState);
+  const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const cmdCounter = useRef(0);
   const personaRef = useRef(persona);
@@ -60,6 +61,7 @@ export function App(): JSX.Element {
         const mapped = matrixForDaemonState(event.state, personaRef.current);
         if (mapped !== null) setMatrix(mapped);
       },
+      onInventory: (sessions) => dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) }),
       onClose: () => setBridge((s) => (s === 'live' ? 'degraded' : s)),
       onRefusal: () => setBridge('refused'),
     });
@@ -78,7 +80,7 @@ export function App(): JSX.Element {
   };
 
   const handleSelectSession = (id: string): void => {
-    setActiveSession(id);
+    dispatchSession({ kind: 'select', id });
     void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'switchSession', sessionId: id });
   };
 
@@ -103,7 +105,7 @@ export function App(): JSX.Element {
       <header data-testid="bridge-status">
         <Crest size={24} />
         <span>bridge: {bridge}</span>
-        <SessionChip sessions={sessions} activeId={activeSession} onSelect={handleSelectSession} />
+        <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
       </header>
       <main>
         <PixelMatrix state={matrix} energy={0} />
@@ -128,3 +130,4 @@ export function App(): JSX.Element {
     </div>
   );
 }
+

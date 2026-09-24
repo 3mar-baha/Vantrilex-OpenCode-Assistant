@@ -132,6 +132,43 @@ describe('VoxauraBridge handshake', () => {
     bridge.dispose();
   });
 
+  test('inventory frames update sessions; malformed frames are ignored safely', () => {
+    const seen: Array<Array<{ sessionId: string; state: string }>> = [];
+    const errors: string[] = [];
+    let socket!: FakeSocket;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onInventory: (sessions) => void seen.push(sessions),
+      onErrorFrame: (detail) => void errors.push(detail),
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    socket.peerText(JSON.stringify(hello(0)));
+    socket.peerText(
+      JSON.stringify({
+        type: 'inventory',
+        seq: 1,
+        sessions: [
+          { sessionId: 'ses_a', state: 'running' },
+          { sessionId: 'ses_b', state: 'idle' },
+        ],
+      }),
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual([
+      { sessionId: 'ses_a', state: 'running' },
+      { sessionId: 'ses_b', state: 'idle' },
+    ]);
+    socket.peerText(JSON.stringify({ type: 'inventory', seq: 2, sessions: [{ sessionId: '' }] }));
+    socket.peerText(JSON.stringify({ type: 'inventory', seq: 3 }));
+    expect(seen).toHaveLength(1); // malformed frames never reach state
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    bridge.dispose();
+  });
   test('daemon restart resets the cursor and fires onGap', () => {
     const gaps: number[] = [];
     const events: EventMsg[] = [];
@@ -260,3 +297,4 @@ describe('VoxauraBridge handshake', () => {
     expect(created).toHaveLength(1);
   });
 });
+

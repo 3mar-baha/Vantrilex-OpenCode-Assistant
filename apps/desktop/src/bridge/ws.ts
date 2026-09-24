@@ -44,6 +44,25 @@ export interface SocketLike {
   onerror: ((this: unknown, ev: unknown) => void) | null;
 }
 
+export interface InventorySession {
+  readonly sessionId: string;
+  readonly state: string;
+}
+
+/** Whole-shape guard for inventory frames (bridge boundary validation). */
+function isInventoryList(value: unknown): value is InventorySession[] {
+  if (!Array.isArray(value)) return false;
+  return value.every(
+    (entry) =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as { sessionId?: unknown }).sessionId === 'string' &&
+      (entry as { sessionId: string }).sessionId.length > 0 &&
+      typeof (entry as { state?: unknown }).state === 'string' &&
+      (entry as { state: string }).state.length > 0,
+  );
+}
+
 /** Minimal hello shape guard — a misconfigured daemon must not show green. */
 function isWellFormedHello(hello: HelloMsg): boolean {
   return (
@@ -80,6 +99,7 @@ export interface BridgeOptions {
   readonly createSocket?: (url: string, protocols: string[]) => SocketLike;
   readonly onHello?: (hello: HelloMsg) => void;
   readonly onEvent?: (event: EventMsg) => void;
+  readonly onInventory?: (sessions: InventorySession[]) => void;
   readonly onRefusal?: (info: { expected: string; got: string }) => void;
   readonly onErrorFrame?: (detail: string) => void;
   /** Fired when a hello arrives with a lower seq — the daemon restarted. */
@@ -216,6 +236,19 @@ export class VoxauraBridge {
       const event = msg as unknown as EventMsg;
       if (typeof event.seq === 'number' && event.seq > this.lastSeq) this.lastSeq = event.seq;
       this.opts.onEvent?.(event);
+      return;
+    }
+    if (msg['type'] === 'inventory') {
+      // Contract-safe: validate the whole shape; malformed frames surface an
+      // error and never touch state (socket survives).
+      const sessions = (msg as { sessions?: unknown })['sessions'];
+      if (!isInventoryList(sessions)) {
+        this.opts.onErrorFrame?.('malformed inventory frame');
+        return;
+      }
+      const seq = (msg as { seq?: unknown })['seq'];
+      if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq;
+      this.opts.onInventory?.(sessions);
       return;
     }
     if (msg['type'] === 'ack') {
