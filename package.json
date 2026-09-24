@@ -17,9 +17,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
+    "lint:ox": "oxlint",
     "test": "vitest run",
-    "bench": "vitest run bench/",
-    "stress": "vitest run test/stress/",
+    "test:vantrilex": "npm run typecheck && npm run lint && npm run lint:ox && npm run test",
     "doctor": "node dist/cli.js doctor"
   },
   "dependencies": {
@@ -34,6 +34,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
+    "oxlint": "^1.0.0",
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.70.0",
     "vitest": "^2.0.0"

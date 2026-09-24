@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react"],
+  "ignorePatterns": [
+    "node_modules/**",
+    "dist/**",
+    ".venv/**",
+    "models/**",
+    ".hf_cache/**",
+    "ml/checkpoints/**",
+    "coverage/**",
+    "apps/desktop/dist/**"
+  ]
+}
