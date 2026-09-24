@@ -3,4 +3,4 @@ export { SupervisedLauncher, probeHealth, resolvePort } from './launcher.js';
 export type { SweepResult, SweepOptions } from './siblings.js';
 export { sweepOrphans, startSweeper } from './siblings.js';
 export type { SiblingEntry, HeartbeatFile } from './siblings.js';
-export { SiblingRegistry, SIBLING_STALE_MS, siblingDir, writeHeartbeat, removeHeartbeat, readHeartbeats } from './siblings.js';
+export { SiblingRegistry, SIBLING_STALE_MS, siblingDir, writeHeartbeat, removeHeartbeat, readHeartbeats, pruneHeartbeats } from './siblings.js';

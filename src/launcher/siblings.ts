@@ -110,6 +110,31 @@ export function readHeartbeats(dir: string, nowMs: number, staleMs: number = SIB
   return out;
 }
 
+/**
+ * Crash hygiene: delete stale heartbeat files (abnormal daemon death leaves
+ * them behind). Returns the removed count. Fresh and corrupt-but-unparseable
+ * handling: corrupt files are left for their owner to overwrite — prune only
+ * removes provably-stale entries.
+ */
+export function pruneHeartbeats(dir: string, nowMs: number, staleMs: number = SIBLING_STALE_MS): number {
+  if (!existsSync(dir)) return 0;
+  let removed = 0;
+  for (const name of readdirSync(dir)) {
+    const match = /^(\d+)\.json$/.exec(name);
+    if (match?.[1] === undefined) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, name), 'utf8')) as Partial<HeartbeatFile>;
+      if (typeof parsed.updatedAtMs === 'number' && nowMs - parsed.updatedAtMs > staleMs) {
+        unlinkSync(join(dir, name));
+        removed += 1;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return removed;
+}
+
 // --- Sweeper (moved from sweeper.ts; that module now re-exports) ---
 
 export interface SweepResult {
@@ -121,6 +146,10 @@ export interface SweepResult {
 export interface SweepOptions {
   /** Sibling/protected PIDs survive regardless of ownership. */
   readonly isProtected?: (pid: number) => boolean;
+  /** Heartbeat dir: fresh heartbeats protect live PIDs (crash-safe coordination). */
+  readonly heartbeatDir?: string;
+  /** Clock override (tests). Defaults to Date.now(). */
+  readonly nowMs?: number;
   /** Injectable process enumeration (tests). Default: tasklist on win32. */
   readonly list?: () => Promise<number[]>;
   /** Injectable killer (tests). Default: taskkill /T /F on win32. */
@@ -160,9 +189,20 @@ export async function sweepOrphans(ownedPids: readonly number[], opts: SweepOpti
   const list = opts.list ?? defaultList;
   const kill = opts.kill ?? defaultKill;
   const liveServePids = await list();
+  const live = new Set(liveServePids);
+  // Heartbeat coordination: a fresh heartbeat protects a PID only while that
+  // PID is actually live (recycled-PID guard). Stale or ghost entries protect
+  // nothing.
+  const heartbeatProtected = new Set<number>();
+  if (opts.heartbeatDir !== undefined) {
+    const now = opts.nowMs ?? Date.now();
+    for (const entry of readHeartbeats(opts.heartbeatDir, now)) {
+      if (live.has(entry.pid)) heartbeatProtected.add(entry.pid);
+    }
+  }
   const reaped: number[] = [];
   for (const pid of liveServePids) {
-    if (owned.has(pid) || isProtected(pid)) continue;
+    if (owned.has(pid) || isProtected(pid) || heartbeatProtected.has(pid)) continue;
     try {
       await kill(pid);
       reaped.push(pid);
