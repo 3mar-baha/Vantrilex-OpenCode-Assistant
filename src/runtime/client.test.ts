@@ -25,7 +25,7 @@ beforeAll(async () => {
       return;
     }
     if (req.method === 'POST' && req.url === '/api/session/ses_mock1/prompt') {
-      json(res, 200, { data: { id: 'evt_r1', state: 'running' } });
+      json(res, 200, { data: { id: 'evt_r1', delivery: 'steer' } });
       return;
     }
     // Live contract (verified): sessions live at /api/session, envelope {data}.
@@ -120,7 +120,7 @@ describe('ServeClient vs mock serve', () => {
     const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (req.method === 'POST' && req.url === '/api/session/ses_k/prompt') {
         seen.push(req.headers['idempotency-key'] as string);
-        json(res, 200, { data: { id: 'evt_k', state: 'running' } });
+        json(res, 200, { data: { id: 'evt_k', delivery: 'steer' } });
         return;
       }
       json(res, 404, { error: 'not found' });
@@ -260,8 +260,9 @@ describe('ServeClient vs mock serve', () => {
         taskId: 'task-1',
       });
       expect(sent.receipt).toBe('evt_ok');
-      const body = JSON.parse(seen[seen.length - 1]!.body) as { metadata: Record<string, unknown> };
-      expect(body.metadata).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
+      const body = JSON.parse(seen[seen.length - 1]!.body) as { prompt: { text: string; metadata: Record<string, unknown> } };
+      expect(body.prompt.text).toBe('report please');
+      expect(body.prompt.metadata).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
       // Same (session, text) but different taskId → different key (no cross-task dedupe).
       const before = seen.length;
       await client.dispatchPrompt('ses_ok' as never, 'report please', {

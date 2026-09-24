@@ -5,6 +5,7 @@
 // Run: node scripts/live_console_test.ts
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { UiServer, UI_SUBPROTOCOL } from '../dist/ipc/index.js';
 import { VOICE_IDS } from '../dist/common/brands.js';
@@ -58,11 +59,16 @@ interface DiscoveredSession {
 }
 
 function spawnServe(password: string): ChildProcess {
+  // Isolated data dir: the shared DB is owned by a newer desktop build and
+  // lacks the `session_input` table this CLI expects (verified live). A fresh
+  // XDG_DATA_HOME makes serve run its own migrations.
+  const dataHome = process.env['VOX_OPENCODE_DATA'] ?? join(tmpdir(), 'voxaura-live-data');
+  mkdirSync(dataHome, { recursive: true });
   const child = spawn(
     OPENCODE_BIN,
     ['serve', '--port', String(SERVE_PORT), '--hostname', '127.0.0.1'],
     {
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
+      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password, XDG_DATA_HOME: dataHome },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     },

@@ -175,11 +175,12 @@ export class ServeClient {
     provenance: Provenance,
     key: string,
   ): Promise<{ state: string; receipt: string }> {
-    // Canonical prompt: POST /api/session/{id}/prompt { id, text, metadata, delivery }
-    // → 200 {data}. `id` doubles as the message id and the retry-stable key.
+    // Canonical prompt envelope (server schema verified live): the body is
+    // { prompt: PromptInput } where PromptInput carries text/metadata/delivery.
+    // The transport key travels in the Idempotency-Key header.
     const res = await this.request(`/api/session/${sessionId}/prompt`, {
       method: 'POST',
-      body: JSON.stringify({ id: key, text, metadata: provenance, delivery: 'steer' }),
+      body: JSON.stringify({ prompt: { text, metadata: provenance, delivery: 'steer' } }),
     }, key);
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
     if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
