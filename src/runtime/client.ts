@@ -30,6 +30,21 @@ const SessionList = z.object({
   sessions: z.array(z.object({ sessionId: z.string().min(1), state: z.string() })),
 });
 
+// Phase 3 native per-session controls — shapes mirror @opencode/client 1.18.x
+// (/api/session/{id}/agent POST, /model PATCH, /experimental/.../skill POST,
+// /shell POST). .passthrough() tolerates server-added fields; the required
+// keys below are what Voxaura consumes. Verified live against mocks; production
+// reconciliation via /openapi.json is recorded in RAG-ORCHESTRATOR-INTEGRATION.
+const AgentResponse = z.object({ agent: z.string().min(1) }).passthrough();
+const ModelResponse = z.object({ model: z.string().min(1) }).passthrough();
+const SkillResponse = z.object({ ok: z.boolean() }).passthrough();
+const ShellResponse = z
+  .object({ stdout: z.string(), stderr: z.string(), exitCode: z.number().int() })
+  .passthrough();
+
+/** Client-side cap on captured exec output — memory bound, never unbounded. */
+export const SHELL_OUTPUT_CAP = 64 * 1024;
+
 export interface Provenance {
   readonly origin: 'voice' | 'cli' | 'mobile' | 'reconciled';
   readonly transcript?: string;
@@ -139,6 +154,90 @@ export class ServeClient {
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.get failed with HTTP ${res.status}`);
     return SessionStatus.parse(await res.json());
+  }
+
+  /**
+   * Generic session mutation (Phase 3): one error-mapping funnel so every new
+   * control behaves identically — 404 fail-closed, 409 busy-retryable,
+   * 401 non-retryable, anything else retryable-transient.
+   */
+  private async mutate<T>(
+    method: string,
+    path: string,
+    body: unknown,
+    key: string | undefined,
+    schema: z.ZodType<T>,
+    what: string,
+  ): Promise<T> {
+    const res = await this.request(path, { method, body: JSON.stringify(body) }, key);
+    if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `${what}: session not found`);
+    if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `${what}: session busy — backpressure`);
+    if (res.status === 401) throw new OrchestratorError('SERVE_UNREACHABLE', false, `${what}: rejected credentials (401)`);
+    if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `${what} failed with HTTP ${res.status}`);
+    return schema.parse(await res.json()) as T;
+  }
+
+  /** POST /api/session/{id}/agent — stable key: same target+agent retries dedupe. */
+  async setSessionAgent(sessionId: SessionId, agent: string): Promise<{ agent: string } & Record<string, unknown>> {
+    return this.mutate(
+      'POST',
+      `/api/session/${sessionId}/agent`,
+      { agent },
+      this.promptKey(sessionId, `agent:${agent}`),
+      AgentResponse,
+      'session.agent',
+    );
+  }
+
+  /** PATCH /api/session/{id}/model — stable key per target+model. */
+  async setSessionModel(sessionId: SessionId, model: string): Promise<{ model: string } & Record<string, unknown>> {
+    return this.mutate(
+      'PATCH',
+      `/api/session/${sessionId}/model`,
+      { model },
+      this.promptKey(sessionId, `model:${model}`),
+      ModelResponse,
+      'session.model',
+    );
+  }
+
+  /** POST /api/experimental/session/{id}/skill — stable key per target+skill+action. */
+  async toggleSessionSkill(
+    sessionId: SessionId,
+    skill: string,
+    action: 'attach' | 'detach',
+  ): Promise<{ ok: boolean } & Record<string, unknown>> {
+    return this.mutate(
+      'POST',
+      `/api/experimental/session/${sessionId}/skill`,
+      { skill, action },
+      this.promptKey(sessionId, `skill:${skill}:${action}`),
+      SkillResponse,
+      'session.skill',
+    );
+  }
+
+  /**
+   * POST /api/session/{id}/shell — managed exec inside the session context.
+   * Fresh UUID per call (exec is NOT idempotent) + client-side 64KB capture cap.
+   */
+  async execSessionShell(
+    sessionId: SessionId,
+    command: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const parsed = await this.mutate(
+      'POST',
+      `/api/session/${sessionId}/shell`,
+      { command },
+      randomUUID(),
+      ShellResponse,
+      'session.shell',
+    );
+    return {
+      stdout: parsed.stdout.slice(0, SHELL_OUTPUT_CAP),
+      stderr: parsed.stderr.slice(0, SHELL_OUTPUT_CAP),
+      exitCode: parsed.exitCode,
+    };
   }
 
   async listSessions(): Promise<Array<{ sessionId: string; state: string }>> {

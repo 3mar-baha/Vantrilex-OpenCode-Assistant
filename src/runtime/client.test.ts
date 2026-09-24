@@ -101,6 +101,68 @@ describe('ServeClient vs mock serve', () => {
     }
   });
 
+
+  test('per-session controls hit native /api routes with stable keys; shell is fresh-keyed + capped', async () => {
+    const seen: Array<{ key: string; method: string; url: string; body: string }> = [];
+    const big = 'x'.repeat(100_000);
+    const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const record = (body: string, status: number, payload: unknown): void => {
+        seen.push({ key: req.headers['idempotency-key'] as string, method: req.method ?? '', url: req.url ?? '', body });
+        json(res, status, payload);
+      };
+      let raw = '';
+      req.on('data', (c: Buffer) => {
+        raw += c.toString('utf8');
+      });
+      req.on('end', () => {
+        if (req.url === '/api/session/ses1/agent') return record(raw, 200, { agent: 'build' });
+        if (req.url === '/api/session/ses1/model') return record(raw, 200, { model: 'opus' });
+        if (req.url === '/api/experimental/session/ses1/skill') return record(raw, 200, { ok: true });
+        if (req.url === '/api/session/ses1/shell') return record(raw, 200, { stdout: big, stderr: '', exitCode: 0 });
+        if (req.url === '/api/session/nope/agent') return record(raw, 404, { error: 'gone' });
+        if (req.url === '/api/session/busy/model') return record(raw, 409, { error: 'busy' });
+        return record(raw, 404, { error: 'not found' });
+      });
+    });
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const addr = probe.address();
+    if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
+    try {
+      const base = `http://127.0.0.1:${addr.port}`;
+      const client = new ServeClient(base, 'test-password');
+      const agent = await client.setSessionAgent('ses1' as never, 'build');
+      expect(agent).toMatchObject({ agent: 'build' });
+      const agentAgain = await client.setSessionAgent('ses1' as never, 'build');
+      expect(agentAgain).toMatchObject({ agent: 'build' });
+      const agentKeys = seen.filter((s) => s.url.endsWith('/agent')).map((s) => s.key);
+      expect(agentKeys[0]).toBe(agentKeys[1]); // stable control key
+      expect(JSON.parse(agentKeys.length > 0 ? seen[0]!.body : '{}')).toMatchObject({ agent: 'build' });
+
+      const model = await client.setSessionModel('ses1' as never, 'opus');
+      expect(model).toMatchObject({ model: 'opus' });
+
+      const skill = await client.toggleSessionSkill('ses1' as never, 'probe-skill', 'attach');
+      expect(skill).toMatchObject({ ok: true });
+
+      const shell1 = await client.execSessionShell('ses1' as never, 'git status');
+      await client.execSessionShell('ses1' as never, 'git status');
+      expect(shell1.exitCode).toBe(0);
+      expect(shell1.stdout).toHaveLength(65536); // capped, never unbounded
+      const shellKeys = seen.filter((s) => s.url.endsWith('/shell')).map((s) => s.key);
+      expect(shellKeys[0]).not.toBe(shellKeys[1]); // fresh key: exec is not idempotent
+
+      await expect(client.setSessionAgent('nope' as never, 'x')).rejects.toMatchObject({
+        code: 'SESSION_NOT_FOUND',
+        retryable: false,
+      });
+      await expect(client.setSessionModel('busy' as never, 'x')).rejects.toMatchObject({
+        code: 'SESSION_BUSY',
+        retryable: true,
+      });
+    } finally {
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
+  });
   test('dispatchPrompt carries cross-session provenance; 409 maps to retryable SESSION_BUSY', async () => {
     const seen: Array<{ key: string; body: string }> = [];
     const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -164,3 +226,4 @@ describe('ServeClient vs mock serve', () => {
     }
   });
 });
+
