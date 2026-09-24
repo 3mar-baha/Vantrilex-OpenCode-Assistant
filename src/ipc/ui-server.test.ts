@@ -191,6 +191,23 @@ describe('UiServer resume + broadcast', () => {
     sock.end();
   });
 
+  test('switchSession command validates, acks, and surfaces the session id', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText(); // hello
+    const seen = new Promise<unknown>((res) => server.onCommand = res as (c: unknown) => void);
+    sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify({ id: 'cmd-s', kind: 'switchSession', sessionId: 'ses_b' })), Buffer.from([1, 1, 1, 1])));
+    const cmd = (await seen) as { id: string; kind: string; sessionId: string };
+    expect(cmd.kind).toBe('switchSession');
+    expect(cmd.sessionId).toBe('ses_b');
+    const ack = JSON.parse(await sock.readText()) as { type: string; id: string; ok: boolean };
+    expect(ack).toMatchObject({ type: 'ack', id: 'cmd-s', ok: true });
+    sock.end();
+  });
+
   test('close() terminates cleanly: no connections, not listening', async () => {
     const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
     const port = await server.start(0);

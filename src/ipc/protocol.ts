@@ -283,9 +283,10 @@ export type UiEvent = z.infer<typeof UiEventSchema>;
 
 export const UiCommandSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(['abort', 'mute', 'deafen', 'arm', 'setPersona']),
+  kind: z.enum(['abort', 'mute', 'deafen', 'arm', 'setPersona', 'switchSession']),
   persona: z.enum(['kareem', 'nour']).optional(),
   minutes: z.number().int().positive().optional(),
+  sessionId: z.string().min(1).optional(),
 });
 export type UiCommand = z.infer<typeof UiCommandSchema>;
 

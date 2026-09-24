@@ -148,7 +148,7 @@ describe('frame schemas', () => {
   });
 
   test('renderer commands are closed-vocabulary with ids', () => {
-    for (const kind of ['abort', 'mute', 'deafen', 'arm', 'setPersona'] as const) {
+    for (const kind of ['abort', 'mute', 'deafen', 'arm', 'setPersona', 'switchSession'] as const) {
       const parsed = UiCommandSchema.safeParse({ id: 'cmd-1', kind });
       expect(parsed.success).toBe(true);
     }

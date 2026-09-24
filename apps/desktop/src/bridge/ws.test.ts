@@ -197,6 +197,25 @@ describe('VoxauraBridge handshake', () => {
     bridge.dispose();
   });
 
+  test('switchSession command carries the session id and resolves on ack', async () => {
+    let socket!: FakeSocket;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    socket.peerText(JSON.stringify(hello(0)));
+    const sent = bridge.sendCommand({ id: 'cmd-sw', kind: 'switchSession', sessionId: 'ses_b' });
+    expect(JSON.parse(socket.sent[0] as string)).toMatchObject({ kind: 'switchSession', sessionId: 'ses_b' });
+    socket.peerText(JSON.stringify({ type: 'ack', id: 'cmd-sw', ok: true }));
+    await expect(sent).resolves.toBe(true);
+    bridge.dispose();
+  });
+
   test('events advance the cursor; commands resolve on ack', async () => {
     const events: EventMsg[] = [];
     let socket!: FakeSocket;

@@ -5,6 +5,7 @@ import { Crest } from './components/brand/Crest.js';
 import { PixelMatrix } from './matrix/PixelMatrix.js';
 import { matrixForDaemonState } from './matrix/matrix-state.js';
 import { SettingsPortal } from './components/portals/SettingsPortal.js';
+import { SessionChip, type ChipSession } from './components/session/SessionChip.js';
 import type { ClusterAction } from './components/sidebar/IconCluster.js';
 import type { MatrixState } from './matrix/matrix-state.js';
 import './index.css';
@@ -31,6 +32,10 @@ export function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState('identity');
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
   const [matrix, setMatrix] = useState<MatrixState>(0);
+  // Sessions surface from the daemon inventory (Phase 2 follow-up); until
+  // then the chip renders the active id only — never fabricated entries.
+  const [sessions] = useState<readonly ChipSession[]>([]);
+  const [activeSession, setActiveSession] = useState<string | null>(null);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const cmdCounter = useRef(0);
   const personaRef = useRef(persona);
@@ -72,6 +77,11 @@ export function App(): JSX.Element {
     void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setPersona', persona: id });
   };
 
+  const handleSelectSession = (id: string): void => {
+    setActiveSession(id);
+    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'switchSession', sessionId: id });
+  };
+
   const handleAction = (action: ClusterAction, minutes?: number): void => {
     if (action === 'settings') {
       setSettingsOpen(true);
@@ -93,6 +103,7 @@ export function App(): JSX.Element {
       <header data-testid="bridge-status">
         <Crest size={24} />
         <span>bridge: {bridge}</span>
+        <SessionChip sessions={sessions} activeId={activeSession} onSelect={handleSelectSession} />
       </header>
       <main>
         <PixelMatrix state={matrix} energy={0} />
