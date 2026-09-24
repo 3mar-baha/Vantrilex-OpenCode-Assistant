@@ -164,6 +164,7 @@ reports are tracked. Decision record: `09` ADR-008.*
 | **Phase 3 controls+shell+sweeper** | Native agent/model/skill/shell client methods; bridge vocabulary + badge; crash-safe sweeper; controls E2E | 1068e98, eb637cf, 5ba70c7, fb13aa2 | Aggregate exit 0 (root 140 + desktop 52); E2E 7/7; live serve probed (global pre-routing auth, paths unverified live — reconciliation follow-up); daemon onCommand execution follow-up |
 | **Live console harness** | `scripts/live_console_test.ts` — real vault → live serve → WS-4097 → Fish TTS → VAD/STT, zero-secret transcript | *this ledger entry* | serve ready 1730 ms; 26 sessions / 17 agents live; WS hello 19 ms; switchSession acked; Fish 140,851 B, MP3 header PASS, first-chunk TTFB **544 ms < 800**, duration 8.80 s; VAD silence 0.044; Whisper real call OK |
 | **Control-plane migration** | HTTP Basic auth everywhere; `listSessions`/`getSession` → `/api/session` `{data}` normalized to `SessionInfo`; `probeHealth` → authenticated `/api/session`; SSE `/event` → `/api/event` | 97a4764 | Aggregate exit 0 (root 142 + desktop 52); E2E 7/7; live harness re-run green (serve ready 1967 ms, 26 sessions, FS TTFB 654 ms) |
+| **SDK contract alignment** | 204 No Content handling for controls; model switch POST + `ModelRef`; `createSession`/`promptSession` → `/api/session` canonical envelopes | 33faa35 | Aggregate exit 0 (root 142 + desktop 52); E2E 7/7; **live**: `listSessions`/`createSession`/`getSession` verified 200 against serve 1.18.32; `prompt` 400 and `agent`/`model` 500 are server-side on this build (recorded) |
 
 **Live harness findings (OpenCode serve 1.18.32, verified 2026-09-24):**
 
@@ -180,9 +181,15 @@ reports are tracked. Decision record: `09` ADR-008.*
    build — contract probing must target the real API family.
    **Resolved in `97a4764`:** `ServeClient`, `probeHealth`, `probeContract`, and the
    orchestrator SSE reader now use Basic; sessions read `/api/session`; SSE reads
-   `/api/event`. Remaining (recorded, not done): `createSession`/`promptSession`
-   still use the legacy `/session` shim, and the Phase-3 controls assume JSON
-   bodies where the SDK declares 204-empty (model verb is POST, not PATCH).
+   `/api/event`. **SDK alignment in `33faa35`:** controls handle 204, model switch
+   is POST with `ModelRef`, create/prompt migrated to `/api/session`.
+   **Live re-verification (serve 1.18.32):** `listSessions` (37 sessions), `createSession`
+   (200), and `getSession` (200) work; `prompt` returns **400** for every body
+   variant tried (`{text}`, `+delivery`, `+metadata`, `+files/agents/skills`, msg-id),
+   `switchAgent` returns **500**, and `switchModel` with `ModelRef` returned **204 once
+   then 500** — server-side behavior on this build, not a client shape error. The
+   harness reports each step independently and non-fatally.
+
 
 
 **GATE 1 (`/arm`) materialization detail (2026-09-24):**
