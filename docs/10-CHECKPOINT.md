@@ -163,6 +163,7 @@ reports are tracked. Decision record: `09` ADR-008.*
 | **Phase 2b inventory+E2E** | InventoryFrame stream + publish/resume + composer; bridge validation + sessions store; inventory E2E vs real server | 8a99aa4, af866c0, fa58abc | Aggregate exit 0 (root 135 + desktop 50); E2E 6/6; 15 new tests |
 | **Phase 3 controls+shell+sweeper** | Native agent/model/skill/shell client methods; bridge vocabulary + badge; crash-safe sweeper; controls E2E | 1068e98, eb637cf, 5ba70c7, fb13aa2 | Aggregate exit 0 (root 140 + desktop 52); E2E 7/7; live serve probed (global pre-routing auth, paths unverified live — reconciliation follow-up); daemon onCommand execution follow-up |
 | **Live console harness** | `scripts/live_console_test.ts` — real vault → live serve → WS-4097 → Fish TTS → VAD/STT, zero-secret transcript | *this ledger entry* | serve ready 1730 ms; 26 sessions / 17 agents live; WS hello 19 ms; switchSession acked; Fish 140,851 B, MP3 header PASS, first-chunk TTFB **544 ms < 800**, duration 8.80 s; VAD silence 0.044; Whisper real call OK |
+| **Control-plane migration** | HTTP Basic auth everywhere; `listSessions`/`getSession` → `/api/session` `{data}` normalized to `SessionInfo`; `probeHealth` → authenticated `/api/session`; SSE `/event` → `/api/event` | 97a4764 | Aggregate exit 0 (root 142 + desktop 52); E2E 7/7; live harness re-run green (serve ready 1967 ms, 26 sessions, FS TTFB 654 ms) |
 
 **Live harness findings (OpenCode serve 1.18.32, verified 2026-09-24):**
 
@@ -177,8 +178,12 @@ reports are tracked. Decision record: `09` ADR-008.*
    `{sessions:[{sessionId,state}]}` — wrong path AND wrong shape.
 3. `/openapi.json`, `/health`, `/api/info` return the SPA HTML, not JSON, in this
    build — contract probing must target the real API family.
-   Follow-up (not done here, per halt-before-runtime-change): migrate `ServeClient`
-   to Basic auth + `/api/session` mapping, or negotiate dual-scheme.
+   **Resolved in `97a4764`:** `ServeClient`, `probeHealth`, `probeContract`, and the
+   orchestrator SSE reader now use Basic; sessions read `/api/session`; SSE reads
+   `/api/event`. Remaining (recorded, not done): `createSession`/`promptSession`
+   still use the legacy `/session` shim, and the Phase-3 controls assume JSON
+   bodies where the SDK declares 204-empty (model verb is POST, not PATCH).
+
 
 **GATE 1 (`/arm`) materialization detail (2026-09-24):**
 
