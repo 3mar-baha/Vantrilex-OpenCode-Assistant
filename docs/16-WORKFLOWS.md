@@ -634,6 +634,25 @@ The registry's plugin descriptors resolve to `anthropics/claude-plugins-official
 fabricated. OpenCode v2 lifecycle extension is deferred to a tested
 `@opencode-ai/plugin` implementation.
 
+## 16.11 — Remaining-Gates Master Plan (GATE 2 → Completion)
+
+The definitive plan for GATE 2 through release is frozen in **`docs/PLAN.md`**.
+It supersedes ad-hoc gate lists. Summary:
+
+| Gate | Title | Exit artifact |
+|---|---|---|
+| G2 | Desktop Shell Scaffold, Floating Dialog Portals & UI Defect Remediation | Tauri+React shell, WS-4097 bridge, portals, view-model remediation, oxlint + `test:vantrilex` |
+| G3 | Crest & Sidebar Icon Cluster | Crest, Lucide icon cluster, 48×48 matrix worker, earcons |
+| G4 | Ambient Agent & Watcher Loop | Abort/purge, fail-closed Laya + VAD, idempotency, telemetry bus, persona RAG, watcher surfaced |
+| G5 | Production Build & E2E Validation | Tauri bundles, Playwright E2E, 3 GB budget proof, release tag |
+
+**State reconciliation (verified, HEAD `52ba876`):** no Tauri/React/Vite/Tailwind/
+`.tsx`/`index.html` exists; `src/ui/` is headless view-models only; `oxlint` and
+`test:vantrilex` do not exist; `bench`/`stress` scripts are stale stubs pointing
+at absent dirs. GATE 2 therefore *scaffolds* the shell rather than remediating a
+non-existent UI. Auto-transition rules and the O1–O6 open decisions that must be
+answered before G2 executes are in `docs/PLAN.md` §4–§5.
+
 ---
 
 *End of `16-WORKFLOWS.md`. Next canonical file: `17-CATALOG-INGESTION.md` (Batch 3).*
