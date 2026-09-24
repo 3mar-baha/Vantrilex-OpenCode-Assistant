@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import {
   ACK_KIND,
+  buildInventoryFrame,
   decodeFrames,
   encodeTextFrame,
   ERROR_KIND,
   FrameReassembler,
   HelloFrameSchema,
+  InventoryFrameSchema,
   IPC_TOKEN_ENV,
   maskFrame,
   Opcode,
@@ -128,6 +130,27 @@ describe('FrameReassembler (cross-chunk fragments)', () => {
   test('fragmented control frame throws', () => {
     const re = new FrameReassembler();
     expect(() => re.push(Buffer.from([0x09, 0x00]))).toThrow(WsProtocolError); // FIN=false ping
+  });
+});
+
+describe('inventory frames (Phase 2b)', () => {
+  test('serializer output validates; empty array is the error/unready shape', () => {
+    const frame = buildInventoryFrame(7, [
+      { sessionId: 'ses_a', state: 'running' },
+      { sessionId: 'ses_b', state: 'idle' },
+    ]);
+    expect(InventoryFrameSchema.safeParse(frame).success).toBe(true);
+    expect(frame).toMatchObject({ type: 'inventory', seq: 7 });
+    const empty = buildInventoryFrame(8, []);
+    expect(InventoryFrameSchema.safeParse(empty).success).toBe(true);
+    expect(empty.sessions).toEqual([]);
+  });
+
+  test('malformed sessions throw at the producer, never on the wire', () => {
+    expect(() => buildInventoryFrame(0, [{ sessionId: '', state: 'x' }])).toThrow();
+    expect(() => buildInventoryFrame(-1, [])).toThrow();
+    expect(InventoryFrameSchema.safeParse({ type: 'inventory', seq: 0, sessions: [{ sessionId: 'a' }] }).success).toBe(false);
+    expect(InventoryFrameSchema.safeParse({ type: 'event', seq: 0, sessions: [] }).success).toBe(false);
   });
 });
 

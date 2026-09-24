@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
   ACK_KIND,
+  buildInventoryFrame,
   encodeTextFrame,
   ERROR_KIND,
   FrameReassembler,
@@ -19,6 +20,7 @@ import {
   UI_WS_PATH,
   WsProtocolError,
   type HelloFrame,
+  type InventoryFrame,
   type UiCommand,
   type UiEvent,
 } from './protocol.js';
@@ -79,6 +81,7 @@ export class UiServer {
   private readonly conns = new Set<Conn>();
   private seq = 0;
   private readonly resume: UiEvent[] = [];
+  private lastInventory: InventoryFrame | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
 
   constructor(options: UiServerOptions) {
@@ -123,6 +126,21 @@ export class UiServer {
     const frame: UiEvent = { type: 'event', seq: this.seq, eventId: input.eventId, state: input.state };
     this.resume.push(frame);
     if (this.resume.length > RESUME_BUFFER_CAP) this.resume.shift();
+    const wire = encodeTextFrame(JSON.stringify(frame));
+    for (const conn of this.conns) {
+      safeWrite(conn, this.conns, wire);
+    }
+    return frame;
+  }
+
+  /**
+   * Publish a level-triggered inventory snapshot (Phase 2b). Shares the seq
+   * space with events; only the latest snapshot is retained for resume.
+   */
+  publishInventory(sessions: ReadonlyArray<{ sessionId: string; state: string }>): InventoryFrame {
+    this.seq += 1;
+    const frame = buildInventoryFrame(this.seq, sessions);
+    this.lastInventory = frame;
     const wire = encodeTextFrame(JSON.stringify(frame));
     for (const conn of this.conns) {
       safeWrite(conn, this.conns, wire);
@@ -238,6 +256,10 @@ export class UiServer {
     if (Number.isInteger(lastSeq) && lastSeq >= 0 && lastSeq < this.seq) {
       for (const frame of this.resume) {
         if (frame.seq > lastSeq) safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(frame)));
+      }
+      // Level-triggered inventory: only the latest snapshot replays.
+      if (this.lastInventory !== null && this.lastInventory.seq > lastSeq) {
+        safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(this.lastInventory)));
       }
     }
   }

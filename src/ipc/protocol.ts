@@ -296,3 +296,26 @@ export const AckFrameSchema = z.object({
   ok: z.boolean(),
   detail: z.string().optional(),
 });
+
+// --- Inventory stream (Phase 2b): level-triggered session snapshot.
+// Shares the server seq space with UiEvent so Last-Seq resume stays ordered.
+// sessions:[] is the error/unready shape — clients render active-only.
+export const InventorySessionSchema = z.object({
+  sessionId: z.string().min(1),
+  state: z.string().min(1),
+});
+
+export const InventoryFrameSchema = z.object({
+  type: z.literal('inventory'),
+  seq: z.number().int().nonnegative(),
+  sessions: z.array(InventorySessionSchema),
+});
+export type InventoryFrame = z.infer<typeof InventoryFrameSchema>;
+
+/** Producer-side constructor — throws on malformed input (fail-fast, never on the wire). */
+export function buildInventoryFrame(
+  seq: number,
+  sessions: ReadonlyArray<{ sessionId: string; state: string }>,
+): InventoryFrame {
+  return InventoryFrameSchema.parse({ type: 'inventory', seq, sessions: [...sessions] });
+}

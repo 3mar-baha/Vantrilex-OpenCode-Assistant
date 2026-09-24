@@ -208,6 +208,38 @@ describe('UiServer resume + broadcast', () => {
     sock.end();
   });
 
+  test('publishInventory broadcasts a typed snapshot with the next seq', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText(); // hello
+    const frame = server.publishInventory([{ sessionId: 'a', state: 'running' }]);
+    expect(frame.seq).toBe(1);
+    const received = JSON.parse(await sock.readText());
+    expect(received).toMatchObject({ type: 'inventory', seq: 1, sessions: [{ sessionId: 'a', state: 'running' }] });
+    sock.end();
+  });
+
+  test('resume replays the latest inventory snapshot when newer than lastSeq', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    server.broadcast({ type: 'event', eventId: 'e-1', state: 'running' });
+    server.publishInventory([{ sessionId: 'a', state: 'running' }]);
+    server.publishInventory([
+      { sessionId: 'a', state: 'complete' },
+      { sessionId: 'b', state: 'idle' },
+    ]);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t', ['Last-Seq: 1']));
+    await sock.readText(); // hello
+    const replayed = JSON.parse(await sock.readText()) as { type: string; sessions: Array<{ sessionId: string }> };
+    expect(replayed.type).toBe('inventory');
+    expect(replayed.sessions.map((x) => x.sessionId).sort()).toEqual(['a', 'b']);
+    sock.end();
+  });
   test('close() terminates cleanly: no connections, not listening', async () => {
     const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
     const port = await server.start(0);
@@ -221,3 +253,4 @@ describe('UiServer resume + broadcast', () => {
     expect(server.listening).toBe(false);
   });
 });
+
