@@ -43,6 +43,7 @@ export function App(): JSX.Element {
     agent: null,
     model: null,
   });
+  const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const cmdCounter = useRef(0);
@@ -69,6 +70,7 @@ export function App(): JSX.Element {
         if (mapped !== null) setMatrix(mapped);
       },
       onInventory: (sessions) => dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) }),
+      onAgents: (list) => setAgents(list.map((a) => ({ id: a.id, name: a.name }))),
       onClose: () => setBridge((s) => (s === 'live' ? 'degraded' : s)),
       onRefusal: () => setBridge('refused'),
     });
@@ -94,6 +96,13 @@ export function App(): JSX.Element {
   const promptTarget = (label: string): string | null => {
     const value = window.prompt(label)?.trim();
     return value !== undefined && value.length > 0 ? value : null;
+  };
+
+  const handleSelectAgent = (agentId: string): void => {
+    const active = sessionState.activeId;
+    setAgentModel((s) => ({ ...s, agent: agentId }));
+    if (active === null) return;
+    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: agentId });
   };
 
   const handleSwitchAgent = (): void => {
@@ -139,7 +148,9 @@ export function App(): JSX.Element {
         <AgentModelBadge
           agent={agentModel.agent}
           model={agentModel.model}
+          agents={agents}
           onSwitchAgent={handleSwitchAgent}
+          onSelectAgent={handleSelectAgent}
           onSwitchModel={handleSwitchModel}
         />
       </header>

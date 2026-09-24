@@ -169,6 +169,30 @@ describe('VoxauraBridge handshake', () => {
     expect(errors.length).toBeGreaterThanOrEqual(1);
     bridge.dispose();
   });
+  test('agents frames update the live selector; malformed frames ignored', () => {
+    const seen: Array<Array<{ id: string; name: string }>> = [];
+    const errors: string[] = [];
+    let socket!: FakeSocket;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onAgents: (a) => void seen.push(a),
+      onErrorFrame: (d) => void errors.push(d),
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    socket.peerText(JSON.stringify(hello(0)));
+    socket.peerText(JSON.stringify({ type: 'agents', seq: 1, agents: [{ id: 'build', name: 'Build' }] }));
+    expect(seen).toEqual([[{ id: 'build', name: 'Build' }]]);
+    socket.peerText(JSON.stringify({ type: 'agents', seq: 2, agents: [{ id: 'x' }] }));
+    expect(seen).toHaveLength(1);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    bridge.dispose();
+  });
+
   test('daemon restart resets the cursor and fires onGap', () => {
     const gaps: number[] = [];
     const events: EventMsg[] = [];

@@ -335,3 +335,21 @@ export function buildInventoryFrame(
 ): InventoryFrame {
   return InventoryFrameSchema.parse({ type: 'inventory', seq, sessions: [...sessions] });
 }
+
+// --- Agents stream (final polish): level-triggered discovered-agent snapshot.
+export const AgentEntrySchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+});
+
+export const AgentFrameSchema = z.object({
+  type: z.literal('agents'),
+  seq: z.number().int().nonnegative(),
+  agents: z.array(AgentEntrySchema),
+});
+export type AgentFrame = z.infer<typeof AgentFrameSchema>;
+export type AgentEntry = z.infer<typeof AgentEntrySchema>;
+
+export function buildAgentFrame(seq: number, agents: ReadonlyArray<{ id: string; name: string }>): AgentFrame {
+  return AgentFrameSchema.parse({ type: 'agents', seq, agents: [...agents] });
+}

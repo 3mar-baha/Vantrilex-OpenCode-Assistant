@@ -64,6 +64,25 @@ export interface InventorySession {
   readonly state: string;
 }
 
+export interface AgentEntry {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** Whole-shape guard for agent frames (bridge boundary validation). */
+function isAgentList(value: unknown): value is AgentEntry[] {
+  if (!Array.isArray(value)) return false;
+  return value.every(
+    (entry) =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as { id?: unknown }).id === 'string' &&
+      (entry as { id: string }).id.length > 0 &&
+      typeof (entry as { name?: unknown }).name === 'string' &&
+      (entry as { name: string }).name.length > 0,
+  );
+}
+
 /** Whole-shape guard for inventory frames (bridge boundary validation). */
 function isInventoryList(value: unknown): value is InventorySession[] {
   if (!Array.isArray(value)) return false;
@@ -115,6 +134,7 @@ export interface BridgeOptions {
   readonly onHello?: (hello: HelloMsg) => void;
   readonly onEvent?: (event: EventMsg) => void;
   readonly onInventory?: (sessions: InventorySession[]) => void;
+  readonly onAgents?: (agents: AgentEntry[]) => void;
   readonly onRefusal?: (info: { expected: string; got: string }) => void;
   readonly onErrorFrame?: (detail: string) => void;
   /** Fired when a hello arrives with a lower seq — the daemon restarted. */
@@ -264,6 +284,17 @@ export class VoxauraBridge {
       const seq = (msg as { seq?: unknown })['seq'];
       if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq;
       this.opts.onInventory?.(sessions);
+      return;
+    }
+    if (msg['type'] === 'agents') {
+      const agents = (msg as { agents?: unknown })['agents'];
+      if (!isAgentList(agents)) {
+        this.opts.onErrorFrame?.('malformed agents frame');
+        return;
+      }
+      const seq = (msg as { seq?: unknown })['seq'];
+      if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq;
+      this.opts.onAgents?.(agents);
       return;
     }
     if (msg['type'] === 'ack') {

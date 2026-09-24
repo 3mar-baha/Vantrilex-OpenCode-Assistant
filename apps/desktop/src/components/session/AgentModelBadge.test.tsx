@@ -55,4 +55,28 @@ describe('AgentModelBadge', () => {
     );
     expect(document.body.querySelector('[data-testid="badge-agent"]')?.textContent).toContain('unassigned');
   });
+
+  test('discovered agents render a live selector that emits the chosen id', () => {
+    const onSelectAgent = vi.fn();
+    mount(
+      <AgentModelBadge
+        agent="build"
+        model={null}
+        agents={[
+          { id: 'build', name: 'Build' },
+          { id: 'architect', name: 'Architect' },
+        ]}
+        onSelectAgent={onSelectAgent}
+        onSwitchAgent={() => undefined}
+        onSwitchModel={() => undefined}
+      />,
+    );
+    const select = document.body.querySelector('[data-testid="agent-select"]') as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    expect(select.value).toBe('build');
+    expect(select.querySelectorAll('option')).toHaveLength(3); // placeholder + 2
+    select.value = 'architect';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onSelectAgent).toHaveBeenCalledWith('architect');
+  });
 });

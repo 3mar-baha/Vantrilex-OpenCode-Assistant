@@ -46,7 +46,19 @@ const control = http.createServer((req, res) => {
       send(200, server.publishInventory(sessions));
     });
     return;
-  }  if (req.method === 'POST' && req.url === '/kill') {
+  }  if (req.method === 'POST' && req.url === '/agents') {
+    let raw = '';
+    req.on('data', (c) => {
+      raw += c;
+    });
+    req.on('end', () => {
+      const { agents } = JSON.parse(raw);
+      send(200, server.publishAgents(agents));
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/kill') {
     void server.close().then(() => send(200, { killed: true }));
     return;
   }
