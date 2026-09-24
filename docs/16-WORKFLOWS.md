@@ -373,7 +373,11 @@ For milestone `v1.0.0 MVP — voice loop` (`08-ROADMAP.md`):
 
 > **Status (2026-09-23): VERIFIED AND COMPLETE.** All five phases exited through
 > their gates: G1 10/10, G2 6/6, G3 all sub-gates, Gate-4 (tsc 0, lint 0,
-> 44 hermetic + 3/3 live), G5 governance. Evidence in `ml/` reports + §10.7.
+> 54 hermetic + 3/3 live), G5 governance. Evidence in `ml/` reports + §10.7.
+> Forensic audit 2026-09-24 (code-first, zero trust in docs): reconciled stale
+> references across the suite (test counts, DPAPI overclaim, mutex history, showcase/
+> earcon/relay/wake-word/barge-in future-vs-present framing, CLI surface) and
+> published `dossier/PROJECT_MASTER_DOSSIER.md`.
 
 Instantiation of §16.8A for the P0 fixes in `LAYA-EVALUATION-AND-ROADMAP.md` §2. Scope:
 the model currently behaves as a **lexical marker detector** and its headline metrics are

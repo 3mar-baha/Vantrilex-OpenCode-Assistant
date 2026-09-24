@@ -171,7 +171,7 @@
   1.0000, `is_destructive` 0.9673, `barge_in` 0.9865, `stuck_in_loop` 1.0000 — all PASS;
   (b) parity `3.24e-05`; (c) INT8 p50 **25.84 ms** at the 32-token operating length
   (66.4 ms at 128) — the corpus p99 is 32 tokens and masked mean pooling makes logits
-  invariant to pad length, so 32 is latency-optimal without loss; (d) 41 unit tests + 3
+  invariant to pad length, so 32 is latency-optimal without loss; (d) 54 unit tests + 3
   live integration tests green.
 - **Known cost (accepted):** dynamic INT8 quantization trades accuracy for the latency
   budget — the drop vs FP32 is up to ~7 points (`should_speak` 1.0000→0.9308,

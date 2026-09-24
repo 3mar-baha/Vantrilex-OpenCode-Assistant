@@ -88,8 +88,10 @@ warning (`pool-size-1` — operator urged to add keys). Empty pool: `acquire` th
 
 ## 20.5 — DPAPI Persistence (normative)
 
-Pool secrets persist as `VaultBlob` (`05` §5.5): `nonce` + `ciphertext` (DPAPI
-`safeStorage.encrypt`) + `checksum`, file `0600`/ACL'd. Persisted on: every rollover,
+Pool secrets persist as `VaultBlob` (`05` §5.5): `nonce` + `ciphertext` (AES-256-GCM
+under the machine-scoped key file — verified in `src/voice/vault.ts`; the DPAPI
+`safeStorage` path named in earlier revisions was never implemented and must not
+be cited as present) + `checksum`, file `0600`/ACL'd. Persisted on: every rollover,
 every `vault set`, graceful shutdown. Loaded on boot with checksum-then-decrypt;
 corrupt → `VAULT_CORRUPT`, pool refused (E-11), other pool unaffected. Persisted state carries the sequence counter so restart resumes mid-cycle instead of
 resetting quotas (which would double-spend the fresh window).

@@ -118,7 +118,7 @@ explicit two-way voice/text confirmation before execution — no exceptions for 
 windows or autonomy level. Ambiguous destructive speech is never acted upon: the agent
 asks, then waits.
 
-**Barge-in (normative):** a hotkey trigger or verbal stop cuts spoken audio instantly
+**Barge-in (normative, unimplemented — audit 2026-09-24):** a hotkey trigger or verbal stop cuts spoken audio instantly
 (< 50 ms, no fade-out tail). The active session immediately pauses to idle, awaiting the
 user's redirect directive.
 

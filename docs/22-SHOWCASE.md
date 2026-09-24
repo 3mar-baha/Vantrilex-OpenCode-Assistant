@@ -8,7 +8,11 @@
 `opencode-voice showcase` generates a self-contained `docs/showcase.html` (no build
 step, no CDN — inline CSS/SVG only so it renders offline and from `file://`) that
 presents project health to operators and stakeholders: milestone progress, latency
-posture, cache efficiency, and suite completion. Regeneration is deterministic from
+posture, cache efficiency, and suite completion. **Implementation status (audit
+2026-09-24): the `showcase` CLI command does not exist** (`src/cli.ts` exposes only
+`doctor`, `vault bootstrap`, `live`) and no generator exists in `src/` — this
+section is the frozen spec that the future implementation must satisfy, not a
+description of running code. Regeneration is deterministic from
 repo state — the same commit always yields the same showcase modulo timestamps.
 
 ## 22.2 — Generation Spec (normative)

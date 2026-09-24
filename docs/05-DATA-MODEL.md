@@ -192,7 +192,7 @@ export type KeyPool = 'groq' | 'fish';
 
 export interface EncryptedPool {
   readonly nonce: string;                // base64, unique per encryption
-  readonly ciphertext: string;           // base64 — DPAPI(safeStorage).encrypt(JSON(PoolSecrets))
+  readonly ciphertext: string;           // base64 — AES-256-GCM(JSON(PoolSecrets)) under machine.key (DPAPI safeStorage: aspirational, not implemented)
   readonly checksum: string;             // sha256(ciphertext), integrity pre-check
 }
 

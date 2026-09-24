@@ -1,6 +1,9 @@
 # 19 — Mobile Pairing: Relay Architecture, Token Handshake, Push Alerts & Approval Queue
 
 > **Canonical status:** Voice/distribution batch. Remote truth for persona P2 (`01` §1.2).
+> **Implementation status (audit 2026-09-24): no relay, tunnel, push, or approval-queue
+> code exists in `src/`** (no mobile directory, no outbound tunnel) — §§19.1–19.4 below
+> are the frozen M4 design target, not running behavior.
 > Network posture: outbound-only (`03` §3.5.2, `12` §12.5) · Errors: `05` §5.7.
 
 ## 19.1 — Remote Relay Architecture (normative)

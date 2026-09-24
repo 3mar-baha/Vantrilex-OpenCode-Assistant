@@ -8,7 +8,7 @@
 |-------------|---------|-------|
 | Node.js | 22 LTS | `node --version` ≥ 22; Bun path in `03` §3.1 |
 | pnpm / npm | pnpm 9 / npm 10 | Lockfile respected |
-| OS | Windows 10/11 (first-class), macOS 14, Ubuntu 22.04+ | DPAPI path is Windows-first; keychain equivalents per OS (`12` §12.2) |
+| OS | Windows 10/11 (first-class), macOS 14, Ubuntu 22.04+ | Machine-key AES-GCM vault works on all three today (`12` §12.2); OS-keychain equivalents are future work |
 | Microphone + speakers | Any OS-default devices | Graceful text fallback without them (E-5) |
 | `opencode` binary | v2.x on `PATH` | Pinned minor recorded at install; drift handled by probe (`03` §3.4) |
 
@@ -16,12 +16,15 @@
 
 ```powershell
 npm install -g opencode-voice-runtime
-opencode-voice init        # writes config skeleton, no secrets
-opencode-voice vault set groq --from-prompt   # keys → DPAPI vault, never disk-plaintext
-opencode-voice vault set fish --from-prompt
+opencode-voice vault bootstrap   # GROQ_API_KEYS + FISH_AUDIO_KEYS from env → encrypted vault (then unset env)
 opencode-voice doctor      # env audit (names only), device check, port probe
-opencode-voice start
+opencode-voice live        # full provider round-trip with latency report
 ```
+
+> **Audit 2026-09-24:** `init`, `vault set`, and `start` subcommands do not exist in
+> `src/cli.ts` (only `doctor`, `vault bootstrap`, `live`) — the block above shows the
+> implemented surface; the rest is future work. Likewise the paragraph below describes
+> the intended UX, not verified behavior:
 
 `init` never writes secrets; `vault set` reads via hidden prompt and stores ciphertext
 only; `doctor` is the pre-flight gate (fails fast on missing keys, no mic, port

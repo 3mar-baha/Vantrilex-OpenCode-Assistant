@@ -15,8 +15,12 @@
 ## 12.2 — DPAPI Vault Implementation (normative)
 
 1. **Encryption:** key pools are serialized (`PoolSecrets`, `05` §5.5) and encrypted
-   with the OS data-protection API — Windows DPAPI via `safeStorage` (Electron) or
-   the documented fallback chain (`node-data-protection` → OS keychain entry).
+   with AES-256-GCM under a machine-scoped key file (`0600`,
+   `src/voice/vault.ts:23-34`) — verified in code. The OS data-protection API
+   (Windows DPAPI via Electron `safeStorage`) is **aspirational**: it appears only
+   in a code comment (`vault.ts:8-10`) and is never imported anywhere in `src/`;
+   there is no `node-data-protection` dependency in `package.json`. Any future
+   migration must land the import first, then update this section.
    Ciphertext + nonce + checksum persist as `VaultBlob`; the data-protection key
    never leaves OS custody.
 2. **In-memory handling:** decrypted material lives in a `Buffer` that is `fill(0)`ed
@@ -26,8 +30,9 @@
 3. **File posture:** vault file `0600` (POSIX) / current-user-only ACL (Windows),
    parent directory not world-readable. Checksum verified before decrypt; mismatch →
    `VAULT_CORRUPT`, pool refused, operator error (E-11). No plaintext fallback exists.
-4. **CI posture:** tests use an encrypted *fixture* vault whose DPAPI scope is the CI
-   machine identity; fixture keys are sandbox/revoked credentials (`27`).
+4. **CI posture:** tests build keyrings in-memory via `Keyring.fromKeys` or save
+   throwaway vaults to tmpdirs (`src/voice/keyring.test.ts`) — there is no DPAPI
+   scope involved anywhere; fixture keys are sandbox/revoked credentials (`27`).
 
 ## 12.3 — Zero-Plaintext Invariants (normative, all must hold)
 

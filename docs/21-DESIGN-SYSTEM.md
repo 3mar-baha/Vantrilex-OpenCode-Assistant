@@ -46,7 +46,9 @@ config — never hardcoded in `tts.ts`.
 
 Earcons are synthesized once, cached as LRU-exempt reserved clips (outside the 50
 budget — they are infrastructure, not content), and replayed locally with zero
-provider calls. Volume: −12 dB under speech, ducking active speech by 6 dB when
+provider calls. **Implementation status (audit 2026-09-24): no earcon code exists
+in `src/`** (zero references) — the table above is the frozen v1.1.0 design target
+(`08`), not running behavior. Volume: −12 dB under speech, ducking active speech by 6 dB when
 preemption occurs.
 
 ## 21.4 — Conversational Tone Boundaries (normative)

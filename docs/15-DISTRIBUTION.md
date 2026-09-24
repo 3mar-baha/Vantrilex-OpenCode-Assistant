@@ -36,9 +36,11 @@ All three ship the same `docs/` snapshot and the same `doctor` pre-flight gate.
 
 1. Bundle target: `dist/cli.js` → single executable per `(os, arch)`:
    `win-x64` (first-class), `darwin-arm64`, `linux-x64`.
-2. Native bindings (DPAPI `safeStorage`, audio I/O) are platform-linked at bundle
-   time — cross-compiled bundles are forbidden from shipping another platform's
-   native module. The bundler asserts `process.platform` module resolution per target.
+2. No platform-native modules are referenced anywhere in `src/` or `package.json`
+   (audit 2026-09-24: no `safeStorage`, no `node-data-protection`, no audio I/O
+   binding — `FileAudioOut` writes MP3s to disk and hands off to the OS player).
+   The cross-compilation constraint below applies if and when native modules land;
+   until then there is nothing platform-linked to forbid shipping.
 3. First run of the binary performs the same `doctor` gate as npm installs; vault and
    config live in the OS-appropriate data dir (`%APPDATA%` / `~/Library` / `~/.local/share`).
 
@@ -46,8 +48,8 @@ All three ship the same `docs/` snapshot and the same `doctor` pre-flight gate.
 
 | Dependency | Strategy |
 |------------|----------|
-| Electron `safeStorage` (DPAPI) | Optional peer: used when present; else `node-data-protection` fallback (`12` §12.2); absence degrades to refuse-vault-features, never plaintext |
-| Audio I/O (mic/speaker) | Abstracted behind `AudioIn`/`AudioOut` (`03` §3.3.2); missing devices → text fallback (E-5), install never fails for lack of hardware |
+| Electron `safeStorage` (DPAPI) | **Not integrated (audit 2026-09-24):** zero references in `src/` or `package.json`. Current vault is AES-256-GCM + machine.key (`12` §12.2); safeStorage remains future work — absence changes nothing today |
+| Audio I/O (mic/speaker) | Output abstracted behind `AudioOut` (`tts.ts:16`); **no `AudioIn` interface and no capture implementation exist** (audit 2026-09-24) — microphone capture is future work; missing devices → text fallback (E-5), install never fails for lack of hardware |
 | `opencode` binary | External prerequisite, version-pinned at install (`13` §13.1); drift handled by contract probe, not by bundling OpenCode itself (immunity boundary, `04` §4.5) |
 
 ## 15.5 — Release Checklist (per channel)

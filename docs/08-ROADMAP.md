@@ -33,8 +33,9 @@ kill-restart loses zero terminal events (E-4 exercised).
 
 ### M3 — Trust layer (v0.3.0)
 
-Deliverables: DPAPI vault + 10-request rotation under mutex (25-request exactness
-proof), AGENTS.md injection + 3-Case classifier + BLUF formatter on fixture repos.
+Deliverables: DPAPI vault + 10-request rotation under lock-free slots (25-request exactness
+proof; the mutex mechanism in early drafts was superseded by ADR-005 — the shipped
+`src/voice/keyring.ts` uses a wait-free atomic counter), AGENTS.md injection + 3-Case classifier + BLUF formatter on fixture repos.
 Acceptance: rollover exactly on requests #11/#21 under concurrency; all 3 cases
 classify correctly.
 

@@ -30,7 +30,9 @@ SSE stream; raw stdout/stderr reaches speech only via file-based log tailing, ca
 
 ## 18.2 — STT: Groq Whisper Audio Chunking (normative)
 
-1. **Capture:** push-to-talk (default) or wake-word gate; 16 kHz mono PCM; capture
+1. **Capture:** push-to-talk (default; the implemented path) or wake-word gate
+   (`wake-word` is a valid `CAPTURE_MODE` value in `src/common/config.ts:28` but no
+   wake-word detection exists in `src/` — audit 2026-09-24); 16 kHz mono PCM; capture
    indicator always visible (`02` §2.2).
 2. **Chunking:** 5.0 s windows, 0.5 s overlap, `≤ 25 MB` per multipart part.
    Overlap regions dedupe by `verbose_json` word timestamps — words fully inside the
