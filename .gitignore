@@ -4,6 +4,8 @@ dist/
 build/
 target/
 coverage/
+test-results/
+apps/desktop/src-tauri/gen/
 
 # Runtime artifacts
 *.log
