@@ -63,12 +63,16 @@ describe('settings store + modal', () => {
   test('persona applies globally and persists; modal reflects selection', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ui-'));
     const store = new SettingsStore(dir);
+    expect(store.current.persona).toBe('kareem');
     expect(store.current.voice).toBe('male-default');
-    store.update({ voice: 'female-toggle' });
+    store.update({ persona: 'nour' });
+    expect(new SettingsStore(dir).current.persona).toBe('nour');
+    // Persona is the source of truth: voice follows it.
     expect(new SettingsStore(dir).current.voice).toBe('female-toggle');
     const modal = buildSettingsModal(store.current, { groq: { keyCount: 3 }, fish: { keyCount: 2 } });
-    expect(modal.sections).toHaveLength(3);
-    expect(modal.persona.find((p) => p.selected)?.id).toBe('female-toggle');
+    expect(modal.sections.map((s) => s.id)).toEqual(['identity', 'audio', 'bridge', 'keyring', 'system']);
+    expect(modal.persona.find((p) => p.selected)?.id).toBe('nour');
+    expect(modal.persona.find((p) => p.id === 'kareem')?.fishVoiceId).toBe('5b90451e0cd34b2788841744af7c55c3');
     expect(modal.testSpeech.phrase.length).toBeGreaterThan(0);
     expect(modal.credentialPools.groq.keyCount).toBe(3);
   });

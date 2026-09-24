@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { VoiceId } from '../common/brands.js';
+import { PERSONA_VOICE, type PersonaId, type VoiceId } from '../common/brands.js';
 
 // Speech policy — docs/02 §2.2/C2/C10. Single decision point answering "may the
 // daemon speak right now?" Fullscreen gaming → ducked speech; active meeting mic
@@ -31,7 +31,10 @@ export function decideSpeech(env: SpeechEnvironment): SpeechVerdict {
 
 // Settings store — docs/02 §2.7 modal. Persona + UX prefs persist as JSON;
 // credential pools NEVER persist here — they flow exclusively to the vault.
+// `persona` (Kareem/Nour, ADR-010) is the source of truth; `voice` follows it
+// and is retained for transport compatibility.
 export interface UiSettings {
+  persona: PersonaId;
   voice: VoiceId;
   captureMode: 'push-to-talk' | 'wake-word';
   briefings: 'bluf' | 'full';
@@ -40,6 +43,7 @@ export interface UiSettings {
 }
 
 export const DEFAULT_SETTINGS: UiSettings = {
+  persona: 'kareem',
   voice: 'male-default',
   captureMode: 'push-to-talk',
   briefings: 'bluf',
@@ -73,6 +77,11 @@ export class SettingsStore {
 
   update(patch: Partial<UiSettings>): UiSettings {
     this.settings = { ...this.settings, ...patch };
+    // Persona wins: a persona change re-keys the transport voice so the two
+    // can never disagree. A lone voice patch is honored but persona stays.
+    if (patch.persona !== undefined) {
+      this.settings = { ...this.settings, voice: PERSONA_VOICE[patch.persona] };
+    }
     if (this.dir !== undefined) {
       mkdirSync(this.dir, { recursive: true });
       writeFileSync(join(this.dir, 'ui-settings.json'), JSON.stringify(this.settings));
