@@ -1,7 +1,7 @@
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', '.venv/**'] },
+  { ignores: ['dist/**', 'apps/desktop/dist/**', 'node_modules/**', 'apps/desktop/node_modules/**', 'coverage/**', '.venv/**'] },
   ...tseslint.configs.recommended,
   {
     files: ['**/*.test.ts'],
