@@ -5,6 +5,7 @@ import { Crest } from './components/brand/Crest.js';
 import { PixelMatrix } from './matrix/PixelMatrix.js';
 import { matrixForDaemonState } from './matrix/matrix-state.js';
 import { SettingsPortal } from './components/portals/SettingsPortal.js';
+import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import type { ClusterAction } from './components/sidebar/IconCluster.js';
@@ -36,6 +37,12 @@ export function App(): JSX.Element {
   // Sessions surface from the daemon inventory (Phase 2 follow-up); until
   // then the chip renders the active id only — never fabricated entries.
   const [sessionState, dispatchSession] = useReducer(sessionsReducer, initialSessionsState);
+  // Agent/model surface from daemon reports (Phase 3 follow-up streams them);
+  // null renders unassigned — never guessed.
+  const [agentModel, setAgentModel] = useState<{ agent: string | null; model: string | null }>({
+    agent: null,
+    model: null,
+  });
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const cmdCounter = useRef(0);
@@ -84,6 +91,29 @@ export function App(): JSX.Element {
     void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'switchSession', sessionId: id });
   };
 
+  const promptTarget = (label: string): string | null => {
+    const value = window.prompt(label)?.trim();
+    return value !== undefined && value.length > 0 ? value : null;
+  };
+
+  const handleSwitchAgent = (): void => {
+    const active = sessionState.activeId;
+    if (active === null) return;
+    const target = promptTarget('Switch agent to (id):');
+    if (target === null) return;
+    setAgentModel((s) => ({ ...s, agent: target }));
+    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: target });
+  };
+
+  const handleSwitchModel = (): void => {
+    const active = sessionState.activeId;
+    if (active === null) return;
+    const target = promptTarget('Switch model to (id):');
+    if (target === null) return;
+    setAgentModel((s) => ({ ...s, model: target }));
+    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionModel', sessionId: active, model: target });
+  };
+
   const handleAction = (action: ClusterAction, minutes?: number): void => {
     if (action === 'settings') {
       setSettingsOpen(true);
@@ -106,6 +136,12 @@ export function App(): JSX.Element {
         <Crest size={24} />
         <span>bridge: {bridge}</span>
         <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
+        <AgentModelBadge
+          agent={agentModel.agent}
+          model={agentModel.model}
+          onSwitchAgent={handleSwitchAgent}
+          onSwitchModel={handleSwitchModel}
+        />
       </header>
       <main>
         <PixelMatrix state={matrix} energy={0} />

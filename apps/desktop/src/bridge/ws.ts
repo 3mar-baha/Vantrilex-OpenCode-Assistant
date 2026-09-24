@@ -25,7 +25,17 @@ export interface EventMsg {
   readonly state: string;
 }
 
-export type CommandKind = 'abort' | 'mute' | 'deafen' | 'arm' | 'setPersona' | 'switchSession';
+export type CommandKind =
+  | 'abort'
+  | 'mute'
+  | 'deafen'
+  | 'arm'
+  | 'setPersona'
+  | 'switchSession'
+  | 'setSessionAgent'
+  | 'setSessionModel'
+  | 'toggleSessionSkill'
+  | 'execSessionShell';
 
 export interface CommandMsg {
   readonly id: string;
@@ -33,6 +43,11 @@ export interface CommandMsg {
   readonly persona?: 'kareem' | 'nour';
   readonly minutes?: number;
   readonly sessionId?: string;
+  readonly agent?: string;
+  readonly model?: string;
+  readonly skill?: string;
+  readonly skillAction?: 'attach' | 'detach';
+  readonly command?: string;
 }
 
 export interface SocketLike {
