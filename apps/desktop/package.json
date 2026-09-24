@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
+    "dev:web": "vite",
     "build": "tsc --noEmit && vite build",
     "build:tauri": "tauri build",
     "typecheck": "tsc --noEmit",
@@ -20,6 +21,7 @@
     "simplex-noise": "^4.0.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "2.11.5",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
