@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
   ACK_KIND,
+  buildAgentFrame,
   buildInventoryFrame,
   encodeTextFrame,
   ERROR_KIND,
@@ -19,6 +20,7 @@ import {
   UI_SUBPROTOCOL,
   UI_WS_PATH,
   WsProtocolError,
+  type AgentFrame,
   type HelloFrame,
   type InventoryFrame,
   type UiCommand,
@@ -72,8 +74,13 @@ function wsAccept(key: string): string {
     .digest('base64');
 }
 
+export interface CommandOutcome {
+  readonly ok: boolean;
+  readonly detail?: string;
+}
+
 export class UiServer {
-  onCommand: ((cmd: UiCommand) => void) | null = null;
+  onCommand: ((cmd: UiCommand) => CommandOutcome | Promise<CommandOutcome> | void) | null = null;
   private readonly token: string;
   private readonly contractVersion: string;
   private readonly pingIntervalMs: number;
@@ -82,6 +89,7 @@ export class UiServer {
   private seq = 0;
   private readonly resume: UiEvent[] = [];
   private lastInventory: InventoryFrame | null = null;
+  private lastAgents: AgentFrame | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
 
   constructor(options: UiServerOptions) {
@@ -141,6 +149,18 @@ export class UiServer {
     this.seq += 1;
     const frame = buildInventoryFrame(this.seq, sessions);
     this.lastInventory = frame;
+    const wire = encodeTextFrame(JSON.stringify(frame));
+    for (const conn of this.conns) {
+      safeWrite(conn, this.conns, wire);
+    }
+    return frame;
+  }
+
+  /** Publish a level-triggered discovered-agents snapshot (final polish). */
+  publishAgents(agents: ReadonlyArray<{ id: string; name: string }>): AgentFrame {
+    this.seq += 1;
+    const frame = buildAgentFrame(this.seq, agents);
+    this.lastAgents = frame;
     const wire = encodeTextFrame(JSON.stringify(frame));
     for (const conn of this.conns) {
       safeWrite(conn, this.conns, wire);
@@ -261,6 +281,9 @@ export class UiServer {
       if (this.lastInventory !== null && this.lastInventory.seq > lastSeq) {
         safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(this.lastInventory)));
       }
+      if (this.lastAgents !== null && this.lastAgents.seq > lastSeq) {
+        safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(this.lastAgents)));
+      }
     }
   }
 
@@ -314,9 +337,25 @@ export class UiServer {
         safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'unknown command' })));
         continue;
       }
-      this.onCommand?.(cmd.data);
-      safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ACK_KIND, id: cmd.data.id, ok: true })));
+      void this.dispatchCommand(conn, cmd.data);
     }
+  }
+
+  /** Await the (possibly async) command handler, then ack; never crash the socket. */
+  private async dispatchCommand(conn: Conn, cmd: UiCommand): Promise<void> {
+    let outcome: CommandOutcome = { ok: true };
+    try {
+      outcome = (await this.onCommand?.(cmd)) ?? { ok: true };
+    } catch (err) {
+      outcome = { ok: false, detail: err instanceof Error ? err.message : 'internal' };
+    }
+    const ack = {
+      type: ACK_KIND,
+      id: cmd.id,
+      ok: outcome.ok,
+      ...(outcome.detail !== undefined ? { detail: outcome.detail } : {}),
+    };
+    safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(ack)));
   }
 
   /** Pong with a correctly-sized header (extended lengths included). */

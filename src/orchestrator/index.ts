@@ -8,3 +8,5 @@ export type { Speaker } from './orchestrator.js';
 export { Orchestrator } from './orchestrator.js';
 export type { SessionRecord, InventoryEvent, InventoryClient, InventoryOptions } from './inventory.js';
 export { SessionInventory } from './inventory.js';
+export type { CommandOutcome, CommandClient, CommandRouterDeps } from './command-router.js';
+export { createCommandHandler, parseModelRef } from './command-router.js';

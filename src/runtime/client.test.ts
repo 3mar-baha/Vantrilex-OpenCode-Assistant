@@ -169,6 +169,34 @@ describe('ServeClient vs mock serve', () => {
     }
   });
 
+  test('listAgents scopes by directory and normalizes rows', async () => {
+    const seenUrls: string[] = [];
+    const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
+      seenUrls.push(req.url ?? '');
+      if (req.headers.authorization !== GOOD_AUTH) {
+        json(res, 401, { error: 'unauthorized' });
+        return;
+      }
+      json(res, 200, {
+        location: { directory: 'O:/proj' },
+        data: [{ id: 'build', name: 'Build', mode: 'primary' }, { id: 'ts-reviewer', name: 'TS Reviewer' }],
+      });
+    });
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const addr = probe.address();
+    if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
+    try {
+      const client = new ServeClient(`http://127.0.0.1:${addr.port}`, 'test-password');
+      const agents = await client.listAgents('O:/proj');
+      expect(seenUrls[0]).toContain('/api/agent?directory=O%3A%2Fproj');
+      expect(agents).toHaveLength(2);
+      expect(agents[0]).toMatchObject({ id: 'build', name: 'Build', mode: 'primary' });
+      expect(agents[1]!.name).toBe('TS Reviewer');
+    } finally {
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
+  });
+
   test('per-session controls: 204 No Content, model via POST, stable/fresh keys', async () => {
     const seen: Array<{ key: string; method: string; url: string; body: string }> = [];
     const probe = createServer((req: IncomingMessage, res: ServerResponse) => {

@@ -68,6 +68,13 @@ export interface ModelRef {
   readonly variant?: string;
 }
 
+/** Agent summary surfaced by /api/agent?directory=… (2.0.x contract). */
+export interface AgentInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly mode?: string;
+}
+
 export interface Provenance {
   readonly origin: 'voice' | 'cli' | 'mobile' | 'reconciled';
   readonly transcript?: string;
@@ -306,8 +313,30 @@ export class ServeClient {
     return { ok: true };
   }
 
-  async listSessions(): Promise<SessionInfo[]> {
-    const res = await this.request('/api/session', { method: 'GET' });
+  /**
+   * GET /api/agent?directory=<dir> → {data:[…]} — the 2.0.x contract requires a
+   * directory scope; an unscoped call returns no data. Normalized to AgentInfo.
+   */
+  async listAgents(directory: string): Promise<AgentInfo[]> {
+    const res = await this.request(`/api/agent?directory=${encodeURIComponent(directory)}`, { method: 'GET' });
+    if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `agent.list failed with HTTP ${res.status}`);
+    const data = unwrapData(await res.json());
+    if (!Array.isArray(data)) return [];
+    const out: AgentInfo[] = [];
+    for (const row of data) {
+      if (typeof row !== 'object' || row === null) continue;
+      const r = row as Record<string, unknown>;
+      if (typeof r['id'] !== 'string' || r['id'].length === 0) continue;
+      out.push({
+        id: r['id'],
+        name: typeof r['name'] === 'string' ? r['name'] : r['id'],
+        ...(typeof r['mode'] === 'string' ? { mode: r['mode'] } : {}),
+      });
+    }
+    return out;
+  }
+
+  async listSessions(): Promise<SessionInfo[]> {    const res = await this.request('/api/session', { method: 'GET' });
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.list failed with HTTP ${res.status}`);
     const data = unwrapData(await res.json());
     if (!Array.isArray(data)) return [];

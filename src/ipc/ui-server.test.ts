@@ -240,6 +240,41 @@ describe('UiServer resume + broadcast', () => {
     expect(replayed.sessions.map((x) => x.sessionId).sort()).toEqual(['a', 'b']);
     sock.end();
   });
+  test('onCommand failure surfaces a structured ack (ok:false + detail), socket survives', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText(); // hello
+    server.onCommand = async (cmd) => (cmd.kind === 'execSessionShell' ? { ok: false, detail: 'no active session' } : { ok: true });
+    sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify({ id: 'cmd-e', kind: 'execSessionShell', command: 'ls' })), Buffer.from([2, 2, 2, 2])));
+    const ack = JSON.parse(await sock.readText()) as { ok: boolean; detail?: string };
+    expect(ack).toMatchObject({ type: 'ack', ok: false, detail: 'no active session' });
+    sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify({ id: 'cmd-m', kind: 'mute' })), Buffer.from([3, 3, 3, 3])));
+    const okAck = JSON.parse(await sock.readText()) as { ok: boolean };
+    expect(okAck.ok).toBe(true);
+    sock.end();
+  });
+
+  test('onCommand throw is contained as ok:false, never crashes the server', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText();
+    server.onCommand = () => {
+      throw new Error('boom');
+    };
+    sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify({ id: 'cmd-t', kind: 'arm' })), Buffer.from([4, 4, 4, 4])));
+    const ack = JSON.parse(await sock.readText()) as { ok: boolean; detail?: string };
+    expect(ack.ok).toBe(false);
+    expect(ack.detail).toBe('boom');
+    expect(server.listening).toBe(true);
+    sock.end();
+  });
+
   test('close() terminates cleanly: no connections, not listening', async () => {
     const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
     const port = await server.start(0);

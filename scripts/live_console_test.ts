@@ -7,7 +7,9 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { UiServer, UI_SUBPROTOCOL } from '../dist/ipc/index.js';
+import { createCommandHandler } from '../dist/orchestrator/index.js';
 import { VOICE_IDS } from '../dist/common/brands.js';
+import type { SessionId } from '../dist/common/brands.js';
 import { ServeClient } from '../dist/runtime/client.js';
 import { FileVault } from '../dist/voice/vault.js';
 import { Keyring } from '../dist/voice/keyring.js';
@@ -136,20 +138,27 @@ async function main(): Promise<void> {
   let serveBootMs = -1;
   let sessions: DiscoveredSession[] = [];
   const createdIds: string[] = [];
+  let routerClient: ServeClient | undefined;
+  let activeSession: string | undefined;
+  let harnessAgentId = 'build';
   try {
     serveBootMs = await waitForServe(servePassword, 20_000);
     ok(`serve ready on 127.0.0.1:${SERVE_PORT} in ${serveBootMs} ms (password redacted)`);
 
     // Migrated ServeClient methods, exercised live (the real control plane).
     const sjc = new ServeClient(`http://127.0.0.1:${SERVE_PORT}`, servePassword);
+    routerClient = sjc;
     const listed = await sjc.listSessions();
     sessions = listed.map((s) => ({ id: s.sessionId, agent: s.agent, model: s.model, state: s.state }));
     ok(`ServeClient.listSessions → ${listed.length} session(s) (agent/model normalized: ${listed.filter((s) => s.agent !== undefined).length})`);
 
-    const agentList = await serveFetch('/api/agent', servePassword);
-    const agents = ((agentList.json as { data?: unknown[] })?.data ?? []) as Array<Record<string, unknown>>;
-    info(`/api/agent → HTTP ${agentList.status}, ${agents.length} agent(s) available`);
-    const agentId = typeof agents[0]?.['id'] === 'string' ? String(agents[0]!['id']) : 'build';
+    let projectAgents: Awaited<ReturnType<typeof sjc.listAgents>> = [];
+    for (let attempt = 0; attempt < 4 && projectAgents.length === 0; attempt += 1) {
+      projectAgents = await sjc.listAgents(process.cwd());
+      if (projectAgents.length === 0) await new Promise((r) => setTimeout(r, 1500));
+    }
+    ok(`ServeClient.listAgents(directory) → ${projectAgents.length} agent(s): ${projectAgents.map((a) => a.id).join(', ')}`);
+    harnessAgentId = projectAgents[0]?.id ?? 'build';
 
     // create → prompt → controls → get, all through the canonical client.
     const created = await sjc.createSession(process.cwd());
@@ -163,7 +172,7 @@ async function main(): Promise<void> {
       warn(`promptSession → ${err instanceof Error ? err.message : 'unknown'} (live-build behavior; SDK contract unchanged)`);
     }
 
-    const firstAgent = { id: agentId };
+    const firstAgent = { id: harnessAgentId };
     try {
       const ack = await sjc.setSessionAgent(created.sessionId, firstAgent.id);
       ok(`setSessionAgent("${firstAgent.id}") → 204 ack ${JSON.stringify(ack)}`);
@@ -201,7 +210,17 @@ async function main(): Promise<void> {
   const bridgeToken = `bridge-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
   const server = new UiServer({ token: bridgeToken, contractVersion: CONTRACT_VERSION });
   const commands: Array<Record<string, unknown>> = [];
-  server.onCommand = (cmd) => void commands.push(cmd as unknown as Record<string, unknown>);
+  // Daemon-side execution: WS commands run against the live ServeClient.
+  server.onCommand =
+    routerClient === undefined
+      ? (cmd) => void commands.push(cmd as unknown as Record<string, unknown>)
+      : createCommandHandler({
+          client: routerClient,
+          switchSession: (id) => {
+            activeSession = id;
+          },
+          activeSessionId: () => activeSession as SessionId | undefined,
+        });
   const boundPort = await server.start(BRIDGE_PORT);
   const t0 = Date.now();
   const ws = new WebSocket(`ws://127.0.0.1:${boundPort}/v1/ui`, [UI_SUBPROTOCOL, bridgeToken]);
@@ -247,7 +266,23 @@ async function main(): Promise<void> {
       }
     });
   });
-  ok(`switchSession("${target}") acked: ok=${String(ack['ok'])}; daemon recorded ${commands.length} command(s)`);
+  ok(`switchSession("${target}") acked: ok=${String(ack['ok'])}; active set; daemon executed via router`);
+
+  // Daemon-side execution proof: a WS setSessionAgent runs against ServeClient.
+  if (routerClient !== undefined && sessions[0] !== undefined) {
+    ws.send(JSON.stringify({ id: 'cmd-agent-1', kind: 'setSessionAgent', sessionId: sessions[0].id, agent: harnessAgentId }));
+    const agentAck = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('agent ack timeout')), 8_000);
+      ws.addEventListener('message', (ev: MessageEvent) => {
+        const msg = JSON.parse(String(ev.data)) as Record<string, unknown>;
+        if (msg['type'] === 'ack' && msg['id'] === 'cmd-agent-1') {
+          clearTimeout(timer);
+          resolve(msg);
+        }
+      });
+    });
+    ok(`WS setSessionAgent("${harnessAgentId}") → ack ok=${String(agentAck['ok'])}${agentAck['detail'] !== undefined ? ` detail=${String(agentAck['detail'])}` : ''}`);
+  }
   ws.close();
   await server.close();
 
