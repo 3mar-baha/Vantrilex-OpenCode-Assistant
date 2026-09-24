@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
 import { nowIso } from '../common/brands.js';
 import type { SessionId } from '../common/brands.js';
 import { OrchestratorError } from '../common/errors.js';
 
 // Typed serve client — docs/03 §3.4, docs/06 §6.2, docs/25 §25.2. Raw fetch with
-// zod-validated responses (the documented equivalent of @opencode/client calls);
-// idempotency keys are reused on retry so create/prompt never double-apply.
+// shape-normalizing parsers (the documented equivalent of @opencode/client calls);
+// idempotency ids are reused on retry so create/prompt never double-apply.
 //
-// Auth (verified live 2026-09-24, OpenCode serve 1.18.32): opencode serve uses
-// HTTP Basic `opencode:<password>` — Bearer is rejected. All serve traffic uses
-// `basicAuth()`; sessions live at the /api/session family, envelope {data:...}.
+// Contract (verified live + against @opencode/client 1.18.x, 2026-09-24):
+//  - Auth: HTTP Basic `opencode:<password>` (Bearer is rejected).
+//  - Sessions live at the /api/session family; envelopes are `{data:...}`.
+//  - create/prompt return 200 with `{data}`; agent/model/skill/shell return 204.`
 export function basicAuth(password: string): string {
   return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
 }
@@ -53,18 +53,6 @@ function normalizeSessionRow(row: unknown): SessionInfo | null {
   };
 }
 
-const SessionCreateResponse = z.object({
-  sessionId: z.string().min(1),
-  state: z.string(),
-  createdAt: z.string().datetime(),
-});
-
-const PromptResponse = z.object({
-  sessionId: z.string().min(1),
-  state: z.string(),
-  receipt: z.string(),
-});
-
 export interface SessionStatusInfo {
   readonly sessionId: string;
   readonly state: string;
@@ -73,20 +61,12 @@ export interface SessionStatusInfo {
   readonly lastEventId?: string;
 }
 
-// Phase 3 native per-session controls — shapes mirror @opencode/client 1.18.x
-// (/api/session/{id}/agent POST, /model PATCH, /experimental/.../skill POST,
-// /shell POST). .passthrough() tolerates server-added fields; the required
-// keys below are what Voxaura consumes. Verified live against mocks; production
-// reconciliation via /openapi.json is recorded in RAG-ORCHESTRATOR-INTEGRATION.
-const AgentResponse = z.object({ agent: z.string().min(1) }).passthrough();
-const ModelResponse = z.object({ model: z.string().min(1) }).passthrough();
-const SkillResponse = z.object({ ok: z.boolean() }).passthrough();
-const ShellResponse = z
-  .object({ stdout: z.string(), stderr: z.string(), exitCode: z.number().int() })
-  .passthrough();
-
-/** Client-side cap on captured exec output — memory bound, never unbounded. */
-export const SHELL_OUTPUT_CAP = 64 * 1024;
+/** Model reference — the canonical shape required by /api/session model calls. */
+export interface ModelRef {
+  readonly id: string;
+  readonly providerID: string;
+  readonly variant?: string;
+}
 
 export interface Provenance {
   readonly origin: 'voice' | 'cli' | 'mobile' | 'reconciled';
@@ -142,15 +122,29 @@ export class ServeClient {
   }
 
   async createSession(directory: string, model?: string): Promise<{ sessionId: SessionId; state: string }> {
+    // Canonical create: POST /api/session { location:{directory}, model? } → 200 {data}.
+    // The server generates the session id (a client-supplied `id` must match the
+    // `ses_…` format and is rejected with 400 otherwise — verified live), so we
+    // rely on the Idempotency-Key header for retry semantics instead.
     const key = randomUUID();
-    const res = await this.request('/session', {
+    const res = await this.request('/api/session', {
       method: 'POST',
-      body: JSON.stringify({ directory, ...(model !== undefined ? { model } : {}) }),
+      body: JSON.stringify({
+        location: { directory },
+        ...(model !== undefined ? { model } : {}),
+      }),
     }, key);
     if (res.status === 401) throw new OrchestratorError('SERVE_UNREACHABLE', false, 'serve rejected credentials (401)');
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.create failed with HTTP ${res.status}`);
-    const parsed = SessionCreateResponse.parse(await res.json());
-    return { sessionId: parsed.sessionId as SessionId, state: parsed.state };
+    const row = unwrapData(await res.json());
+    const r = (typeof row === 'object' && row !== null ? row : {}) as Record<string, unknown>;
+    if (typeof r['id'] !== 'string' || r['id'].length === 0) {
+      throw new OrchestratorError('CONTRACT_DRIFT', false, 'session.create returned no id');
+    }
+    return {
+      sessionId: r['id'] as SessionId,
+      state: typeof r['state'] === 'string' ? r['state'] : 'created',
+    };
   }
 
   async promptSession(sessionId: SessionId, text: string, provenance: Provenance): Promise<{ state: string; receipt: string }> {
@@ -181,15 +175,21 @@ export class ServeClient {
     provenance: Provenance,
     key: string,
   ): Promise<{ state: string; receipt: string }> {
-    const res = await this.request(`/session/${sessionId}/prompt`, {
+    // Canonical prompt: POST /api/session/{id}/prompt { id, text, metadata, delivery }
+    // → 200 {data}. `id` doubles as the message id and the retry-stable key.
+    const res = await this.request(`/api/session/${sessionId}/prompt`, {
       method: 'POST',
-      body: JSON.stringify({ text, provenance }),
+      body: JSON.stringify({ id: key, text, metadata: provenance, delivery: 'steer' }),
     }, key);
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
     if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.prompt failed with HTTP ${res.status}`);
-    const parsed = PromptResponse.parse(await res.json());
-    return { state: parsed.state, receipt: parsed.receipt };
+    const data = unwrapData(await res.json());
+    const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
+    return {
+      state: typeof d['state'] === 'string' ? d['state'] : 'running',
+      receipt: typeof d['id'] === 'string' ? d['id'] : typeof d['receipt'] === 'string' ? d['receipt'] : key,
+    };
   }
 
   async getSession(sessionId: SessionId): Promise<SessionStatusInfo> {
@@ -210,87 +210,87 @@ export class ServeClient {
   }
 
   /**
-   * Generic session mutation (Phase 3): one error-mapping funnel so every new
-   * control behaves identically — 404 fail-closed, 409 busy-retryable,
-   * 401 non-retryable, anything else retryable-transient.
+   * Control funnel (Phase 3/4): 404 fail-closed, 409 busy-retryable, 401
+   * non-retryable, other non-2xx transient. Canonical controls return
+   * **204 No Content** — the body is never read.
    */
-  private async mutate<T>(
+  private async control(
     method: string,
     path: string,
     body: unknown,
     key: string | undefined,
-    schema: z.ZodType<T>,
     what: string,
-  ): Promise<T> {
+  ): Promise<void> {
     const res = await this.request(path, { method, body: JSON.stringify(body) }, key);
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `${what}: session not found`);
     if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `${what}: session busy — backpressure`);
     if (res.status === 401) throw new OrchestratorError('SERVE_UNREACHABLE', false, `${what}: rejected credentials (401)`);
-    if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `${what} failed with HTTP ${res.status}`);
-    return schema.parse(await res.json()) as T;
+    if (res.status !== 204 && !res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `${what} failed with HTTP ${res.status}`);
+    // 204 No Content (or a tolerated 2xx): nothing to parse.
+    try {
+      await res.body?.cancel();
+    } catch {
+      // body already consumed/absent — never fatal
+    }
   }
 
-  /** POST /api/session/{id}/agent — stable key: same target+agent retries dedupe. */
-  async setSessionAgent(sessionId: SessionId, agent: string): Promise<{ agent: string } & Record<string, unknown>> {
-    return this.mutate(
+  /** POST /api/session/{id}/agent {agent} → 204. Stable key per target+agent. */
+  async setSessionAgent(sessionId: SessionId, agent: string): Promise<{ ok: true }> {
+    await this.control(
       'POST',
       `/api/session/${sessionId}/agent`,
       { agent },
       this.promptKey(sessionId, `agent:${agent}`),
-      AgentResponse,
       'session.agent',
     );
+    return { ok: true };
   }
 
-  /** PATCH /api/session/{id}/model — stable key per target+model. */
-  async setSessionModel(sessionId: SessionId, model: string): Promise<{ model: string } & Record<string, unknown>> {
-    return this.mutate(
-      'PATCH',
+  /** POST /api/session/{id}/model {model: ModelRef} → 204. Stable key per target+model. */
+  async setSessionModel(sessionId: SessionId, model: ModelRef): Promise<{ ok: true }> {
+    await this.control(
+      'POST',
       `/api/session/${sessionId}/model`,
       { model },
-      this.promptKey(sessionId, `model:${model}`),
-      ModelResponse,
+      this.promptKey(sessionId, `model:${model.providerID}/${model.id}`),
       'session.model',
     );
+    return { ok: true };
   }
 
-  /** POST /api/experimental/session/{id}/skill — stable key per target+skill+action. */
+  /**
+   * POST /api/experimental/session/{id}/skill {id, resume} → 204. Stable key
+   * per target+skill+action. `attach` maps to resume:true, `detach` to false.
+   */
   async toggleSessionSkill(
     sessionId: SessionId,
     skill: string,
     action: 'attach' | 'detach',
-  ): Promise<{ ok: boolean } & Record<string, unknown>> {
-    return this.mutate(
+  ): Promise<{ ok: true }> {
+    await this.control(
       'POST',
       `/api/experimental/session/${sessionId}/skill`,
-      { skill, action },
+      { id: skill, resume: action === 'attach' },
       this.promptKey(sessionId, `skill:${skill}:${action}`),
-      SkillResponse,
       'session.skill',
     );
+    return { ok: true };
   }
 
   /**
-   * POST /api/session/{id}/shell — managed exec inside the session context.
-   * Fresh UUID per call (exec is NOT idempotent) + client-side 64KB capture cap.
+   * POST /api/session/{id}/shell {id, command} → 204. Output is delivered
+   * asynchronously over the session event stream, not in the response.
+   * Fresh UUID per call (exec is not idempotent).
    */
-  async execSessionShell(
-    sessionId: SessionId,
-    command: string,
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const parsed = await this.mutate(
+  async execSessionShell(sessionId: SessionId, command: string): Promise<{ ok: true }> {
+    await this.control(
       'POST',
       `/api/session/${sessionId}/shell`,
-      { command },
+      { id: randomUUID(), command },
       randomUUID(),
-      ShellResponse,
       'session.shell',
     );
-    return {
-      stdout: parsed.stdout.slice(0, SHELL_OUTPUT_CAP),
-      stderr: parsed.stderr.slice(0, SHELL_OUTPUT_CAP),
-      exitCode: parsed.exitCode,
-    };
+    return { ok: true };
   }
 
   async listSessions(): Promise<SessionInfo[]> {

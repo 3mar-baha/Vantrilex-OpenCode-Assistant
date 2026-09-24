@@ -8,6 +8,7 @@ import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { UiServer, UI_SUBPROTOCOL } from '../dist/ipc/index.js';
 import { VOICE_IDS } from '../dist/common/brands.js';
+import { ServeClient } from '../dist/runtime/client.js';
 import { FileVault } from '../dist/voice/vault.js';
 import { Keyring } from '../dist/voice/keyring.js';
 import { FishHttpTransport, TTS_MODEL } from '../dist/voice/tts.js';
@@ -54,24 +55,6 @@ interface DiscoveredSession {
   agent?: string;
   model?: string;
   state?: string;
-}
-
-function extractSessions(payload: unknown): DiscoveredSession[] {
-  // Live shape (verified): { data: [ { id, agent, model, ... } ] }
-  const data = (payload as { data?: unknown })?.data;
-  if (!Array.isArray(data)) return [];
-  return data
-    .map((row) => row as Record<string, unknown>)
-    .filter((row) => typeof row['id'] === 'string')
-    .map((row) => ({
-      id: String(row['id']),
-      agent: typeof row['agent'] === 'string' ? row['agent'] : undefined,
-      model:
-        typeof row['model'] === 'object' && row['model'] !== null
-          ? String((row['model'] as Record<string, unknown>)['id'] ?? '')
-          : undefined,
-      state: typeof row['state'] === 'string' ? row['state'] : undefined,
-    }));
 }
 
 function spawnServe(password: string): ChildProcess {
@@ -136,17 +119,66 @@ async function main(): Promise<void> {
   const child = spawnServe(servePassword);
   let serveBootMs = -1;
   let sessions: DiscoveredSession[] = [];
+  const createdIds: string[] = [];
   try {
     serveBootMs = await waitForServe(servePassword, 20_000);
     ok(`serve ready on 127.0.0.1:${SERVE_PORT} in ${serveBootMs} ms (password redacted)`);
-    const list = await serveFetch('/api/session', servePassword);
-    sessions = extractSessions(list.json);
-    ok(`/api/session → HTTP ${list.status}, ${sessions.length} session(s) discovered`);
+
+    // Migrated ServeClient methods, exercised live (the real control plane).
+    const sjc = new ServeClient(`http://127.0.0.1:${SERVE_PORT}`, servePassword);
+    const listed = await sjc.listSessions();
+    sessions = listed.map((s) => ({ id: s.sessionId, agent: s.agent, model: s.model, state: s.state }));
+    ok(`ServeClient.listSessions → ${listed.length} session(s) (agent/model normalized: ${listed.filter((s) => s.agent !== undefined).length})`);
+
     const agentList = await serveFetch('/api/agent', servePassword);
-    const agents = (agentList.json as { data?: unknown[] })?.data ?? [];
+    const agents = ((agentList.json as { data?: unknown[] })?.data ?? []) as Array<Record<string, unknown>>;
     info(`/api/agent → HTTP ${agentList.status}, ${agents.length} agent(s) available`);
+
+    // create → prompt → controls → get, all through the canonical client.
+    const created = await sjc.createSession(process.cwd());
+    createdIds.push(created.sessionId);
+    ok(`createSession → ${created.sessionId} (state ${created.state})`);
+
+    try {
+      const prompted = await sjc.promptSession(created.sessionId, 'live harness ping', { origin: 'cli', actor: 'harness' });
+      ok(`promptSession → state ${prompted.state}, receipt ${prompted.receipt.slice(0, 12)}…`);
+    } catch (err) {
+      warn(`promptSession → ${err instanceof Error ? err.message : 'unknown'} (live-build behavior; SDK contract unchanged)`);
+    }
+
+    const firstAgent = agents.find((a) => typeof a['id'] === 'string');
+    if (firstAgent !== undefined) {
+      try {
+        const ack = await sjc.setSessionAgent(created.sessionId, String(firstAgent['id']));
+        ok(`setSessionAgent("${String(firstAgent['id'])}") → 204 ack ${JSON.stringify(ack)}`);
+      } catch (err) {
+        warn(`setSessionAgent → ${err instanceof Error ? err.message : 'unknown'}`);
+      }
+    }
+    try {
+      const m = await sjc.setSessionModel(created.sessionId, {
+        id: 'muse-spark-1.3-contributor-free',
+        providerID: 'opencode',
+      });
+      ok(`setSessionModel(POST, ModelRef) → 204 ack ${JSON.stringify(m)}`);
+    } catch (err) {
+      warn(`setSessionModel → ${err instanceof Error ? err.message : 'unknown'}`);
+    }
+    const got = await sjc.getSession(created.sessionId);
+    ok(`getSession → state ${got.state}, updated ${got.updatedAt}`);
   } catch (err) {
-    warn(`serve boot/list failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    warn(`serve client control-plane call failed: ${err instanceof Error ? err.message : 'unknown'}`);
+  } finally {
+    for (const id of createdIds) {
+      try {
+        await fetch(`http://127.0.0.1:${SERVE_PORT}/api/session/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: basic(servePassword) },
+        });
+      } catch {
+        // best-effort cleanup
+      }
+    }
   }
 
   // ---- 2. WS-4097 bridge (real UiServer + real WebSocket client) ----

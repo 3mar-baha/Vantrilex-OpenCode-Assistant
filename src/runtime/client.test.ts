@@ -20,12 +20,12 @@ beforeAll(async () => {
       json(res, 401, { error: 'unauthorized' });
       return;
     }
-    if (req.method === 'POST' && req.url === '/session') {
-      json(res, 201, { sessionId: 'ses_mock1', state: 'creating', createdAt: new Date().toISOString() });
+    if (req.method === 'POST' && req.url === '/api/session') {
+      json(res, 200, { data: { id: 'ses_mock1', state: 'created' } });
       return;
     }
-    if (req.method === 'POST' && req.url === '/session/ses_mock1/prompt') {
-      json(res, 202, { sessionId: 'ses_mock1', state: 'running', receipt: 'evt_r1' });
+    if (req.method === 'POST' && req.url === '/api/session/ses_mock1/prompt') {
+      json(res, 200, { data: { id: 'evt_r1', state: 'running' } });
       return;
     }
     // Live contract (verified): sessions live at /api/session, envelope {data}.
@@ -65,6 +65,7 @@ describe('ServeClient vs mock serve', () => {
     expect(created.sessionId).toBe('ses_mock1');
     const prompted = await client.promptSession(created.sessionId, 'hello', { origin: 'cli', actor: 'test' });
     expect(prompted.receipt).toBe('evt_r1');
+    expect(prompted.state).toBe('running');
     const status = await client.getSession(created.sessionId);
     expect(status.state).toBe('running');
     const list = await client.listSessions();
@@ -117,9 +118,9 @@ describe('ServeClient vs mock serve', () => {
   test('prompt retries reuse a stable idempotency key per (session, text)', async () => {
     const seen: string[] = [];
     const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
-      if (req.method === 'POST' && req.url === '/session/ses_k/prompt') {
+      if (req.method === 'POST' && req.url === '/api/session/ses_k/prompt') {
         seen.push(req.headers['idempotency-key'] as string);
-        json(res, 202, { sessionId: 'ses_k', state: 'running', receipt: 'evt_k' });
+        json(res, 200, { data: { id: 'evt_k', state: 'running' } });
         return;
       }
       json(res, 404, { error: 'not found' });
@@ -142,26 +143,35 @@ describe('ServeClient vs mock serve', () => {
   });
 
 
-  test('per-session controls hit native /api routes with stable keys; shell is fresh-keyed + capped', async () => {
+  test('per-session controls: 204 No Content, model via POST, stable/fresh keys', async () => {
     const seen: Array<{ key: string; method: string; url: string; body: string }> = [];
-    const big = 'x'.repeat(100_000);
     const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
-      const record = (body: string, status: number, payload: unknown): void => {
+      const record = (body: string): void => {
         seen.push({ key: req.headers['idempotency-key'] as string, method: req.method ?? '', url: req.url ?? '', body });
-        json(res, status, payload);
+        res.writeHead(204);
+        res.end(); // no body — canonical control response
       };
       let raw = '';
       req.on('data', (c: Buffer) => {
         raw += c.toString('utf8');
       });
       req.on('end', () => {
-        if (req.url === '/api/session/ses1/agent') return record(raw, 200, { agent: 'build' });
-        if (req.url === '/api/session/ses1/model') return record(raw, 200, { model: 'opus' });
-        if (req.url === '/api/experimental/session/ses1/skill') return record(raw, 200, { ok: true });
-        if (req.url === '/api/session/ses1/shell') return record(raw, 200, { stdout: big, stderr: '', exitCode: 0 });
-        if (req.url === '/api/session/nope/agent') return record(raw, 404, { error: 'gone' });
-        if (req.url === '/api/session/busy/model') return record(raw, 409, { error: 'busy' });
-        return record(raw, 404, { error: 'not found' });
+        if (req.url === '/api/session/ses1/agent') return record(raw);
+        if (req.url === '/api/session/ses1/model') return record(raw);
+        if (req.url === '/api/experimental/session/ses1/skill') return record(raw);
+        if (req.url === '/api/session/ses1/shell') return record(raw);
+        if (req.url === '/api/session/nope/agent') {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        if (req.url === '/api/session/busy/model') {
+          res.writeHead(409);
+          res.end();
+          return;
+        }
+        res.writeHead(404);
+        res.end();
       });
     });
     await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
@@ -170,24 +180,24 @@ describe('ServeClient vs mock serve', () => {
     try {
       const base = `http://127.0.0.1:${addr.port}`;
       const client = new ServeClient(base, 'test-password');
-      const agent = await client.setSessionAgent('ses1' as never, 'build');
-      expect(agent).toMatchObject({ agent: 'build' });
-      const agentAgain = await client.setSessionAgent('ses1' as never, 'build');
-      expect(agentAgain).toMatchObject({ agent: 'build' });
-      const agentKeys = seen.filter((s) => s.url.endsWith('/agent')).map((s) => s.key);
-      expect(agentKeys[0]).toBe(agentKeys[1]); // stable control key
-      expect(JSON.parse(agentKeys.length > 0 ? seen[0]!.body : '{}')).toMatchObject({ agent: 'build' });
 
-      const model = await client.setSessionModel('ses1' as never, 'opus');
-      expect(model).toMatchObject({ model: 'opus' });
+      expect(await client.setSessionAgent('ses1' as never, 'build')).toEqual({ ok: true });
+      expect(await client.setSessionAgent('ses1' as never, 'build')).toEqual({ ok: true });
+      const agentCalls = seen.filter((s) => s.url.endsWith('/agent'));
+      expect(agentCalls[0]!.key).toBe(agentCalls[1]!.key); // stable control key
+      expect(JSON.parse(agentCalls[0]!.body)).toMatchObject({ agent: 'build' });
 
-      const skill = await client.toggleSessionSkill('ses1' as never, 'probe-skill', 'attach');
-      expect(skill).toMatchObject({ ok: true });
+      expect(await client.setSessionModel('ses1' as never, { id: 'opus', providerID: 'opencode' })).toEqual({ ok: true });
+      const modelCall = seen.find((s) => s.url.endsWith('/model'))!;
+      expect(modelCall.method).toBe('POST'); // canonically POST, not PATCH
+      expect(JSON.parse(modelCall.body)).toMatchObject({ model: { id: 'opus', providerID: 'opencode' } });
 
-      const shell1 = await client.execSessionShell('ses1' as never, 'git status');
-      await client.execSessionShell('ses1' as never, 'git status');
-      expect(shell1.exitCode).toBe(0);
-      expect(shell1.stdout).toHaveLength(65536); // capped, never unbounded
+      expect(await client.toggleSessionSkill('ses1' as never, 'probe-skill', 'attach')).toEqual({ ok: true });
+      const skillCall = seen.find((s) => s.url.endsWith('/skill'))!;
+      expect(JSON.parse(skillCall.body)).toMatchObject({ id: 'probe-skill', resume: true });
+
+      expect(await client.execSessionShell('ses1' as never, 'git status')).toEqual({ ok: true });
+      expect(await client.execSessionShell('ses1' as never, 'git status')).toEqual({ ok: true });
       const shellKeys = seen.filter((s) => s.url.endsWith('/shell')).map((s) => s.key);
       expect(shellKeys[0]).not.toBe(shellKeys[1]); // fresh key: exec is not idempotent
 
@@ -195,7 +205,7 @@ describe('ServeClient vs mock serve', () => {
         code: 'SESSION_NOT_FOUND',
         retryable: false,
       });
-      await expect(client.setSessionModel('busy' as never, 'x')).rejects.toMatchObject({
+      await expect(client.setSessionModel('busy' as never, { id: 'x', providerID: 'opencode' })).rejects.toMatchObject({
         code: 'SESSION_BUSY',
         retryable: true,
       });
@@ -203,32 +213,32 @@ describe('ServeClient vs mock serve', () => {
       await new Promise<void>((resolve) => probe.close(() => resolve()));
     }
   });
-  test('dispatchPrompt carries cross-session provenance; 409 maps to retryable SESSION_BUSY', async () => {
+  test('dispatchPrompt sends canonical envelope; 409 maps to retryable SESSION_BUSY', async () => {
     const seen: Array<{ key: string; body: string }> = [];
     const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
-      if (req.method === 'POST' && req.url === '/session/ses_b/prompt') {
+      const capture = (fn: () => void): void => {
         let raw = '';
         req.on('data', (c: Buffer) => {
           raw += c.toString('utf8');
         });
         req.on('end', () => {
           seen.push({ key: req.headers['idempotency-key'] as string, body: raw });
-          json(res, 409, { error: 'session busy' });
+          fn();
         });
-        return;
+      };
+      if (req.method === 'POST' && req.url === '/api/session/ses_b/prompt') {
+        return capture(() => {
+          res.writeHead(409);
+          res.end();
+        });
       }
-      if (req.method === 'POST' && req.url === '/session/ses_ok/prompt') {
-        let raw = '';
-        req.on('data', (c: Buffer) => {
-          raw += c.toString('utf8');
+      if (req.method === 'POST' && req.url === '/api/session/ses_ok/prompt') {
+        return capture(() => {
+          json(res, 200, { data: { id: 'evt_ok', state: 'running' } });
         });
-        req.on('end', () => {
-          seen.push({ key: req.headers['idempotency-key'] as string, body: raw });
-          json(res, 202, { sessionId: 'ses_ok', state: 'running', receipt: 'evt_ok' });
-        });
-        return;
       }
-      json(res, 404, { error: 'not found' });
+      res.writeHead(404);
+      res.end();
     });
     await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
     const addr = probe.address();
@@ -250,8 +260,8 @@ describe('ServeClient vs mock serve', () => {
         taskId: 'task-1',
       });
       expect(sent.receipt).toBe('evt_ok');
-      const body = JSON.parse(seen[seen.length - 1]!.body) as { provenance: Record<string, unknown> };
-      expect(body.provenance).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
+      const body = JSON.parse(seen[seen.length - 1]!.body) as { metadata: Record<string, unknown> };
+      expect(body.metadata).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
       // Same (session, text) but different taskId → different key (no cross-task dedupe).
       const before = seen.length;
       await client.dispatchPrompt('ses_ok' as never, 'report please', {
