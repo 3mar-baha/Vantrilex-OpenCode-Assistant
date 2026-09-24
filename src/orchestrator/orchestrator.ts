@@ -1,6 +1,7 @@
 import { nowIso } from '../common/brands.js';
 import type { SessionId } from '../common/brands.js';
 import { OrchestratorError } from '../common/errors.js';
+import { basicAuth } from '../runtime/client.js';
 import type { DispatchProvenance, ServeClient } from '../runtime/client.js';
 import { requiresConfirmation } from '../voice/brain.js';
 import { DispatchQueue, type DispatchOutcome } from './dispatch.js';
@@ -149,8 +150,8 @@ export class Orchestrator {
   }
 
   private async runStream(baseUrl: string, password: string): Promise<void> {
-    const url = this.cursor === null ? `${baseUrl}/event` : `${baseUrl}/event`;
-    const headers: Record<string, string> = { Accept: 'text/event-stream', Authorization: `Bearer ${password}` };
+    const url = `${baseUrl}/api/event`;
+    const headers: Record<string, string> = { Accept: 'text/event-stream', Authorization: basicAuth(password) };
     if (this.cursor !== null) headers['Last-Event-ID'] = this.cursor;
     const res = await fetch(url, { headers });
     if (res.status === 401 || res.status === 403) throw new Error('FATAL_AUTH');

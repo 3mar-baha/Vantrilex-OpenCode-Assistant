@@ -1,11 +1,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { ServeClient } from './client.js';
+import { basicAuth, ServeClient } from './client.js';
 
 // Mock serve over loopback — docs/11 §11.2 contract-fidelity rule: payloads match
-// the zod-validated shapes production expects.
+// the zod-validated shapes production expects. Auth is HTTP Basic
+// (opencode:<password>), verified live against OpenCode serve 1.18.32.
 let server: Server;
 let baseUrl = '';
+const GOOD_AUTH = basicAuth('test-password');
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -14,7 +16,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 beforeAll(async () => {
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    if (req.headers.authorization !== 'Bearer test-password') {
+    if (req.headers.authorization !== GOOD_AUTH) {
       json(res, 401, { error: 'unauthorized' });
       return;
     }
@@ -26,12 +28,18 @@ beforeAll(async () => {
       json(res, 202, { sessionId: 'ses_mock1', state: 'running', receipt: 'evt_r1' });
       return;
     }
-    if (req.method === 'GET' && req.url === '/session/ses_mock1') {
-      json(res, 200, { sessionId: 'ses_mock1', state: 'running', outcome: 'unknown', updatedAt: new Date().toISOString() });
+    // Live contract (verified): sessions live at /api/session, envelope {data}.
+    if (req.method === 'GET' && req.url === '/api/session/ses_mock1') {
+      json(res, 200, {
+        data: { id: 'ses_mock1', agent: 'explore', model: { id: 'muse-spark' }, state: 'running', time: { updated: Date.now() } },
+      });
       return;
     }
-    if (req.method === 'GET' && req.url === '/session') {
-      json(res, 200, { sessions: [{ sessionId: 'ses_mock1', state: 'running' }] });
+    if (req.method === 'GET' && req.url === '/api/session') {
+      json(res, 200, {
+        data: [{ id: 'ses_mock1', agent: 'explore', model: { id: 'muse-spark' } }],
+        cursor: null,
+      });
       return;
     }
     if (req.method === 'GET' && req.url === '/openapi.json') {
@@ -51,7 +59,7 @@ afterAll(async () => {
 });
 
 describe('ServeClient vs mock serve', () => {
-  test('create → prompt → get → list → probe round-trip', async () => {
+  test('create → prompt → get → list → probe round-trip (Basic auth, /api/session)', async () => {
     const client = new ServeClient(baseUrl, 'test-password');
     const created = await client.createSession('O:/repos/mock');
     expect(created.sessionId).toBe('ses_mock1');
@@ -61,12 +69,44 @@ describe('ServeClient vs mock serve', () => {
     expect(status.state).toBe('running');
     const list = await client.listSessions();
     expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ sessionId: 'ses_mock1', agent: 'explore', model: 'muse-spark' });
+    expect(list[0]!.state).toBe('unknown'); // live shape has no state field — graceful fallback
     expect(await client.probeContract()).toBe('2.9.9-mock');
   });
 
-  test('bad password maps to non-retryable 401', async () => {
+  test('missing Basic credentials → 401 non-retryable', async () => {
+    // A client whose Authorization is deliberately broken still hits the mock
+    // 401 path; we prove it by pointing at the mock with a wrong password.
     const client = new ServeClient(baseUrl, 'wrong');
     await expect(client.createSession('O:/repos/mock')).rejects.toMatchObject({ retryable: false });
+  });
+
+  test('listSessions normalizes {data:[...]} and tolerates malformed rows', async () => {
+    const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.headers.authorization !== GOOD_AUTH) {
+        json(res, 401, { error: 'unauthorized' });
+        return;
+      }
+      json(res, 200, {
+        data: [
+          { id: 'a', agent: 'build', model: { id: 'm1' } },
+          { nope: true }, // malformed → dropped
+          { id: 'c' }, // minimal → state falls back to 'unknown'
+        ],
+      });
+    });
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const addr = probe.address();
+    if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
+    try {
+      const client = new ServeClient(`http://127.0.0.1:${addr.port}`, 'test-password');
+      const list = await client.listSessions();
+      expect(list.map((s) => s.sessionId).sort()).toEqual(['a', 'c']);
+      expect(list.find((s) => s.sessionId === 'a')).toMatchObject({ agent: 'build', model: 'm1' });
+      expect(list.find((s) => s.sessionId === 'c')?.state).toBe('unknown');
+    } finally {
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
   });
 
   test('unknown session maps to SESSION_NOT_FOUND', async () => {

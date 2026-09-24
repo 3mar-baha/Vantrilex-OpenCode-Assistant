@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { nowIso } from '../common/brands.js';
 import type { OrchestratorConfig } from '../common/config.js';
 import { OrchestratorError } from '../common/errors.js';
+import { basicAuth } from '../runtime/client.js';
 
 // Process supervision — docs/26-AGENT-LAUNCHER.md. Windows children are spawned
 // into a Job Object equivalent (CREATE_BREAKAWAY guard + taskkill /T tree-kill);
@@ -33,8 +34,10 @@ export async function probeHealth(port: number, password: string, timeoutMs = 20
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/health`, {
-      headers: { Authorization: `Bearer ${password}` },
+    // Verified live: serve uses HTTP Basic and /health returns SPA HTML, so an
+    // authenticated JSON route is the real health signal.
+    const res = await fetch(`http://127.0.0.1:${port}/api/session`, {
+      headers: { Authorization: basicAuth(password) },
       signal: controller.signal,
     });
     return res.ok;
@@ -123,7 +126,7 @@ export class SupervisedLauncher implements Launcher {
   private async probeContract(port: number, password: string): Promise<string> {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/openapi.json`, {
-        headers: { Authorization: `Bearer ${password}` },
+        headers: { Authorization: basicAuth(password) },
       });
       if (!res.ok) return 'unknown';
       const doc = (await res.json()) as { info?: { version?: string } };

@@ -1,11 +1,58 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { nowIso } from '../common/brands.js';
 import type { SessionId } from '../common/brands.js';
 import { OrchestratorError } from '../common/errors.js';
 
 // Typed serve client — docs/03 §3.4, docs/06 §6.2, docs/25 §25.2. Raw fetch with
 // zod-validated responses (the documented equivalent of @opencode/client calls);
 // idempotency keys are reused on retry so create/prompt never double-apply.
+//
+// Auth (verified live 2026-09-24, OpenCode serve 1.18.32): opencode serve uses
+// HTTP Basic `opencode:<password>` — Bearer is rejected. All serve traffic uses
+// `basicAuth()`; sessions live at the /api/session family, envelope {data:...}.
+export function basicAuth(password: string): string {
+  return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
+}
+
+/** Internal session contract (id, agent, model, state) — normalized from /api/session. */
+export interface SessionInfo {
+  readonly sessionId: string;
+  readonly state: string;
+  readonly agent?: string;
+  readonly model?: string;
+}
+
+/** /api/session list/get envelope: { data: row | rows, cursor? }. */
+function unwrapData(payload: unknown): unknown {
+  if (typeof payload === 'object' && payload !== null && 'data' in payload) {
+    return (payload as { data: unknown }).data;
+  }
+  return payload;
+}
+
+function normalizeSessionRow(row: unknown): SessionInfo | null {
+  if (typeof row !== 'object' || row === null) return null;
+  const r = row as Record<string, unknown>;
+  const id = r['id'];
+  if (typeof id !== 'string' || id.length === 0) return null;
+  const agent = typeof r['agent'] === 'string' ? r['agent'] : undefined;
+  const modelRaw = r['model'];
+  const model =
+    typeof modelRaw === 'object' && modelRaw !== null && typeof (modelRaw as Record<string, unknown>)['id'] === 'string'
+      ? String((modelRaw as Record<string, unknown>)['id'])
+      : typeof modelRaw === 'string'
+        ? modelRaw
+        : undefined;
+  const state = typeof r['state'] === 'string' && r['state'].length > 0 ? r['state'] : 'unknown';
+  return {
+    sessionId: id,
+    state,
+    ...(agent !== undefined ? { agent } : {}),
+    ...(model !== undefined ? { model } : {}),
+  };
+}
+
 const SessionCreateResponse = z.object({
   sessionId: z.string().min(1),
   state: z.string(),
@@ -18,17 +65,13 @@ const PromptResponse = z.object({
   receipt: z.string(),
 });
 
-const SessionStatus = z.object({
-  sessionId: z.string().min(1),
-  state: z.string(),
-  outcome: z.string(),
-  updatedAt: z.string().datetime(),
-  lastEventId: z.string().optional(),
-});
-
-const SessionList = z.object({
-  sessions: z.array(z.object({ sessionId: z.string().min(1), state: z.string() })),
-});
+export interface SessionStatusInfo {
+  readonly sessionId: string;
+  readonly state: string;
+  readonly outcome: string;
+  readonly updatedAt: string;
+  readonly lastEventId?: string;
+}
 
 // Phase 3 native per-session controls — shapes mirror @opencode/client 1.18.x
 // (/api/session/{id}/agent POST, /model PATCH, /experimental/.../skill POST,
@@ -84,7 +127,7 @@ export class ServeClient {
   private async request(path: string, init: RequestInit, idempotencyKey?: string): Promise<Response> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.password}`,
+      Authorization: basicAuth(this.password),
     };
     if (idempotencyKey !== undefined) headers['Idempotency-Key'] = idempotencyKey;
     const controller = new AbortController();
@@ -149,11 +192,21 @@ export class ServeClient {
     return { state: parsed.state, receipt: parsed.receipt };
   }
 
-  async getSession(sessionId: SessionId): Promise<z.infer<typeof SessionStatus>> {
-    const res = await this.request(`/session/${sessionId}`, { method: 'GET' });
+  async getSession(sessionId: SessionId): Promise<SessionStatusInfo> {
+    const res = await this.request(`/api/session/${sessionId}`, { method: 'GET' });
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.get failed with HTTP ${res.status}`);
-    return SessionStatus.parse(await res.json());
+    const row = unwrapData(await res.json());
+    const r = (typeof row === 'object' && row !== null ? row : {}) as Record<string, unknown>;
+    const time = (typeof r['time'] === 'object' && r['time'] !== null ? r['time'] : {}) as Record<string, unknown>;
+    const updated = typeof time['updated'] === 'number' ? new Date(time['updated']).toISOString() : nowIso();
+    return {
+      sessionId: typeof r['id'] === 'string' ? r['id'] : sessionId,
+      state: typeof r['state'] === 'string' ? r['state'] : 'unknown',
+      outcome: typeof r['outcome'] === 'string' ? r['outcome'] : 'unknown',
+      updatedAt: updated,
+      ...(typeof r['lastEventId'] === 'string' ? { lastEventId: r['lastEventId'] } : {}),
+    };
   }
 
   /**
@@ -240,10 +293,14 @@ export class ServeClient {
     };
   }
 
-  async listSessions(): Promise<Array<{ sessionId: string; state: string }>> {
-    const res = await this.request('/session', { method: 'GET' });
+  async listSessions(): Promise<SessionInfo[]> {
+    const res = await this.request('/api/session', { method: 'GET' });
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.list failed with HTTP ${res.status}`);
-    return SessionList.parse(await res.json()).sessions;
+    const data = unwrapData(await res.json());
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((row) => normalizeSessionRow(row))
+      .filter((row): row is SessionInfo => row !== null);
   }
 
   async probeContract(): Promise<string> {

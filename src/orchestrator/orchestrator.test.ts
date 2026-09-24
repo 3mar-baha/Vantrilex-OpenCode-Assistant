@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { ServeClient } from '../runtime/client.js';
+import { basicAuth, ServeClient } from '../runtime/client.js';
 import { Orchestrator } from './orchestrator.js';
 import { SpeechQueue } from './queue.js';
 
@@ -33,9 +33,14 @@ describe('Orchestrator vs mock SSE', () => {
 
   beforeAll(async () => {
     server = createServer((req, res) => {
-      if (req.url === '/session') {
+      if (req.headers.authorization !== basicAuth('test-password')) {
+        res.writeHead(401);
+        res.end();
+        return;
+      }
+      if (req.url === '/api/session') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ sessions: [] }));
+        res.end(JSON.stringify({ data: [] }));
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
