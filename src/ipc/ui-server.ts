@@ -124,10 +124,42 @@ export class UiServer {
 
   private bearerOk(req: IncomingMessage): boolean {
     const header = req.headers.authorization;
-    if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
-    const presented = Buffer.from(header.slice('Bearer '.length));
+    if (typeof header === 'string' && header.startsWith('Bearer ')) {
+      const presented = Buffer.from(header.slice('Bearer '.length));
+      const expected = Buffer.from(this.token);
+      if (presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected)) return true;
+    }
+    // Browser WebSocket clients cannot set upgrade headers, so the renderer
+    // carries the bearer as an extra subprotocol token instead. Either path
+    // must match exactly; the echoed protocol is always voice-ui.v1.
+    const proto = req.headers['sec-websocket-protocol'];
+    const offered = typeof proto === 'string' ? proto.split(',').map((s) => s.trim()) : [];
     const expected = Buffer.from(this.token);
-    return presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected);
+    return offered.some((entry) => {
+      const candidate = Buffer.from(entry);
+      return candidate.byteLength === expected.byteLength && timingSafeEqual(candidate, expected);
+    });
+  }
+
+  private lastSeqOf(req: IncomingMessage): number {
+    const header = req.headers['last-seq'];
+    if (typeof header === 'string') {
+      const parsed = Number.parseInt(header, 10);
+      if (Number.isInteger(parsed) && parsed >= 0) return parsed;
+    }
+    // Browsers cannot set upgrade headers either; the renderer resumes with
+    // ?lastSeq=N. Sequence numbers are not secret.
+    try {
+      const url = new URL(req.url ?? '', 'http://127.0.0.1');
+      const query = url.searchParams.get('lastSeq');
+      if (query !== null) {
+        const parsed = Number.parseInt(query, 10);
+        if (Number.isInteger(parsed) && parsed >= 0) return parsed;
+      }
+    } catch {
+      // malformed URL — fall through to NaN
+    }
+    return Number.NaN;
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex): void {
@@ -135,7 +167,13 @@ export class UiServer {
     const wants = typeof proto === 'string' ? proto.split(',').map((s) => s.trim()) : [];
     const key = req.headers['sec-websocket-key'];
     const version = req.headers['sec-websocket-version'];
-    if (req.url !== UI_WS_PATH || typeof key !== 'string' || version !== '13' || !wants.includes(UI_SUBPROTOCOL)) {
+    let pathname = '';
+    try {
+      pathname = new URL(req.url ?? '', 'http://127.0.0.1').pathname;
+    } catch {
+      pathname = '';
+    }
+    if (pathname !== UI_WS_PATH || typeof key !== 'string' || version !== '13' || !wants.includes(UI_SUBPROTOCOL)) {
       socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
@@ -173,8 +211,7 @@ export class UiServer {
     });
     socket.write(encodeTextFrame(JSON.stringify(hello)));
 
-    const lastSeqRaw = req.headers['last-seq'];
-    const lastSeq = typeof lastSeqRaw === 'string' ? Number.parseInt(lastSeqRaw, 10) : Number.NaN;
+    const lastSeq = this.lastSeqOf(req);
     if (Number.isInteger(lastSeq) && lastSeq >= 0 && lastSeq < this.seq) {
       for (const frame of this.resume) {
         if (frame.seq > lastSeq) socket.write(encodeTextFrame(JSON.stringify(frame)));

@@ -61,7 +61,7 @@ function rawSocket(port: number): Promise<{ write: (b: Buffer) => void; readText
 }
 
 const WS_KEY = 'dGhlIHNhbXBsZSBub25jZQ==';
-function handshake(token?: string, extraHeaders: string[] = []): Buffer {
+function handshake(token?: string, extraHeaders: string[] = [], protocols = 'voice-ui.v1'): Buffer {
   const lines = [
     'GET /v1/ui HTTP/1.1',
     'Host: 127.0.0.1',
@@ -69,7 +69,7 @@ function handshake(token?: string, extraHeaders: string[] = []): Buffer {
     'Connection: Upgrade',
     `Sec-WebSocket-Key: ${WS_KEY}`,
     'Sec-WebSocket-Version: 13',
-    'Sec-WebSocket-Protocol: voice-ui.v1',
+    `Sec-WebSocket-Protocol: ${protocols}`,
   ];
   if (token !== undefined) lines.push(`Authorization: Bearer ${token}`);
   lines.push(...extraHeaders, '', '');
@@ -129,9 +129,37 @@ describe('UiServer authentication (fail-closed)', () => {
     expect(server.connectionCount).toBe(1);
     sock.end();
   });
+
+  test('bearer carried as subprotocol token (browser path) upgrades + hello', async () => {
+    const server = new UiServer({ token: 'secret-token', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake(undefined, [], 'voice-ui.v1, secret-token'));
+    const hello = JSON.parse(await sock.readText()) as { type: string };
+    expect(hello.type).toBe('hello');
+    expect(server.connectionCount).toBe(1);
+    sock.end();
+  });
 });
 
 describe('UiServer resume + broadcast', () => {
+  test('?lastSeq= query replays missed frames (browser resume path)', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    server.broadcast({ type: 'event', eventId: 'e-1', state: 'running' });
+    server.broadcast({ type: 'event', eventId: 'e-2', state: 'complete' });
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    const raw = handshake('t').toString('utf8').replace('GET /v1/ui ', 'GET /v1/ui?lastSeq=1 ');
+    sock.write(Buffer.from(raw, 'utf8'));
+    await sock.readText(); // hello
+    const replayed = JSON.parse(await sock.readText()) as { eventId: string; seq: number };
+    expect(replayed.eventId).toBe('e-2');
+    expect(replayed.seq).toBe(2);
+    sock.end();
+  });
+
   test('Last-Seq replays missed frames, dedupe by eventId at the edge', async () => {
     const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
     servers.push(server);
