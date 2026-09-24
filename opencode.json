@@ -5,6 +5,32 @@
       "context7": {
         "type": "local",
         "command": ["cmd", "/c", "npx", "-y", "@upstash/context7-mcp"]
+      },
+      "github": {
+        "type": "local",
+        "command": ["cmd", "/c", "npx", "-y", "@modelcontextprotocol/server-github"],
+        "environment": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+        }
+      },
+      "filesystem": {
+        "type": "local",
+        "command": [
+          "cmd",
+          "/c",
+          "npx",
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "O:\\opencode-Vantrilex"
+        ]
+      },
+      "memory": {
+        "type": "local",
+        "command": ["cmd", "/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
+      },
+      "sequential-thinking": {
+        "type": "local",
+        "command": ["cmd", "/c", "npx", "-y", "@modelcontextprotocol/server-sequential-thinking"]
       }
     }
   },

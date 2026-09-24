@@ -153,6 +153,32 @@ reports are tracked. Decision record: `09` ADR-008.*
 | P0 runtime patch | FR-12 confirmation gate wired (`ScoringAdvisor` + [0.35,0.70)/≥0.70 T2 escalation), poisoned-session self-heal, `maxInflight` burst shedding | `634bd94` | tsc 0, lint 0, 54 unit tests green (10 new), 3/3 live green |
 | Stress audit | 66-case adversarial battery + 120-sample latency profile + concurrency probe | `108c52a` | 49 pass / 14 FAIL / 3 ambiguous; p50 39.07 / p99 95.18 ms; 20-way p50 2609 ms; verdict CONDITIONAL |
 | Forensic audit | code-first audit of all `src/`, manifests, gates; docs reconciliation; master dossier | *this ledger entry* | tsc 0, lint 0, 54 + 3/3 live; pyright clean on pipeline files; `dossier/PROJECT_MASTER_DOSSIER.md` (>500 lines) |
+| **GATE 1 `/arm`** | Harvested real components from `vantrilex-registry/` (421 KB catalog): 9 skills, 7 agents, 3 hook assets, 3 MCP servers wired, 4 replacement-skill resolutions | a9b2335 → *this ledger entry* | 9/9 skills + 7/7 agents + 3/3 hooks on disk with non-zero bytes; `opencode.json` valid with 5 MCP servers; runtime booted filesystem/memory/sequential-thinking live |
+
+**GATE 1 (`/arm`) materialization detail (2026-09-24):**
+
+- **Skills (drop-in, `.opencode/skills/<id>/SKILL.md`):** `clean-code-guard`,
+  `test-guard`, `docs-guard` (`amElnagdy/guard-skills`); `tdd`
+  (`mattpocock/skills`); `frontend-design`, `canvas-design` (`anthropics/skills`);
+  `design-taste-frontend` (`leonxlnx/taste-skill`); `frontend-patterns`,
+  `security-review` (`worldflowai/everything-claude-code`). `frontend-patterns`
+  and `security-review` already existed as provisioned skills, so the runtime
+  shows them under their existing ids rather than as new duplicates.
+- **Agents (`mode: subagent`, Claude-only frontmatter keys stripped):**
+  `desktop-app-engineer`, `voice-ai-integration-engineer`,
+  `rust-refactoring-specialist`, `frontend-developer`, `ui-designer`,
+  `test-automation-engineer` (`msitarzewski/agency-agents`), `code-reviewer`
+  (`worldflowai/everything-claude-code`). The registry's generic `architect` was
+  **not** copied — the repo-native `architect` is retained.
+- **Hooks (`.opencode/hooks/`, reference only):** `claude-code-hooks.json`,
+  `session-start.sh`, `pre-compact.sh` retained as the porting spec because
+  OpenCode v2 has no `.opencode/hooks/` loader; see `.opencode/hooks/README.md`.
+  No enforcement is claimed.
+- **MCP (`opencode.json` → `mcp.servers`):** preserved `context7` + `github`; added
+  `filesystem` (scoped to `O:\opencode-Vantrilex`), `memory`,
+  `sequential-thinking` (`@modelcontextprotocol/*`, v2026.8.31). All connected.
+- **Plugins:** registry plugin descriptors resolve to Claude Code plugins and are
+  not OpenCode v2-compatible; none fabricated. Porting deferred.
 
 **Findings fixed in-flight (each was release-blocking):**
 

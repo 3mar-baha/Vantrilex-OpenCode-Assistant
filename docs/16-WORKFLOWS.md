@@ -569,6 +569,71 @@ Derived from §16.8B. Each item is a pass/fail gate; a failing gate blocks the n
 | Dirty tree at sync | `git status` non-clean | Commit or stash intentionally; never leave ambiguous state |
 | Secret committed | `.env`/vault blob in `git show` | `git rm --cached`, rotate the secret, record incident in `14-RUNBOOK.md` pattern |
 
+## 16.10 — `/arm` Ingested Toolchain (GATE 1)
+
+GATE 1 armed the desktop-companion roadmap by harvesting real components from the
+Vantrilex catalog registry (`vantrilex-registry/`, 421 KB manifest). Harvested
+descriptors were resolved to their `Raw URL` sources and materialized into the
+runtime. Every file below exists on disk with non-zero size (verified
+2026-09-24).
+
+### Skills (`.opencode/skills/<id>/SKILL.md`)
+
+| Skill | Source | Governs |
+|---|---|---|
+| `clean-code-guard` | `amElnagdy/guard-skills` | Step 1–6 code changes (SOLID/DRY/KISS/LLM failure modes) |
+| `test-guard` | `amElnagdy/guard-skills` | Test quality gate for every step's vitest additions |
+| `docs-guard` | `amElnagdy/guard-skills` | Docs-vs-code drift in Steps 3 and GOV rows |
+| `tdd` | `mattpocock/skills` | Steps 1–2 test-first implementation |
+| `frontend-design` | `anthropics/skills` | Step 6 UI/matrix aesthetics |
+| `design-taste-frontend` | `leonxlnx/taste-skill` | Step 6 anti-templated visual direction |
+| `canvas-design` | `anthropics/skills` | Step 6 48×48 matrix art direction |
+| `frontend-patterns` | `worldflowai/everything-claude-code` | Step 6 React/Tauri renderer patterns |
+| `security-review` | `worldflowai/everything-claude-code` | Steps 4–5 WS auth, telemetry redaction, vault |
+
+### Agents (`.opencode/agents/<name>.md`)
+
+| Agent | Source | Role in roadmap |
+|---|---|---|
+| `desktop-app-engineer` | `msitarzewski/agency-agents` | Tauri v2 shell, IPC isolation, signing (Steps 1, 4) |
+| `voice-ai-integration-engineer` | `msitarzewski/agency-agents` | AudioIn/RNNoise/STT pipeline (Step 2) |
+| `rust-refactoring-specialist` | `msitarzewski/agency-agents` | Rust shell hardening (Steps 1, 6) |
+| `frontend-developer` | `msitarzewski/agency-agents` | React/Vite/Tailwind renderer (Step 6) |
+| `ui-designer` | `msitarzewski/agency-agents` | Glassmorphic surfaces, icons, micro-interactions |
+| `test-automation-engineer` | `msitarzewski/agency-agents` | E2E harness for the six steps |
+| `code-reviewer` | `worldflowai/everything-claude-code` | Post-change review gate on every step |
+
+> Repo-native `architect`, `laya-ml-engineer`, and `ts-reviewer` agents are retained
+> unchanged; the registry's generic `architect` was **not** copied to avoid
+> clobbering the repo-tailored one.
+
+### Hooks (`.opencode/hooks/`) — reference, not auto-loaded
+
+`claude-code-hooks.json`, `session-start.sh`, and `pre-compact.sh` were imported
+from `worldflowai/everything-claude-code`. **OpenCode v2 has no `.opencode/hooks/`
+loader**; these use the Claude Code hook schema and are retained as the porting
+specification. See `.opencode/hooks/README.md` for the porting map (tool
+transforms for post-edit typecheck/format/console-log scans; `session.hook` for
+compaction and context). No enforcement claim is made until a plugin is written
+and tested against `@opencode-ai/plugin@1.18.31`.
+
+### MCP servers (`opencode.json` → `mcp.servers`)
+
+| Server | Package | Purpose |
+|---|---|---|
+| `context7` | `@upstash/context7-mcp` | Live library docs (pre-existing) |
+| `github` | `@modelcontextprotocol/server-github` | Repo/PR/issue automation (pre-existing, preserved) |
+| `filesystem` | `@modelcontextprotocol/server-filesystem` (scoped to project root) | Scoped file read/write |
+| `memory` | `@modelcontextprotocol/server-memory` | Persistent knowledge-graph memory |
+| `sequential-thinking` | `@modelcontextprotocol/server-sequential-thinking` | Structured multi-step reasoning |
+
+### Plugins
+
+The registry's plugin descriptors resolve to `anthropics/claude-plugins-official`
+(Claude Code plugins) and are **not** OpenCode v2-compatible. No plugin was
+fabricated. OpenCode v2 lifecycle extension is deferred to a tested
+`@opencode-ai/plugin` implementation.
+
 ---
 
 *End of `16-WORKFLOWS.md`. Next canonical file: `17-CATALOG-INGESTION.md` (Batch 3).*
