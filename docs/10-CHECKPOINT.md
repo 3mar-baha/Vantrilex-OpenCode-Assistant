@@ -157,6 +157,7 @@ reports are tracked. Decision record: `09` ADR-008.*
 | **GATE 2 shell+bridge+portals** | Voxaura scaffold (`apps/desktop/`), zero-dep WS-4097 bridge (`src/ipc/`), 3 floating portals, Kareem/Nour view-model remediation, oxlint + `test:vantrilex` | d846370 → *this ledger entry* (7 commits) | `test:vantrilex` exit 0: tsc 0, eslint 0, oxlint 0/0, root vitest 71 + desktop 13; vite build 147.91 kB (47.88 gzip); bridge hello round-trips live |
 | **GATE 3 identity+matrix** | Crest, Lucide icon cluster + action bar, 48×48 worker + reducer, procedural earcons, tokens | 5cc7a9d → *this ledger entry* (2 commits + review fixes) | Renderer 44/44; vite build 160.09 kB (51.59 gzip); code-reviewer 7 blockers + 8 majors all closed with regression tests |
 | **GATE 4 runtime+rag** | Abort/purge + fail-closed gate + stable idempotency; telemetry bus; Silero VAD live; Levantine RAG + Tier-D; daemon→matrix surface | 93d7de7 → *this ledger entry* (5 commits) | Aggregate exit 0 (root 110 + desktop 44); LAYA_LIVE 3/3; SILERO_LIVE green (silence 0.044); telemetry rotation + injection-shape tests green |
+| **GATE 5 e2e+release** | Playwright E2E vs real UiServer; icons; memory probe; release checklist; Tauri manifests | ecb84ae → *this ledger entry* | E2E 5/5 Chromium; renderer bundle 160.09 kB; daemon RSS 407.9 MB with both models (≈1.1 GB system nominal vs 3.0 GB ceiling); icons incl. icns/ico; `cargo check` exit 0, zero errors |
 
 **GATE 1 (`/arm`) materialization detail (2026-09-24):**
 

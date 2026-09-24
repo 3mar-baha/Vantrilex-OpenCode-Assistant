@@ -38,7 +38,7 @@ remain specified; enforcement lands with the Tauri shell runtime.
 |---|---|---|
 | Renderer bundle | DONE | `apps/desktop/dist/` (gitignored), sizes above |
 | Icons | DONE | `src-tauri/icons/` incl. `icon.icns` + `icon.ico` via `tauri icon` |
-| Tauri manifests | VALID | `tauri.conf.json` + `capabilities/default.json` parse; awaiting `cargo check` |
+| Tauri manifests | VALID | `tauri.conf.json` + `capabilities/default.json` parse; `cargo check` exit 0, zero errors (1m22s, tauri v2.11.6 dep tree) |
 | NSIS `.exe` | BLOCKED (environment) | No MSVC linker (`cl`/`link` absent), no `makensis` on this machine |
 | AppImage / `.deb` | BLOCKED (environment) | Linux toolchain absent; Docker present — build via Tauri Linux image |
 

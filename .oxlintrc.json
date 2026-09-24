@@ -9,6 +9,7 @@
     ".hf_cache/**",
     "ml/checkpoints/**",
     "coverage/**",
-    "apps/desktop/dist/**"
+    "apps/desktop/dist/**",
+    "**/target/**"
   ]
 }
