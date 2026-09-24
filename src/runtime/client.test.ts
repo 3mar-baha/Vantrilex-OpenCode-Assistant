@@ -100,4 +100,67 @@ describe('ServeClient vs mock serve', () => {
       await new Promise<void>((resolve) => probe.close(() => resolve()));
     }
   });
+
+  test('dispatchPrompt carries cross-session provenance; 409 maps to retryable SESSION_BUSY', async () => {
+    const seen: Array<{ key: string; body: string }> = [];
+    const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'POST' && req.url === '/session/ses_b/prompt') {
+        let raw = '';
+        req.on('data', (c: Buffer) => {
+          raw += c.toString('utf8');
+        });
+        req.on('end', () => {
+          seen.push({ key: req.headers['idempotency-key'] as string, body: raw });
+          json(res, 409, { error: 'session busy' });
+        });
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/session/ses_ok/prompt') {
+        let raw = '';
+        req.on('data', (c: Buffer) => {
+          raw += c.toString('utf8');
+        });
+        req.on('end', () => {
+          seen.push({ key: req.headers['idempotency-key'] as string, body: raw });
+          json(res, 202, { sessionId: 'ses_ok', state: 'running', receipt: 'evt_ok' });
+        });
+        return;
+      }
+      json(res, 404, { error: 'not found' });
+    });
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const addr = probe.address();
+    if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
+    try {
+      const client = new ServeClient(`http://127.0.0.1:${addr.port}`, 'test-password');
+      await expect(
+        client.dispatchPrompt('ses_b' as never, 'report please', {
+          origin: 'voice',
+          actor: 'voxaura',
+          fromSessionId: 'ses_a' as never,
+          taskId: 'task-1',
+        }),
+      ).rejects.toMatchObject({ code: 'SESSION_BUSY', retryable: true });
+      const sent = await client.dispatchPrompt('ses_ok' as never, 'report please', {
+        origin: 'voice',
+        actor: 'voxaura',
+        fromSessionId: 'ses_a' as never,
+        taskId: 'task-1',
+      });
+      expect(sent.receipt).toBe('evt_ok');
+      const body = JSON.parse(seen[seen.length - 1]!.body) as { provenance: Record<string, unknown> };
+      expect(body.provenance).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
+      // Same (session, text) but different taskId → different key (no cross-task dedupe).
+      const before = seen.length;
+      await client.dispatchPrompt('ses_ok' as never, 'report please', {
+        origin: 'voice',
+        actor: 'voxaura',
+        taskId: 'task-2',
+      });
+      expect(seen.length).toBe(before + 1);
+      expect(seen[seen.length - 1]!.key).not.toBe(seen[seen.length - 2]!.key);
+    } finally {
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
+  });
 });

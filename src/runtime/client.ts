@@ -36,18 +36,25 @@ export interface Provenance {
   readonly actor: string;
 }
 
+/** Cross-session dispatch provenance (Phase 2): who asked, from where, for what task. */
+export interface DispatchProvenance extends Provenance {
+  readonly fromSessionId?: SessionId;
+  readonly taskId?: string;
+}
+
 export class ServeClient {
   constructor(
     private readonly baseUrl: string,
     private readonly password: string,
   ) {}
 
-  /** Stable prompt keys: retries of the same (session, text) reuse one UUID so
-   * serve-side idempotency actually dedupes. Bounded to 256 entries. */
+  /** Stable prompt keys: retries of the same (session, text[, task]) reuse one
+   * UUID so serve-side idempotency actually dedupes. Bounded to 256 entries.
+   * taskId participates so distinct tasks with identical text never collide. */
   private readonly promptKeys = new Map<string, string>();
 
-  private promptKey(sessionId: SessionId, text: string): string {
-    const slot = `${sessionId}\n${text}`;
+  private promptKey(sessionId: SessionId, text: string, taskId?: string): string {
+    const slot = `${sessionId}\n${text}\n${taskId ?? ''}`;
     const existing = this.promptKeys.get(slot);
     if (existing !== undefined) return existing;
     const fresh = randomUUID();
@@ -89,11 +96,39 @@ export class ServeClient {
   }
 
   async promptSession(sessionId: SessionId, text: string, provenance: Provenance): Promise<{ state: string; receipt: string }> {
+    return this.promptWithKey(sessionId, text, provenance, this.promptKey(sessionId, text));
+  }
+
+  /**
+   * Cross-session dispatch (Phase 2): same transport as promptSession, but the
+   * provenance names the origin session/task for audit, and HTTP 409 maps to
+   * retryable SESSION_BUSY for the backpressure queue.
+   */
+  async dispatchPrompt(
+    sessionId: SessionId,
+    text: string,
+    provenance: DispatchProvenance,
+  ): Promise<{ state: string; receipt: string }> {
+    return this.promptWithKey(
+      sessionId,
+      text,
+      provenance,
+      this.promptKey(sessionId, text, provenance.taskId),
+    );
+  }
+
+  private async promptWithKey(
+    sessionId: SessionId,
+    text: string,
+    provenance: Provenance,
+    key: string,
+  ): Promise<{ state: string; receipt: string }> {
     const res = await this.request(`/session/${sessionId}/prompt`, {
       method: 'POST',
       body: JSON.stringify({ text, provenance }),
-    }, this.promptKey(sessionId, text));
+    }, key);
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
+    if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.prompt failed with HTTP ${res.status}`);
     const parsed = PromptResponse.parse(await res.json());
     return { state: parsed.state, receipt: parsed.receipt };
