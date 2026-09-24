@@ -35,7 +35,18 @@ const control = http.createServer((req, res) => {
     send(200, received);
     return;
   }
-  if (req.method === 'POST' && req.url === '/kill') {
+
+  if (req.method === 'POST' && req.url === '/inventory') {
+    let raw = '';
+    req.on('data', (c) => {
+      raw += c;
+    });
+    req.on('end', () => {
+      const { sessions } = JSON.parse(raw);
+      send(200, server.publishInventory(sessions));
+    });
+    return;
+  }  if (req.method === 'POST' && req.url === '/kill') {
     void server.close().then(() => send(200, { killed: true }));
     return;
   }
@@ -56,3 +67,4 @@ const control = http.createServer((req, res) => {
 await server.start(4097);
 await new Promise((resolve) => control.listen(CONTROL_PORT, '127.0.0.1', resolve));
 console.log(`e2e stub daemon: ws=4097 control=${CONTROL_PORT}`);
+
