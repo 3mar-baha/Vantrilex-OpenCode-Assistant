@@ -161,6 +161,7 @@ reports are tracked. Decision record: `09` ADR-008.*
 | **Phase 1 inventory+siblings** | SessionInventory poller (diffs, no-overlap, degraded-on-error); sibling registry + heartbeat files; sweeper coordination | 0842c65, e1f30ad | Aggregate exit 0 (root 120 + desktop 44); 10 new hermetic tests; sweeper.ts backward-compatible re-export |
 | **Phase 2 dispatch+switch** | dispatchPrompt + SESSION_BUSY; backpressure queue; switchSession bridge + shell chip; active session target | 5dcf526, 575a53d, acef673 | Aggregate exit 0 (root 129 + desktop 47); 14 new tests; chip renders surfaced sessions only |
 | **Phase 2b inventory+E2E** | InventoryFrame stream + publish/resume + composer; bridge validation + sessions store; inventory E2E vs real server | 8a99aa4, af866c0, fa58abc | Aggregate exit 0 (root 135 + desktop 50); E2E 6/6; 15 new tests |
+| **Phase 3 controls+shell+sweeper** | Native agent/model/skill/shell client methods; bridge vocabulary + badge; crash-safe sweeper; controls E2E | 1068e98, eb637cf, 5ba70c7, fb13aa2 | Aggregate exit 0 (root 140 + desktop 52); E2E 7/7; live serve probed (global pre-routing auth, paths unverified live — reconciliation follow-up); daemon onCommand execution follow-up |
 
 **GATE 1 (`/arm`) materialization detail (2026-09-24):**
 
