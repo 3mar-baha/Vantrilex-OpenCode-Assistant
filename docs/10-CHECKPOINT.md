@@ -154,6 +154,7 @@ reports are tracked. Decision record: `09` ADR-008.*
 | Stress audit | 66-case adversarial battery + 120-sample latency profile + concurrency probe | `108c52a` | 49 pass / 14 FAIL / 3 ambiguous; p50 39.07 / p99 95.18 ms; 20-way p50 2609 ms; verdict CONDITIONAL |
 | Forensic audit | code-first audit of all `src/`, manifests, gates; docs reconciliation; master dossier | *this ledger entry* | tsc 0, lint 0, 54 + 3/3 live; pyright clean on pipeline files; `dossier/PROJECT_MASTER_DOSSIER.md` (>500 lines) |
 | **GATE 1 `/arm`** | Harvested real components from `vantrilex-registry/` (421 KB catalog): 9 skills, 7 agents, 3 hook assets, 3 MCP servers wired, 4 replacement-skill resolutions | a9b2335 → *this ledger entry* | 9/9 skills + 7/7 agents + 3/3 hooks on disk with non-zero bytes; `opencode.json` valid with 5 MCP servers; runtime booted filesystem/memory/sequential-thinking live |
+| **GATE 2 shell+bridge+portals** | Voxaura scaffold (`apps/desktop/`), zero-dep WS-4097 bridge (`src/ipc/`), 3 floating portals, Kareem/Nour view-model remediation, oxlint + `test:vantrilex` | d846370 → *this ledger entry* (7 commits) | `test:vantrilex` exit 0: tsc 0, eslint 0, oxlint 0/0, root vitest 71 + desktop 13; vite build 147.91 kB (47.88 gzip); bridge hello round-trips live |
 
 **GATE 1 (`/arm`) materialization detail (2026-09-24):**
 
