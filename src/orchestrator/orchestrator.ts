@@ -1,7 +1,9 @@
 import { nowIso } from '../common/brands.js';
 import type { SessionId } from '../common/brands.js';
-import type { ServeClient } from '../runtime/client.js';
+import { OrchestratorError } from '../common/errors.js';
+import type { DispatchProvenance, ServeClient } from '../runtime/client.js';
 import { requiresConfirmation } from '../voice/brain.js';
+import { DispatchQueue, type DispatchOutcome } from './dispatch.js';
 import { LifecycleEventType, parseSseFrame, type EventEnvelope } from './events.js';
 import { Ledger } from './ledger.js';
 import { SpeechQueue } from './queue.js';
@@ -19,7 +21,10 @@ export interface Speaker {
 export type LifecycleSignal =
   | { readonly kind: 'enqueued'; readonly tier: 'T1' | 'T2'; readonly eventId: string }
   | { readonly kind: 'spoken'; readonly tier: 'T1' | 'T2' }
-  | { readonly kind: 'aborted'; readonly dropped: number; readonly reason: string };
+  | { readonly kind: 'aborted'; readonly dropped: number; readonly reason: string }
+  | { readonly kind: 'session-switched'; readonly sessionId: SessionId }
+  | { readonly kind: 'dispatched'; readonly sessionId: SessionId; readonly receipt: string }
+  | { readonly kind: 'dispatch-queued'; readonly sessionId: SessionId };
 
 /** Advisory System-1 gate (M7 Laya). Absent advisor = prior behavior, unchanged. */
 export interface SpeechAdvisor {
@@ -64,6 +69,49 @@ export class Orchestrator {
 
   get speechQueue(): SpeechQueue {
     return this.queue;
+  }
+
+  /** Active dispatch target for cross-session work (Phase 2). Unset until switched. */
+  get activeSessionId(): SessionId | undefined {
+    return this.activeSession;
+  }
+
+  private activeSession: SessionId | undefined;
+  private readonly dispatches = new DispatchQueue();
+
+  /**
+   * Retarget the active session. Accept-and-record: unknown ids are accepted
+   * (the inventory may not have polled yet) with a ledger-grade signal for audit.
+   */
+  switchSession(sessionId: SessionId): void {
+    this.activeSession = sessionId;
+    this.onLifecycle?.({ kind: 'session-switched', sessionId });
+  }
+
+  /**
+   * Cross-session dispatch (Phase 2): try immediately; on busy/transient
+   * failure queue for backpressure retry. Returns the disposition.
+   */
+  async dispatchTo(
+    sessionId: SessionId,
+    text: string,
+    provenance: DispatchProvenance,
+  ): Promise<'sent' | 'queued'> {
+    try {
+      const sent = await this.client.dispatchPrompt(sessionId, text, provenance);
+      this.onLifecycle?.({ kind: 'dispatched', sessionId, receipt: sent.receipt });
+      return 'sent';
+    } catch (err) {
+      const retryable = err instanceof OrchestratorError ? err.retryable : true;
+      if (!retryable || !this.dispatches.enqueue({ sessionId, text, provenance })) throw err;
+      this.onLifecycle?.({ kind: 'dispatch-queued', sessionId });
+      return 'queued';
+    }
+  }
+
+  /** Drain due backpressure dispatches (called by the poll loop and tests). */
+  async drainDispatches(): Promise<DispatchOutcome[]> {
+    return this.dispatches.drainDue(this.client);
   }
 
   stop(): void {
