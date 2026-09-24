@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { PERSONA_VOICE, type PersonaId, type VoiceId } from '../common/brands.js';
 
 // Speech policy — docs/02 §2.2/C2/C10. Single decision point answering "may the
@@ -51,6 +52,21 @@ export const DEFAULT_SETTINGS: UiSettings = {
   muteOnCall: true,
 };
 
+/** Disk is untrusted: corrupt/legacy ui-settings.json falls back to defaults. */
+const SettingsFileSchema = z.object({
+  persona: z.enum(['kareem', 'nour']),
+  voice: z.enum(['male-default', 'female-toggle']),
+  captureMode: z.enum(['push-to-talk', 'wake-word']),
+  briefings: z.enum(['bluf', 'full']),
+  quietHours: z.string(),
+  muteOnCall: z.boolean(),
+});
+
+const VOICE_PERSONA: Record<VoiceId, PersonaId> = {
+  'male-default': 'kareem',
+  'female-toggle': 'nour',
+};
+
 export const TEST_SPEECH_PHRASE = 'أمورك تمام، هذا اختبار الصوت';
 
 export class SettingsStore {
@@ -62,8 +78,8 @@ export class SettingsStore {
       const path = join(dir, 'ui-settings.json');
       if (existsSync(path)) {
         try {
-          const parsed = JSON.parse(readFileSync(path, 'utf8') as string) as Partial<UiSettings>;
-          this.settings = { ...DEFAULT_SETTINGS, ...parsed };
+          const parsed = SettingsFileSchema.safeParse(JSON.parse(readFileSync(path, 'utf8') as string));
+          this.settings = parsed.success ? parsed.data : { ...DEFAULT_SETTINGS };
         } catch {
           this.settings = { ...DEFAULT_SETTINGS };
         }
@@ -78,9 +94,11 @@ export class SettingsStore {
   update(patch: Partial<UiSettings>): UiSettings {
     this.settings = { ...this.settings, ...patch };
     // Persona wins: a persona change re-keys the transport voice so the two
-    // can never disagree. A lone voice patch is honored but persona stays.
+    // can never disagree. A lone voice patch reverse-maps to its persona.
     if (patch.persona !== undefined) {
       this.settings = { ...this.settings, voice: PERSONA_VOICE[patch.persona] };
+    } else if (patch.voice !== undefined) {
+      this.settings = { ...this.settings, persona: VOICE_PERSONA[patch.voice] };
     }
     if (this.dir !== undefined) {
       mkdirSync(this.dir, { recursive: true });

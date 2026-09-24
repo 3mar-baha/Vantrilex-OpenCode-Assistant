@@ -22,7 +22,11 @@ export function PortalShell({ label, onClose, children }: PortalShellProps): JSX
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const root = ref.current;
-    const first = root?.querySelector<HTMLElement>(FOCUSABLE);
+    // Focus the dialog itself when nothing focusable exists inside.
+    if (root !== null && root.querySelector(FOCUSABLE) === null && !root.hasAttribute('tabindex')) {
+      root.setAttribute('tabindex', '-1');
+    }
+    const first = root?.querySelector<HTMLElement>(FOCUSABLE) ?? root;
     first?.focus();
 
     const onKey = (ev: KeyboardEvent): void => {
@@ -33,7 +37,7 @@ export function PortalShell({ label, onClose, children }: PortalShellProps): JSX
       }
       if (ev.key !== 'Tab' || root === null) return;
       const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-        (el) => !el.hasAttribute('disabled'),
+        (el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true',
       );
       if (items.length === 0) return;
       const firstItem = items[0] as HTMLElement;

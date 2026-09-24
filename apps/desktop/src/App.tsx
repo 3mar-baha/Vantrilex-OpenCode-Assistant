@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { VoxauraBridge, UI_WS_URL } from './bridge/ws.js';
+import { VoxauraBridge } from './bridge/ws.js';
 import { ActionBar } from './components/actionbar/ActionBar.js';
 import { Crest } from './components/brand/Crest.js';
 import { PixelMatrix } from './matrix/PixelMatrix.js';
@@ -31,6 +31,13 @@ export function App(): JSX.Element {
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
   const [matrix, setMatrix] = useState<MatrixState>(0);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
+  const cmdCounter = useRef(0);
+
+  const nextCmdId = (): string => {
+    cmdCounter.current += 1;
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+    return `cmd-${Date.now()}-${cmdCounter.current}-${Math.floor(Math.random() * 1e6)}`;
+  };
 
   useEffect(() => {
     const token = import.meta.env['VOICE_RUNTIME_IPC_TOKEN'] as string | undefined;
@@ -50,13 +57,19 @@ export function App(): JSX.Element {
     };
   }, []);
 
+  const handleSelectPersona = (id: 'kareem' | 'nour'): void => {
+    setPersona(id);
+    setMatrix(id === 'kareem' ? 3 : 4);
+    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setPersona', persona: id });
+  };
+
   const handleAction = (action: ClusterAction, minutes?: number): void => {
     if (action === 'settings') {
       setSettingsOpen(true);
       return;
     }
     if (action === 'abort') setMatrix(0); // snap to idle; G4 drives states from bridge events
-    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `cmd-${Date.now()}`;
+    const id = nextCmdId();
     if (action === 'mute') {
       void bridgeRef.current?.sendCommand(
         minutes !== undefined ? { id, kind: 'mute', minutes } : { id, kind: 'mute' },
@@ -88,17 +101,10 @@ export function App(): JSX.Element {
             { id: 'nour', label: 'Nour (نور)', selected: persona === 'nour' },
           ]}
           onSelectTab={setActiveTab}
-          onSelectPersona={setPersona}
+          onSelectPersona={handleSelectPersona}
           onClose={() => setSettingsOpen(false)}
         />
       )}
-      <ConfirmPortalHost url={UI_WS_URL} />
     </div>
   );
-}
-
-// Placeholder host: G4 wires live T2 confirmations through the bridge.
-function ConfirmPortalHost({ url }: { url: string }): JSX.Element | null {
-  void url;
-  return null;
 }

@@ -1,4 +1,4 @@
-import { PERSONA_LABEL, PERSONA_VOICE, type PersonaId, type VoiceId } from '../common/brands.js';
+import { PERSONA_LABEL, PERSONA_VOICE, VOICE_IDS, type PersonaId, type VoiceId } from '../common/brands.js';
 import { TEST_SPEECH_PHRASE, type UiSettings } from './settings.js';
 
 // Settings modal view-model — docs/02 §2.7, ADR-010 (O4 remediation). Pure data
@@ -27,20 +27,17 @@ export interface SettingsModal {
   readonly credentialPools: Readonly<Record<'groq' | 'fish', { readonly keyCount: number }>>;
 }
 
-const FISH_IDS: Record<VoiceId, string> = {
-  'male-default': '5b90451e0cd34b2788841744af7c55c3',
-  'female-toggle': '88c0375e46fa4e3b929755fa077ca5ad',
-};
-
 export function buildSettingsModal(
   settings: UiSettings,
   pools: Readonly<Record<'groq' | 'fish', { readonly keyCount: number }>>,
 ): SettingsModal {
-  const persona: PersonaOption[] = (Object.keys(PERSONA_VOICE) as PersonaId[]).map((id) => ({
+  // Explicit order — never rely on Object.keys enumeration.
+  const order: readonly PersonaId[] = ['kareem', 'nour'];
+  const persona: PersonaOption[] = order.map((id) => ({
     id,
     label: PERSONA_LABEL[id],
     voice: PERSONA_VOICE[id],
-    fishVoiceId: FISH_IDS[PERSONA_VOICE[id]],
+    fishVoiceId: VOICE_IDS[PERSONA_VOICE[id]],
     selected: settings.persona === id,
   }));
   return {

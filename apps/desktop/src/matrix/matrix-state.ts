@@ -5,7 +5,7 @@
 export const MATRIX_SIZE = 48;
 /** Per-frame lerp factor: converges within 15 frames (250 ms @60fps). */
 export const LERP_ALPHA = 0.3;
-export type MatrixState = 0 | 1 | 2 | 3 | 4; // IDLE | USER | THINKING | KAREEM | NOOR
+export type MatrixState = 0 | 1 | 2 | 3 | 4; // IDLE | USER | THINKING | KAREEM | NOUR
 export type Noise2D = (x: number, y: number) => number;
 
 const BASE_HEX: Record<MatrixState, string> = {
@@ -61,15 +61,17 @@ function mix(a: number, b: number, t: number): number {
 /**
  * Compute the target color field for a state. `t` is seconds, `energy` is
  * 0..1 vocal energy (USER) or intensity. `reducedMotion` freezes time.
+ * Writes into `out` (which must hold MATRIX_SIZE²×3 floats) and returns it —
+ * the worker reuses two buffers so no frame ever allocates.
  */
-export function targetFor(
+export function targetInto(
+  out: Float32Array,
   state: MatrixState,
   t: number,
   energy: number,
   noise2D: Noise2D,
   reducedMotion: boolean,
 ): Float32Array {
-  const field = createField();
   const time = reducedMotion ? 0 : t;
   const [br, bg, bb] = hexToRgb(BASE_HEX[state]);
   const [ar, ag, ab] = hexToRgb(ACCENT_HEX[state]);
@@ -117,10 +119,21 @@ export function targetFor(
           break;
         }
       }
-      writePixel(field, x, y, mix(br, ar, k!), mix(bg, ag, k!), mix(bb, ab, k!));
+      writePixel(out, x, y, mix(br, ar, k!), mix(bg, ag, k!), mix(bb, ab, k!));
     }
   }
-  return field;
+  return out;
+}
+
+/** Allocating convenience wrapper for tests and one-shot renders. */
+export function targetFor(
+  state: MatrixState,
+  t: number,
+  energy: number,
+  noise2D: Noise2D,
+  reducedMotion: boolean,
+): Float32Array {
+  return targetInto(createField(), state, t, energy, noise2D, reducedMotion);
 }
 
 /** Ease the live field toward the target in place. Returns the same buffer. */

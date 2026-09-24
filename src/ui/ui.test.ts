@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -75,5 +75,19 @@ describe('settings store + modal', () => {
     expect(modal.persona.find((p) => p.id === 'kareem')?.fishVoiceId).toBe('5b90451e0cd34b2788841744af7c55c3');
     expect(modal.testSpeech.phrase.length).toBeGreaterThan(0);
     expect(modal.credentialPools.groq.keyCount).toBe(3);
+  });
+
+  test('corrupt ui-settings.json falls back to defaults (disk is untrusted)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ui-'));
+    writeFileSync(join(dir, 'ui-settings.json'), JSON.stringify({ persona: 'x', voice: 99 }));
+    const loaded = new SettingsStore(dir);
+    expect(loaded.current.persona).toBe('kareem');
+    expect(loaded.current.voice).toBe('male-default');
+  });
+
+  test('lone voice patch reverse-maps to its persona', () => {
+    const store = new SettingsStore();
+    store.update({ voice: 'female-toggle' });
+    expect(store.current.persona).toBe('nour');
   });
 });

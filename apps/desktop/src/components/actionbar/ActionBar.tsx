@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconCluster, type ClusterAction } from '../sidebar/IconCluster.js';
 
 // Floating pill action bar — mute presets, hard abort, mic deafen, settings.
-// Timed mutes arm a local countdown and re-arm automatically on expiry.
+// Timed mutes arm a local countdown; manual unmute or remute clears it.
 export interface ActionBarProps {
   readonly onAction: (action: ClusterAction, minutes?: number) => void;
 }
@@ -14,13 +14,32 @@ export function ActionBar({ onAction }: ActionBarProps): JSX.Element {
   const [deafened, setDeafened] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [customMinutes, setCustomMinutes] = useState('');
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  const clearMuteTimer = (): void => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
 
   const applyMute = (minutes?: number): void => {
+    clearMuteTimer();
     setMuted(true);
     setPickerOpen(false);
     onAction('mute', minutes);
     if (minutes !== undefined) {
-      setTimeout(() => setMuted(false), minutes * 60_000).unref?.();
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        setMuted(false);
+      }, minutes * 60_000);
     }
   };
 
@@ -30,6 +49,7 @@ export function ActionBar({ onAction }: ActionBarProps): JSX.Element {
       return;
     }
     if (action === 'mute') {
+      clearMuteTimer();
       setMuted(false);
       onAction('mute');
       return;

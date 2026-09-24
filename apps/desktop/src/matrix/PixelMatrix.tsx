@@ -32,7 +32,7 @@ export function PixelMatrix({ state, energy = 0, reducedMotion = false }: PixelM
       worker = new Worker(new URL('./matrix.worker.ts', import.meta.url), { type: 'module' });
       const offscreen = canvas.transferControlToOffscreen();
       workerRef.current = worker;
-      post(worker, { kind: 'init' }, [offscreen as unknown as Transferable]);
+      post(worker, { kind: 'init', canvas: offscreen }, [offscreen as unknown as Transferable]);
     } catch {
       workerRef.current = null;
     }

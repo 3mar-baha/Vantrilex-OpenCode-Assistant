@@ -43,6 +43,18 @@ export interface SocketLike {
   onerror: ((this: unknown, ev: unknown) => void) | null;
 }
 
+/** Minimal hello shape guard — a misconfigured daemon must not show green. */
+function isWellFormedHello(hello: HelloMsg): boolean {
+  return (
+    typeof hello.nodePid === 'number' &&
+    hello.servePort === 4096 &&
+    typeof hello.layaReady === 'boolean' &&
+    Number.isInteger(hello.seq) &&
+    (hello.seq as number) >= 0 &&
+    typeof hello.contractVersion === 'string'
+  );
+}
+
 /** Staggered reconnect: base doubling with jitter, hard cap. Pure — tested. */
 export function computeBackoff(
   attempt: number,
@@ -55,6 +67,11 @@ export function computeBackoff(
   return Math.min(grown + rand() * jitterMs, capMs);
 }
 
+/** Append a query param without breaking an existing query string. */
+export function withQuery(base: string, key: string, value: string): string {
+  return base.includes('?') ? `${base}&${key}=${value}` : `${base}?${key}=${value}`;
+}
+
 export interface BridgeOptions {
   readonly url?: string;
   readonly token: string;
@@ -63,6 +80,9 @@ export interface BridgeOptions {
   readonly onHello?: (hello: HelloMsg) => void;
   readonly onEvent?: (event: EventMsg) => void;
   readonly onRefusal?: (info: { expected: string; got: string }) => void;
+  readonly onErrorFrame?: (detail: string) => void;
+  /** Fired when a hello arrives with a lower seq — the daemon restarted. */
+  readonly onGap?: () => void;
   readonly onClose?: () => void;
 }
 
@@ -87,7 +107,7 @@ export class VoxauraBridge {
   connect(): void {
     if (this.disposed || this.refused || this.socket !== null) return;
     const base = this.opts.url ?? UI_WS_URL;
-    const url = this.lastSeq >= 0 ? `${base}?lastSeq=${this.lastSeq}` : base;
+    const url = this.lastSeq >= 0 ? withQuery(base, 'lastSeq', String(this.lastSeq)) : base;
     const create = this.opts.createSocket ?? ((u, p) => new WebSocket(u, p) as unknown as SocketLike);
     const socket = create(url, [UI_SUBPROTOCOL, this.opts.token]);
     this.socket = socket;
@@ -130,6 +150,7 @@ export class VoxauraBridge {
 
   dispose(): void {
     this.disposed = true;
+    this.attempt = 0;
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -159,7 +180,24 @@ export class VoxauraBridge {
     const msg = parsed as Record<string, unknown>;
     if (msg['type'] === 'hello') {
       const hello = msg as unknown as HelloMsg;
-      if (typeof hello.seq === 'number' && hello.seq >= 0) this.lastSeq = Math.max(this.lastSeq, hello.seq);
+      // Daemon restart detection: seq runs backward only across restarts.
+      // Reset the cursor instead of swallowing the new epoch forever.
+      if (typeof hello.seq === 'number' && hello.seq < this.lastSeq) {
+        this.lastSeq = hello.seq;
+        this.opts.onGap?.();
+      } else if (typeof hello.seq === 'number' && hello.seq >= 0) {
+        this.lastSeq = Math.max(this.lastSeq, hello.seq);
+      }
+      if (!isWellFormedHello(hello)) {
+        this.refused = true;
+        this.opts.onRefusal?.({ expected: this.opts.contractVersion, got: 'malformed-hello' });
+        try {
+          this.socket?.close();
+        } catch {
+          // best-effort
+        }
+        return;
+      }
       if (hello.contractVersion !== this.opts.contractVersion) {
         this.refused = true;
         this.opts.onRefusal?.({ expected: this.opts.contractVersion, got: String(hello.contractVersion) });
@@ -181,14 +219,20 @@ export class VoxauraBridge {
     }
     if (msg['type'] === 'ack') {
       const id = (msg as { id?: unknown })['id'];
+      const ok = (msg as { ok?: unknown })['ok'];
       if (typeof id === 'string') {
         const entry = this.pending.get(id);
         if (entry !== undefined) {
           this.pending.delete(id);
           clearTimeout(entry.timer);
-          entry.resolve(true);
+          entry.resolve(ok !== false);
         }
       }
+      return;
+    }
+    if (msg['type'] === 'error') {
+      const detail = (msg as { detail?: unknown })['detail'];
+      this.opts.onErrorFrame?.(typeof detail === 'string' ? detail : 'unknown error');
     }
   }
 

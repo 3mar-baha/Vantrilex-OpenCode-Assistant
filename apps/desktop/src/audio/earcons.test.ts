@@ -38,4 +38,27 @@ describe('renderEarcon', () => {
     expect(peak).toBeGreaterThan(0.1);
     expect(peak).toBeLessThanOrEqual(0.5);
   });
+
+  test('triangle and sine waveshapes are audibly distinct (crest factor)', () => {
+    const crest = (kind: 'arm' | 'abort'): number => {
+      const data = renderEarcon(stubContext(16000), kind).getChannelData(0);
+      const peak = Math.max(...[...data].map((v) => Math.abs(v)));
+      const rms = Math.sqrt(data.reduce((s, v) => s + v * v, 0) / data.length);
+      return peak / rms;
+    };
+    const triangleCrest = crest('arm');
+    const sineCrest = crest('abort');
+    expect(triangleCrest).toBeGreaterThan(sineCrest + 0.15);
+  });
+
+  test('swept glide crosses zero at the expected rate (no aliasing jumps)', () => {
+    const data = renderEarcon(stubContext(16000), 'kareem-done').getChannelData(0);
+    let crossings = 0;
+    for (let i = 1; i < data.length; i += 1) {
+      if ((data[i - 1]! <= 0 && data[i]! > 0) || (data[i - 1]! >= 0 && data[i]! < 0)) crossings += 1;
+    }
+    // ~823 Hz mean over 220 ms ≈ 181 cycles ≈ 362 crossings (±15%).
+    expect(crossings).toBeGreaterThan(300);
+    expect(crossings).toBeLessThan(420);
+  });
 });

@@ -1,6 +1,6 @@
 // Voxaura earcons — procedural Web Audio cues, zero audio assets.
-// Rendered once into cached AudioBuffers; the abort contract cuts scheduled
-// earcons through the same AudioContext as TTS playback.
+// Each cue owns its sources on a dedicated context; abort() stops tracked
+// sources individually (never suspends a shared context).
 export type EarconKind = 'arm' | 'disarm' | 'abort' | 'kareem-done' | 'nour-done';
 
 interface EarconRecipe {
@@ -22,6 +22,20 @@ export function earconRecipe(kind: EarconKind): EarconRecipe {
   return RECIPES[kind];
 }
 
+/** Triangle via 4-term Fourier — close enough for a 40 ms click. */
+function triangle(phase: number): number {
+  let v = 0;
+  for (let k = 0; k < 4; k += 1) {
+    const n = 2 * k + 1;
+    v += (k % 2 === 0 ? 1 : -1) * (Math.sin(n * phase) / (n * n));
+  }
+  return v * (8 / (Math.PI * Math.PI));
+}
+
+function osc(type: OscillatorType, phase: number): number {
+  return type === 'triangle' ? triangle(phase) : Math.sin(phase);
+}
+
 /** Render a cue into a buffer — pure DSP, runs in tests without hardware. */
 export function renderEarcon(
   ctx: { sampleRate: number; createBuffer: (ch: number, len: number, rate: number) => { getChannelData: (ch: number) => Float32Array } },
@@ -31,18 +45,21 @@ export function renderEarcon(
   const length = Math.floor((ctx.sampleRate * recipe.durationMs) / 1000);
   const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
   const data = buffer.getChannelData(0);
+  // Phase integrates instantaneous frequency — a swept glide, not a glitch.
+  let phase = 0;
   for (let i = 0; i < length; i += 1) {
     const t = i / length;
     const freq = recipe.frequency + (recipe.endFrequency - recipe.frequency) * t;
-    const phase = (2 * Math.PI * freq * i) / ctx.sampleRate;
+    phase += (2 * Math.PI * freq) / ctx.sampleRate;
     const envelope = Math.sin(Math.PI * t) ** 2; // raised-cosine, click-free
-    data[i] = Math.sin(phase) * envelope * 0.5;
+    data[i] = osc(recipe.type, phase) * envelope * 0.5;
   }
   return buffer;
 }
 
 export class EarconPlayer {
   private readonly cache = new Map<EarconKind, AudioBuffer>();
+  private readonly live = new Set<AudioBufferSourceNode>();
   private context: AudioContext | null = null;
 
   constructor(private readonly factory: () => AudioContext = () => new AudioContext()) {}
@@ -55,6 +72,7 @@ export class EarconPlayer {
 
   play(kind: EarconKind): void {
     if (this.context === null) return; // locked: silent by design
+    if (this.context.state === 'suspended') void this.context.resume();
     let buffer = this.cache.get(kind);
     if (buffer === undefined) {
       const rendered = renderEarcon(
@@ -70,11 +88,20 @@ export class EarconPlayer {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.connect(this.context.destination);
+    this.live.add(source);
+    source.onended = () => void this.live.delete(source);
     source.start();
   }
 
-  /** Abort path: drop every scheduled source by suspending the context. */
+  /** Abort path: stop tracked sources individually; the context stays usable. */
   abort(): void {
-    if (this.context !== null) void this.context.suspend();
+    for (const source of [...this.live]) {
+      try {
+        source.stop();
+      } catch {
+        // already ended — onended cleans up
+      }
+    }
+    this.live.clear();
   }
 }

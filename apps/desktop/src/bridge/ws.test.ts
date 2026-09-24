@@ -132,6 +132,71 @@ describe('VoxauraBridge handshake', () => {
     bridge.dispose();
   });
 
+  test('daemon restart resets the cursor and fires onGap', () => {
+    const gaps: number[] = [];
+    const events: EventMsg[] = [];
+    let socket!: FakeSocket;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onEvent: (e) => void events.push(e),
+      onGap: () => void gaps.push(1),
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    socket.peerText(JSON.stringify(hello(50)));
+    socket.peerText(JSON.stringify({ type: 'event', seq: 51, eventId: 'e-51', state: 'running' }));
+    socket.peerText(JSON.stringify(hello(0))); // daemon restarted: epoch reset
+    socket.peerText(JSON.stringify({ type: 'event', seq: 1, eventId: 'e-1', state: 'running' }));
+    expect(gaps).toHaveLength(1);
+    expect(events.map((e) => e.eventId)).toEqual(['e-51', 'e-1']);
+    bridge.dispose();
+  });
+
+  test('malformed hello is refused, never live', () => {
+    const refusals: Array<{ expected: string; got: string }> = [];
+    let socket!: FakeSocket;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onRefusal: (info) => void refusals.push(info),
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    socket.peerText(JSON.stringify({ type: 'hello', contractVersion: '3.1.0', seq: 0 }));
+    expect(refusals).toEqual([{ expected: '3.1.0', got: 'malformed-hello' }]);
+    expect(socket.closed).toBe(true);
+    bridge.dispose();
+  });
+
+  test('ack ok:false resolves false; error frames surface via onErrorFrame', async () => {
+    const errors: string[] = [];
+    let socket!: FakeSocket;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onErrorFrame: (detail) => void errors.push(detail),
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    socket.peerText(JSON.stringify(hello(0)));
+    const failed = bridge.sendCommand({ id: 'cmd-f', kind: 'mute' });
+    socket.peerText(JSON.stringify({ type: 'ack', id: 'cmd-f', ok: false }));
+    await expect(failed).resolves.toBe(false);
+    socket.peerText(JSON.stringify({ type: 'error', detail: 'unknown command' }));
+    expect(errors).toEqual(['unknown command']);
+    bridge.dispose();
+  });
+
   test('events advance the cursor; commands resolve on ack', async () => {
     const events: EventMsg[] = [];
     let socket!: FakeSocket;

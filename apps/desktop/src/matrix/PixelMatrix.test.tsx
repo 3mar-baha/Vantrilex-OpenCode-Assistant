@@ -43,4 +43,35 @@ describe('PixelMatrix host', () => {
     });
     expect(document.body.querySelector('[data-testid="pixel-matrix"]')?.getAttribute('data-state')).toBe('4');
   });
+
+  test('init message carries the canvas in payload AND transfer list', () => {
+    const posted: Array<{ msg: Record<string, unknown>; transfer: unknown[] }> = [];
+    class FakeWorker {
+      constructor(
+        readonly url: URL,
+        readonly opts: { type: string },
+      ) {}
+      postMessage(msg: Record<string, unknown>, transfer: unknown[]): void {
+        posted.push({ msg, transfer });
+      }
+      terminate(): void {}
+    }
+    const realWorker = (globalThis as Record<string, unknown>)['Worker'];
+    const fakeOffscreen = { width: 0, height: 0 };
+    const proto = HTMLCanvasElement.prototype as unknown as Record<string, unknown>;
+    const realTransfer = proto['transferControlToOffscreen'];
+    (globalThis as Record<string, unknown>)['Worker'] = FakeWorker;
+    proto['transferControlToOffscreen'] = () => fakeOffscreen;
+    try {
+      mount(2);
+      const init = posted.find((p) => (p.msg['kind'] as string) === 'init');
+      expect(init).toBeDefined();
+      expect(init!.msg['canvas']).toBe(fakeOffscreen);
+      expect(init!.transfer).toContain(fakeOffscreen);
+    } finally {
+      (globalThis as Record<string, unknown>)['Worker'] = realWorker;
+      if (realTransfer === undefined) delete proto['transferControlToOffscreen'];
+      else proto['transferControlToOffscreen'] = realTransfer;
+    }
+  });
 });
