@@ -143,6 +143,32 @@ describe('ServeClient vs mock serve', () => {
   });
 
 
+  test('prompt envelope is version-selectable (flat canonical vs nested 1.18.x)', async () => {
+    const bodies: string[] = [];
+    const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
+      let raw = '';
+      req.on('data', (c: Buffer) => {
+        raw += c.toString('utf8');
+      });
+      req.on('end', () => {
+        bodies.push(raw);
+        json(res, 200, { data: { id: 'm1', state: 'running' } });
+      });
+    });
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const addr = probe.address();
+    if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
+    try {
+      const base = `http://127.0.0.1:${addr.port}`;
+      await new ServeClient(base, 'test-password').promptSession('s' as never, 'hi', { origin: 'cli', actor: 't' });
+      await new ServeClient(base, 'test-password', { promptEnvelope: 'nested' }).promptSession('s' as never, 'hi', { origin: 'cli', actor: 't' });
+      expect(JSON.parse(bodies[0]!)).toMatchObject({ text: 'hi' }); // flat (canonical 2.0.x)
+      expect(JSON.parse(bodies[1]!)).toMatchObject({ prompt: { text: 'hi' } }); // nested (1.18.x)
+    } finally {
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
+  });
+
   test('per-session controls: 204 No Content, model via POST, stable/fresh keys', async () => {
     const seen: Array<{ key: string; method: string; url: string; body: string }> = [];
     const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -260,9 +286,9 @@ describe('ServeClient vs mock serve', () => {
         taskId: 'task-1',
       });
       expect(sent.receipt).toBe('evt_ok');
-      const body = JSON.parse(seen[seen.length - 1]!.body) as { prompt: { text: string; metadata: Record<string, unknown> } };
-      expect(body.prompt.text).toBe('report please');
-      expect(body.prompt.metadata).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
+      const body = JSON.parse(seen[seen.length - 1]!.body) as { text: string; metadata: Record<string, unknown> };
+      expect(body.text).toBe('report please');
+      expect(body.metadata).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
       // Same (session, text) but different taskId → different key (no cross-task dedupe).
       const before = seen.length;
       await client.dispatchPrompt('ses_ok' as never, 'report please', {

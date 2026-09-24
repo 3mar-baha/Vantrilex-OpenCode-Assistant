@@ -4,8 +4,7 @@
 // Secrets are never printed: only counts, lengths, and statuses.
 // Run: node scripts/live_console_test.ts
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { UiServer, UI_SUBPROTOCOL } from '../dist/ipc/index.js';
 import { VOICE_IDS } from '../dist/common/brands.js';
@@ -21,9 +20,23 @@ const BRIDGE_PORT = 4097;
 const CONTRACT_VERSION = '3.1.0';
 const PHRASE =
   'هلا عمر، منظومة فوكسورا شغالة بكفاءة، والوكيلين كريم ونور جاهزين لإدارة المشاريع.';
-const OPENCODE_BIN =
-  process.env['OPENCODE_BIN'] ??
-  'C:\\Users\\omarb\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe';
+// Canonical runtime: the desktop-bundled 2.0.12 CLI owns the shared data dir
+// (the npm `latest` is 1.18.32, whose schema differs — no published 2.x on npm).
+function resolveOpencodeBin(): string {
+  if (process.env['OPENCODE_BIN'] !== undefined) return process.env['OPENCODE_BIN'];
+  const desktopCli = join(process.env['APPDATA'] ?? '', 'ai.opencode.desktop', 'cli');
+  if (existsSync(desktopCli)) {
+    const versions = readdirSync(desktopCli)
+      .filter((name) => /^\d+\.\d+\.\d+$/.test(name))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const v of versions) {
+      const exe = join(desktopCli, v, 'opencode-cli.exe');
+      if (existsSync(exe)) return exe;
+    }
+  }
+  return 'C:\\Users\\omarb\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe';
+}
+const OPENCODE_BIN = resolveOpencodeBin();
 
 const line = (s = ''): void => console.log(s);
 const rule = (title: string): void => {
@@ -59,16 +72,13 @@ interface DiscoveredSession {
 }
 
 function spawnServe(password: string): ChildProcess {
-  // Isolated data dir: the shared DB is owned by a newer desktop build and
-  // lacks the `session_input` table this CLI expects (verified live). A fresh
-  // XDG_DATA_HOME makes serve run its own migrations.
-  const dataHome = process.env['VOX_OPENCODE_DATA'] ?? join(tmpdir(), 'voxaura-live-data');
-  mkdirSync(dataHome, { recursive: true });
+  // Unified shared data dir: the canonical 2.0.x CLI owns ~/.local/share/opencode
+  // and its schema includes session_input. No XDG isolation.
   const child = spawn(
     OPENCODE_BIN,
     ['serve', '--port', String(SERVE_PORT), '--hostname', '127.0.0.1'],
     {
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password, XDG_DATA_HOME: dataHome },
+      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     },
@@ -139,6 +149,7 @@ async function main(): Promise<void> {
     const agentList = await serveFetch('/api/agent', servePassword);
     const agents = ((agentList.json as { data?: unknown[] })?.data ?? []) as Array<Record<string, unknown>>;
     info(`/api/agent → HTTP ${agentList.status}, ${agents.length} agent(s) available`);
+    const agentId = typeof agents[0]?.['id'] === 'string' ? String(agents[0]!['id']) : 'build';
 
     // create → prompt → controls → get, all through the canonical client.
     const created = await sjc.createSession(process.cwd());
@@ -152,14 +163,12 @@ async function main(): Promise<void> {
       warn(`promptSession → ${err instanceof Error ? err.message : 'unknown'} (live-build behavior; SDK contract unchanged)`);
     }
 
-    const firstAgent = agents.find((a) => typeof a['id'] === 'string');
-    if (firstAgent !== undefined) {
-      try {
-        const ack = await sjc.setSessionAgent(created.sessionId, String(firstAgent['id']));
-        ok(`setSessionAgent("${String(firstAgent['id'])}") → 204 ack ${JSON.stringify(ack)}`);
-      } catch (err) {
-        warn(`setSessionAgent → ${err instanceof Error ? err.message : 'unknown'}`);
-      }
+    const firstAgent = { id: agentId };
+    try {
+      const ack = await sjc.setSessionAgent(created.sessionId, firstAgent.id);
+      ok(`setSessionAgent("${firstAgent.id}") → 204 ack ${JSON.stringify(ack)}`);
+    } catch (err) {
+      warn(`setSessionAgent → ${err instanceof Error ? err.message : 'unknown'}`);
     }
     try {
       const m = await sjc.setSessionModel(created.sessionId, {

@@ -73,7 +73,6 @@ export interface Provenance {
   readonly transcript?: string;
   readonly actor: string;
 }
-
 /** Cross-session dispatch provenance (Phase 2): who asked, from where, for what task. */
 export interface DispatchProvenance extends Provenance {
   readonly fromSessionId?: SessionId;
@@ -84,7 +83,18 @@ export class ServeClient {
   constructor(
     private readonly baseUrl: string,
     private readonly password: string,
+    private readonly options: { readonly promptEnvelope?: 'flat' | 'nested' } = {},
   ) {}
+
+  /**
+   * Prompt body shape differs by server generation (verified live):
+   *  - 2.0.x (canonical desktop build): flat `{ text, metadata, delivery }`
+   *  - 1.18.x (npm `latest`):           nested `{ prompt: { text, … } }`
+   * Default is the canonical 2.0.x flat envelope.
+   */
+  private get promptEnvelope(): 'flat' | 'nested' {
+    return this.options.promptEnvelope ?? 'flat';
+  }
 
   /** Stable prompt keys: retries of the same (session, text[, task]) reuse one
    * UUID so serve-side idempotency actually dedupes. Bounded to 256 entries.
@@ -175,12 +185,14 @@ export class ServeClient {
     provenance: Provenance,
     key: string,
   ): Promise<{ state: string; receipt: string }> {
-    // Canonical prompt envelope (server schema verified live): the body is
-    // { prompt: PromptInput } where PromptInput carries text/metadata/delivery.
-    // The transport key travels in the Idempotency-Key header.
+    // Envelope is server-generation dependent (see promptEnvelope).
+    const payload =
+      this.promptEnvelope === 'flat'
+        ? { text, metadata: provenance, delivery: 'steer' }
+        : { prompt: { text, metadata: provenance, delivery: 'steer' } };
     const res = await this.request(`/api/session/${sessionId}/prompt`, {
       method: 'POST',
-      body: JSON.stringify({ prompt: { text, metadata: provenance, delivery: 'steer' } }),
+      body: JSON.stringify(payload),
     }, key);
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
     if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
