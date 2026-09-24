@@ -8,7 +8,7 @@ function stubSession(logit: number) {
   return {
     inputNames: ['input', 'state', 'sr'],
     outputNames: ['output', 'stateN'],
-    run: async (_feeds: Record<string, unknown>) => ({
+    run: async () => ({
       output: { data: new Float32Array([logit]), dims: [1, 1] },
       stateN: { data: new Float32Array(2 * 1 * 128), dims: [2, 1, 128] },
     }),
