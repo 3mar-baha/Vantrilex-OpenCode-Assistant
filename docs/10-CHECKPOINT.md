@@ -162,6 +162,23 @@ reports are tracked. Decision record: `09` ADR-008.*
 | **Phase 2 dispatch+switch** | dispatchPrompt + SESSION_BUSY; backpressure queue; switchSession bridge + shell chip; active session target | 5dcf526, 575a53d, acef673 | Aggregate exit 0 (root 129 + desktop 47); 14 new tests; chip renders surfaced sessions only |
 | **Phase 2b inventory+E2E** | InventoryFrame stream + publish/resume + composer; bridge validation + sessions store; inventory E2E vs real server | 8a99aa4, af866c0, fa58abc | Aggregate exit 0 (root 135 + desktop 50); E2E 6/6; 15 new tests |
 | **Phase 3 controls+shell+sweeper** | Native agent/model/skill/shell client methods; bridge vocabulary + badge; crash-safe sweeper; controls E2E | 1068e98, eb637cf, 5ba70c7, fb13aa2 | Aggregate exit 0 (root 140 + desktop 52); E2E 7/7; live serve probed (global pre-routing auth, paths unverified live — reconciliation follow-up); daemon onCommand execution follow-up |
+| **Live console harness** | `scripts/live_console_test.ts` — real vault → live serve → WS-4097 → Fish TTS → VAD/STT, zero-secret transcript | *this ledger entry* | serve ready 1730 ms; 26 sessions / 17 agents live; WS hello 19 ms; switchSession acked; Fish 140,851 B, MP3 header PASS, first-chunk TTFB **544 ms < 800**, duration 8.80 s; VAD silence 0.044; Whisper real call OK |
+
+**Live harness findings (OpenCode serve 1.18.32, verified 2026-09-24):**
+
+1. **Auth scheme drift (release-blocking for control plane):** `opencode serve`
+   enforces HTTP **Basic** `opencode:<OPENCODE_SERVER_PASSWORD>` (confirmed:
+   `WWW-Authenticate: Basic realm="Secure Area"`; Basic→200, Bearer→401).
+   `ServeClient`/`probeHealth` send `Bearer` → they cannot authenticate against
+   this serve. The harness authenticated with Basic directly.
+2. **Path/shape drift:** legacy `/session` returns `[]` (empty shim) with HTTP 200,
+   while the live data is `/api/session` → `{data:[{id, agent, model, projectID}]}`
+   (26 sessions). `ServeClient.listSessions` expects `/session` →
+   `{sessions:[{sessionId,state}]}` — wrong path AND wrong shape.
+3. `/openapi.json`, `/health`, `/api/info` return the SPA HTML, not JSON, in this
+   build — contract probing must target the real API family.
+   Follow-up (not done here, per halt-before-runtime-change): migrate `ServeClient`
+   to Basic auth + `/api/session` mapping, or negotiate dual-scheme.
 
 **GATE 1 (`/arm`) materialization detail (2026-09-24):**
 

@@ -28,6 +28,9 @@ diag*.zip
 .cache/
 audio-cache/
 
+# Live harness artifacts (regenerable audio captures)
+artifacts/
+
 # M7 ML artifacts (regenerable/heavy — scripts + configs ARE committed)
 .venv/
 models/*.onnx
