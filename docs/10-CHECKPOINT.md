@@ -159,6 +159,7 @@ reports are tracked. Decision record: `09` ADR-008.*
 | **GATE 4 runtime+rag** | Abort/purge + fail-closed gate + stable idempotency; telemetry bus; Silero VAD live; Levantine RAG + Tier-D; daemon→matrix surface | 93d7de7 → *this ledger entry* (5 commits) | Aggregate exit 0 (root 110 + desktop 44); LAYA_LIVE 3/3; SILERO_LIVE green (silence 0.044); telemetry rotation + injection-shape tests green |
 | **GATE 5 e2e+release** | Playwright E2E vs real UiServer; icons; memory probe; release checklist; Tauri manifests | ecb84ae → *this ledger entry* | E2E 5/5 Chromium; renderer bundle 160.09 kB; daemon RSS 407.9 MB with both models (≈1.1 GB system nominal vs 3.0 GB ceiling); icons incl. icns/ico; `cargo check` exit 0, zero errors |
 | **Phase 1 inventory+siblings** | SessionInventory poller (diffs, no-overlap, degraded-on-error); sibling registry + heartbeat files; sweeper coordination | 0842c65, e1f30ad | Aggregate exit 0 (root 120 + desktop 44); 10 new hermetic tests; sweeper.ts backward-compatible re-export |
+| **Phase 2 dispatch+switch** | dispatchPrompt + SESSION_BUSY; backpressure queue; switchSession bridge + shell chip; active session target | 5dcf526, 575a53d, acef673 | Aggregate exit 0 (root 129 + desktop 47); 14 new tests; chip renders surfaced sessions only |
 
 **GATE 1 (`/arm`) materialization detail (2026-09-24):**
 
