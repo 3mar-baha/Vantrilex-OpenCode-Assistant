@@ -1,6 +1,10 @@
 # PLAN.md — Master Plan: GATE 2 → Completion
 
-**Status:** Proposed (planning only). No code was modified to produce this file.
+**Status:** Active execution (GATE 2 in progress). Ratified taxonomy + O1–O6
+recorded in ADR-010 (`docs/09-DECISIONS.md`).
+**Taxonomy (normative):** `Voxaura` = desktop shell (`apps/desktop/`);
+`A.R.E.E.B. (أَرِيب)` = Type-1 foundational model (`src/runtime/laya/` is its
+current engine); `Kareem (كريم)` / `Nour (نور)` = dual voice personas.
 **Author lane:** Lead Systems Architect / Orchestrator.
 **Baseline commit:** `52ba876` (`chore(arm): GATE 1 …`), tree clean except untracked
 `vantrilex-registry/`.

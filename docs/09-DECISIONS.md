@@ -203,6 +203,31 @@
 |----|-------|--------|------|
 | ADR-008 | Laya System-1: local CPU speech-intent heads over cloud round-trips | Accepted | 2026-09-22 |
 | ADR-009+ | *Reserved — fleet supervision (v2.0.0 RFC will extend this table)* | Proposed | — |
+| ADR-010 | Brand taxonomy + Voxaura monorepo shape + WS-4097 bridge contract | **Accepted** | 2026-09-24 |
+
+### ADR-010 — Brand taxonomy, repo shape, WS-4097 contract (Accepted 2026-09-24)
+
+- **Status:** Accepted. **Context:** O1–O6 ratified by the owner (أ). Preflight:
+  `rustc 1.98.1`, `cargo 1.98.1`, Node v25, npm registry reachable, pnpm absent
+  (npm used for installs; `package-lock.json` accepted as a consequence).
+- **Taxonomy (normative for all new code/docs):**
+  - `Voxaura` — desktop shell, `apps/desktop/`.
+  - `A.R.E.E.B. (أَرِيب)` — Type-1 foundational Arabic reasoning model; the
+    `src/runtime/laya/` ONNX engine is its current physical implementation, not a
+    separate brand. Legacy `laya` naming in persona/RAG/prompt contracts is
+    superseded; engine paths rename only when a gate explicitly scopes it.
+  - `Kareem (كريم)` — male voice persona; `Nour (نور)` — female voice persona.
+    Both powered by A.R.E.E.B.; no single-persona hardcoding in new contracts.
+- **Decisions:** O1 monorepo `apps/desktop/` (add `packages:` to
+  `pnpm-workspace.yaml`); O2 Tauri v2 + React 18 + Vite + Tailwind, Rust ≥ 1.77.2
+  confirmed; O3 adopt `oxlint` + `test:vantrilex` aggregate; O4 view-model↔spec
+  remediation (5-tab modal, Kareem/Nour persona fields); O5 mobile relay OUT OF
+  SCOPE; O6 JODA/MADAR personal-use authorized and recorded.
+- **Consequences:** WS-4097 (`voice-ui.v1`, bearer `VOICE_RUNTIME_IPC_TOKEN`,
+  `Last-Seq` resume, single supervisor) becomes mandatory complexity for G2; the
+  `bench`/`stress` stale scripts are fixed or removed in G2 tooling.
+- **Compliance test:** G2 exit — hello frame round-trips against a live daemon;
+  `oxlint` 0; `test:vantrilex` green.
 
 ---
 
