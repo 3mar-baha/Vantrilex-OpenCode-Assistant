@@ -6,3 +6,5 @@ export type { BriefingJob, BriefingTier } from './queue.js';
 export { SpeechQueue } from './queue.js';
 export type { Speaker } from './orchestrator.js';
 export { Orchestrator } from './orchestrator.js';
+export type { SessionRecord, InventoryEvent, InventoryClient, InventoryOptions } from './inventory.js';
+export { SessionInventory } from './inventory.js';
