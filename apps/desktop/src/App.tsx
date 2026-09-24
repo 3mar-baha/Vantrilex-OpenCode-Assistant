@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { VoxauraBridge, UI_WS_URL } from './bridge/ws.js';
+import { ActionBar } from './components/actionbar/ActionBar.js';
+import { Crest } from './components/brand/Crest.js';
+import { PixelMatrix } from './matrix/PixelMatrix.js';
 import { SettingsPortal } from './components/portals/SettingsPortal.js';
+import type { ClusterAction } from './components/sidebar/IconCluster.js';
+import type { MatrixState } from './matrix/matrix-state.js';
 import './index.css';
 
 // Voxaura shell — ambient status surface. The daemon owns all state; this tree
@@ -24,6 +29,7 @@ export function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('identity');
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
+  const [matrix, setMatrix] = useState<MatrixState>(0);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
 
   useEffect(() => {
@@ -44,12 +50,31 @@ export function App(): JSX.Element {
     };
   }, []);
 
+  const handleAction = (action: ClusterAction, minutes?: number): void => {
+    if (action === 'settings') {
+      setSettingsOpen(true);
+      return;
+    }
+    if (action === 'abort') setMatrix(0); // snap to idle; G4 drives states from bridge events
+    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `cmd-${Date.now()}`;
+    if (action === 'mute') {
+      void bridgeRef.current?.sendCommand(
+        minutes !== undefined ? { id, kind: 'mute', minutes } : { id, kind: 'mute' },
+      );
+      return;
+    }
+    void bridgeRef.current?.sendCommand({ id, kind: action });
+  };
+
   return (
     <div className="min-h-full bg-obsidian text-stone-200" data-testid="voxaura-shell">
-      <header data-testid="bridge-status">bridge: {bridge}</header>
+      <header data-testid="bridge-status">
+        <Crest size={24} />
+        <span>bridge: {bridge}</span>
+      </header>
       <main>
-        <section data-testid="matrix-slot" aria-label="Pixel matrix (G3)" />
-        <section data-testid="actionbar-slot" aria-label="Action bar (G3)" />
+        <PixelMatrix state={matrix} energy={0} />
+        <ActionBar onAction={handleAction} />
       </main>
       <button data-testid="open-settings" onClick={() => setSettingsOpen(true)}>
         Settings

@@ -1,0 +1,38 @@
+/* Voxaura design tokens — the single source of glass/ink/accent truth.
+   Components reference these variables; no pixel literals in components. */
+:root {
+  --voxaura-obsidian: #141413;
+  --voxaura-coal: #181715;
+  --voxaura-graphite: #2a2825;
+  --voxaura-graphite-hi: #383530;
+  --voxaura-glass: rgba(24, 23, 21, 0.75);
+  --voxaura-ink: #e7e5e4;
+  --voxaura-sky-lo: #0284c7;
+  --voxaura-sky: #38bdf8;
+  --voxaura-amber-lo: #f59e0b;
+  --voxaura-amber: #fbbf24;
+  --voxaura-emerald: #10b981;
+  --voxaura-emerald-hi: #34d399;
+  --voxaura-purple: #8b5cf6;
+  --voxaura-purple-hi: #a78bfa;
+}
+
+.voxaura-portal {
+  background: var(--voxaura-glass);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--voxaura-graphite-hi);
+  border-radius: 14px;
+}
+
+.voxaura-matrix {
+  width: 192px;
+  height: 192px;
+  image-rendering: pixelated;
+}
+
+.voxaura-cluster,
+.voxaura-actionbar {
+  background: var(--voxaura-glass);
+  backdrop-filter: blur(18px);
+  border-radius: 999px;
+}
