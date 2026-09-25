@@ -10,7 +10,7 @@ export type { AudioChunk, Transcript, WhisperClient } from './stt.js';
 export { chunkPcm, GroqWhisperClient, transcribeStream } from './stt.js';
 export { BRAIN_GOLDEN_MS, BRAIN_CEILING_MS, BrainOutputSchema, AMMANI_SYSTEM_PROMPT, extractJson, normalizeBrainJson } from './brain.js';
 export type { BrainOutput, BrainClient } from './brain.js';
-export { GroqBrainClient, OpenRouterBrainClient, BRAIN_OPENROUTER_MODEL, OPENROUTER_CHAT_URL, requiresConfirmation } from './brain.js';
+export { OpenRouterBrainClient, BRAIN_OPENROUTER_MODEL, OPENROUTER_CHAT_URL, requiresConfirmation } from './brain.js';
 export { TTS_MODEL, TTS_FIRST_CHUNK_BUDGET_MS, FileAudioOut, FishHttpTransport, TtsEngine } from './tts.js';
 export type { AudioOut, FishTransport } from './tts.js';
 export type { DisambiguationContext } from './disambiguation.js';

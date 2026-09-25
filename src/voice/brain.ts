@@ -1,8 +1,7 @@
-import Groq from 'groq-sdk';
 import { z } from 'zod';
 import { OrchestratorError } from '../common/errors.js';
 
-// Cognitive brain — docs/18 §18.3, docs/06 §6.5. `openai/gpt-oss-120b` on Groq LPU,
+// Cognitive brain — docs/18 §18.3, docs/06 §6.5. Nemotron via OpenRouter,
 // 2.0 s golden mark / 5.0 s hard abort, validated JSON output, high-stakes gate.
 // Phrasing is synthesized by the model under the RAG-grounded system prompt;
 // anchors in docs are illustrative, never templates.
@@ -80,76 +79,13 @@ export interface BrainClient {
   respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean; attempts: number }>;
 }
 
-export class GroqBrainClient implements BrainClient {
-  private readonly client: Groq;
-
-  constructor(apiKey: string) {
-    this.client = new Groq({ apiKey });
-  }
-
-  async respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean; attempts: number }> {
-    const started = Date.now();
-    // Transient empty completions get up to two immediate retries (3 attempts
-    // total, each under the 5s ceiling); persistent failure takes the fallback
-    // path (never raw speech, never an unbounded loop).
-    let lastError: unknown = null;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        const result = await this.respondOnce(transcript, sessionContext, started);
-        return { ...result, attempts: attempt };
-      } catch (err) {
-        lastError = err;
-        const retryableEmpty = err instanceof OrchestratorError && err.code === 'BRAIN_TIMEOUT' && err.retryable;
-        if (!retryableEmpty || attempt === 3) throw err;
-      }
-    }
-    throw lastError;
-  }
-
-  private async respondOnce(transcript: string, sessionContext: string, started: number): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), BRAIN_CEILING_MS);
-    try {
-      const completion = await this.client.chat.completions.create(
-        {
-          model: 'openai/gpt-oss-120b',
-          messages: [
-            { role: 'system', content: AMMANI_SYSTEM_PROMPT },
-            { role: 'user', content: `Context: ${sessionContext}\nDeveloper said: ${transcript}` },
-          ],
-          temperature: 0.4,
-          max_tokens: 300,
-          stream: false,
-        },
-        { signal: controller.signal },
-      );
-      const elapsedMs = Date.now() - started;
-      const content = completion.choices[0]?.message?.content ?? '';
-      if (content.trim().length === 0) {
-        throw new OrchestratorError('BRAIN_TIMEOUT', true, 'brain returned empty completion — retrying once');
-      }
-      const output = normalizeBrainJson(extractJson(content));
-      if (output === null) {
-        throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain returned non-JSON output — fallback briefing');
-      }
-      return { output, elapsedMs, goldenBreached: elapsedMs > BRAIN_GOLDEN_MS };
-    } catch (err) {
-      if (err instanceof OrchestratorError) throw err;
-      const aborted = err instanceof Error && (err.name === 'AbortError' || err.name === 'APIConnectionTimeoutError');
-      throw new OrchestratorError('BRAIN_TIMEOUT', true, aborted ? 'brain exceeded 5.0s ceiling — fallback briefing' : `brain call failed: ${err instanceof Error ? err.message : 'unknown'}`);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-}
-
 /** Project-default OpenRouter slug for the brain (coordinator default, verified live). */
 export const BRAIN_OPENROUTER_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
 
 export const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 /**
- * OpenRouter brain — same BrainClient contract as the Groq path, routed via
+ * OpenRouter brain — the BrainClient contract, routed via
  * Bearer auth to the OpenRouter chat endpoint. `response_format: json_object`
  * is required (OpenRouter-spec) so completions arrive parseable; the shared
  * normalize/extract pipeline still guards the shape. Key is caller-supplied
