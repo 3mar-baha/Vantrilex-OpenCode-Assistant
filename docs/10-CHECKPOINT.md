@@ -257,4 +257,26 @@ reports are tracked. Decision record: `09` ADR-008.*
 
 **Still open (capability, not defect):** L1 renderer audio capture (mic button is a mute toggle, not capture start) and P5 runtime 3-agent orchestration.
 
+## Zero-click bring-up, teardown, and self-contained packaging
+
+| Item | Change | Commit | Evidence |
+|---|---|---|---|
+| **3-tier supervisor** | `src-tauri/src/main.rs` probes 4096/4097 and spawns what is missing: serve (bundled CLI), then daemon (bundled sidecar). Adoption, never double-spawn. Per-install serve password minted to `~/.opencode-voice-runtime/serve.pass` (0600) and passed to BOTH children | `abad7d0` | cold launch → `4096_listening=True 4097_listening=True`, supervisor.log shows both |
+| **Force teardown** | Win32 Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`windows-sys 0.61`) plus graceful reap on exit | `abad7d0` | `Stop-Process -Force` → both ports reaped: `4096_after_forcekill=False 4097_after_forcekill=False` |
+| **Self-contained installer** | `scripts/provision-sidecar.mjs` assembles node.exe + dist + pruned runtime deps (54 packages, 100.4 MB); `bundle.resources = sidecar/**/*`; Rust prefers `resource_dir()/sidecar` | `abad7d0` | NSIS contains 2173 `sidecar\` entries incl. `node.exe` (91.6 MB); runtime log: `node=…\release\sidecar\node.exe` |
+| **Esc white screen** | `close-current-window.ts` closes the native window; canvas forced `#090a0f !important` | `abad7d0` | E2E 11/11 |
+| **HUD declutter + toggle** | Removed roster footer, last-event line, raw model id (`compact` badge); abort button toggles إيقاف/إعادة التوليد from live state | `abad7d0` | controls spec asserts `badge-model` count 0; unit test asserts `muse-spark` not rendered |
+
+**Bugs found and fixed during bring-up:** duplicate concurrent bring-up (single-flight guard);
+lexicographic version sort picking 2.0.6 over 2.0.12 (now numeric); `\\?\` extended-length path
+prefix rejected by Node (`lstat 'O:'` EISDIR) — stripped via `plain_path()`.
+
+**Artifacts (v0.2.0):** `voxaura.exe` 8,448,512 B sha256 `B76C61B5…`;
+`Voxaura_0.2.0_x64-setup.exe` 26,112,469 B sha256 `439B92EE…`. Secret scan across
+9 build artifacts (incl. sidecar + installer): 0 leaks.
+
+**Open:** L1 renderer audio capture and P5 runtime agent orchestration are deferred to v0.4.0;
+the CLI scaffolds `vault/` notes for every subcommand (stray dir seen under src-tauri) and should
+be gated to operator commands.
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
