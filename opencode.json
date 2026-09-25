@@ -4,7 +4,6 @@
   "provider": {
     "openrouter": {
       "models": {
-        "stealth/space-bunny-alpha": {},
         "dots-studio/dots-3-note-preview:free": {},
         "nvidia/nemotron-3-ultra-550b-a55b:free": {},
         "thinkingmachines/inkling:free": {}

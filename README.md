@@ -1,4 +1,7 @@
 <p align="center">
+  <img src="assets/icon.svg" alt="Voxaura application icon" width="128" />
+</p>
+<p align="center">
   <img src="assets/hero-banner.svg" alt="Voxaura — ambient desktop companion over OpenCode v2" width="100%" />
 </p>
 
@@ -393,8 +396,8 @@ automatic; 401 → halt and rotate credentials, never retry blind.
 
 Default model: `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` (promoted
 after a live HTTP 200 smoke with `msg_…` receipt and identity reply).
-Registered OpenRouter slugs: Nemotron coordinator, Dots3 intake, Inkling
-driver, plus `stealth/space-bunny-alpha` on standby. Six MCP servers are
+Registered OpenRouter slugs — exactly three, locked: Nemotron coordinator,
+Dots3 intake, Inkling driver. Six MCP servers are
 wired — `sequential-thinking`, `memory`, `filesystem` (project-relative),
 `github`, `context7`, and `obsidian-vault` (project-relative `vault/`) —
 with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.

@@ -1,5 +1,9 @@
 # Voxaura — النسخة العربية الكاملة
 
+<p align="center">
+  <img src="assets/icon.svg" alt="أيقونة Voxaura" width="128" />
+</p>
+
 [![English](https://img.shields.io/badge/English-README.md-blue)](README.md)
 
 ## ما هو Voxaura؟

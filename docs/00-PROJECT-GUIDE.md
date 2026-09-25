@@ -1,5 +1,7 @@
 # Voxaura / opencode-voice-runtime — Complete Project Guide
 
+![Voxaura application icon](../assets/icon.svg)
+
 *One document describing the whole system in plain language. Technical claims
 below reflect the implemented code as verified live in September 2026; the
 older numbered spec files (`docs/01`–`docs/28`) are frozen design documents
@@ -79,13 +81,13 @@ Measured live: serve answers in ~125 ms, voice reply first-chunk in
 
 | Job | Provider | Exact model | Status |
 |---|---|---|---|
-| Reasoning/brain | OpenRouter | `nvidia/nemotron-3-ultra-550b-a55b:free` | **Live** |
-| Reasoning (old path) | Groq | `openai/gpt-oss-120b` | Legacy, unused |
+| Conversational intake | OpenRouter | `dots-studio/dots-3-note-preview:free` | **Live** |
+| Master coordinator & brain | OpenRouter | `nvidia/nemotron-3-ultra-550b-a55b:free` | **Live** |
+| Sub-agent execution driver | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
+| Session default | OpenRouter | Nemotron (same slug) | **Live** |
 | Speech-to-text | Groq | `whisper-large-v3-turbo` | **Live** |
 | Text-to-speech | Fish Audio | `s2.1-pro-free` | **Live** |
 | Voices | Fish Audio refs | Kareem `5b90451e…`, Nour `88c0375e…` | **Live** |
-| Session default | OpenRouter | Nemotron (same slug) | **Live** |
-| Standby roles | OpenRouter | Dots3, Inkling, `stealth/space-bunny-alpha` | Registered |
 
 No API keys exist in code — ever. Keys come from environment variables or the
 encrypted vault (below), and the program refuses to run brain features when a
