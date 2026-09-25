@@ -134,6 +134,42 @@ async function liveLoop(): Promise<number> {
   }
 }
 
+// Daemon: adopt the running serve and host the WS-4097 control plane.
+async function serveDaemon(): Promise<number> {
+  loadDotEnvLocal();
+  const { startDaemon, vaultPathFromEnv, ipcTokenFromEnv } = await import('./daemon.js');
+  const cfg = loadConfig();
+  const password = process.env['OPENCODE_SERVER_PASSWORD'] ?? '';
+  const token = ipcTokenFromEnv();
+  const ipcPort = Number.parseInt(process.env['VOICE_IPC_PORT'] ?? '4097', 10);
+  if (password.length === 0 || token.length === 0) {
+    console.log('miss serve: OPENCODE_SERVER_PASSWORD and VOICE_RUNTIME_IPC_TOKEN are required');
+    return 1;
+  }
+  try {
+    const daemon = await startDaemon({
+      servePort: cfg.serve.port,
+      servePassword: password,
+      ipcToken: token,
+      ipcPort,
+      vaultPath: vaultPathFromEnv(),
+      directory: process.cwd(),
+    });
+    console.log(`ok   daemon: ws=127.0.0.1:${daemon.ipcPort} serve=${daemon.servePort} (token redacted)`);
+    console.log('next: Ctrl+C to stop');
+    await new Promise<void>((resolve) => {
+      const stop = (): void => resolve();
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+    });
+    await daemon.stop();
+    return 0;
+  } catch (err) {
+    console.log(`miss daemon: ${err instanceof Error ? err.message : 'unknown'}`);
+    return 1;
+  }
+}
+
 const command = process.argv[2];
 // Self-bootstrap the Obsidian memory vault on first boot (portability
 // invariant): missing notes are scaffolded; failures never block the CLI.
@@ -148,7 +184,9 @@ if (command === 'doctor') {
   process.exit(await vaultBootstrap());
 } else if (command === 'live') {
   process.exit(await liveLoop());
+} else if (command === 'serve') {
+  process.exit(await serveDaemon());
 } else {
-  console.log('usage: opencode-voice doctor | vault bootstrap | live');
+  console.log('usage: opencode-voice doctor | vault bootstrap | live | serve');
   process.exit(2);
 }
