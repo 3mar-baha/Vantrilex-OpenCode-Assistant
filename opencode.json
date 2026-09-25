@@ -1,5 +1,16 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+  "provider": {
+    "openrouter": {
+      "models": {
+        "stealth/space-bunny-alpha": {},
+        "dots-studio/dots-3-note-preview:free": {},
+        "nvidia/nemotron-3-ultra-550b-a55b:free": {},
+        "thinkingmachines/inkling:free": {}
+      }
+    }
+  },
   "mcp": {
     "servers": {
       "context7": {
@@ -21,7 +32,18 @@
           "npx",
           "-y",
           "@modelcontextprotocol/server-filesystem",
-          "O:\\opencode-Vantrilex"
+          "."
+        ]
+      },
+      "obsidian-vault": {
+        "type": "local",
+        "command": [
+          "cmd",
+          "/c",
+          "npx",
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "vault"
         ]
       },
       "memory": {
