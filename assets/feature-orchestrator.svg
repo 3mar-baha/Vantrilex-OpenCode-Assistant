@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 320">
+  <rect width="700" height="320" rx="20" fill="#0a0f1d" stroke="#1e293b" stroke-width="2"/>
+  <text x="40" y="55" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#60a5fa">QUEUE</text>
+  <g>
+    <rect x="40" y="80" width="220" height="34" rx="8" fill="#1e293b"/>
+    <rect x="40" y="80" width="220" height="34" rx="8" fill="#2563eb">
+      <animate attributeName="width" dur="3s" repeatCount="indefinite" values="220;90;220"/>
+    </rect>
+    <rect x="40" y="126" width="160" height="34" rx="8" fill="#1e293b"/>
+    <rect x="40" y="126" width="160" height="34" rx="8" fill="#0ea5e9">
+      <animate attributeName="width" dur="3s" repeatCount="indefinite" values="160;220;160"/>
+    </rect>
+    <rect x="40" y="172" width="190" height="34" rx="8" fill="#1e293b"/>
+    <rect x="40" y="172" width="190" height="34" rx="8" fill="#38bdf8">
+      <animate attributeName="width" dur="3s" begin="0.5s" repeatCount="indefinite" values="190;120;190"/>
+    </rect>
+  </g>
+  <text x="430" y="55" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#60a5fa">WORKERS</text>
+  <g>
+    <circle cx="450" cy="110" r="20" fill="#10b981">
+      <animate attributeName="opacity" dur="1.2s" repeatCount="indefinite" values="1;0.4;1"/>
+    </circle>
+    <circle cx="520" cy="110" r="20" fill="#0ea5e9">
+      <animate attributeName="opacity" dur="1.2s" begin="0.4s" repeatCount="indefinite" values="1;0.4;1"/>
+    </circle>
+    <circle cx="590" cy="110" r="20" fill="#2563eb">
+      <animate attributeName="opacity" dur="1.2s" begin="0.8s" repeatCount="indefinite" values="1;0.4;1"/>
+    </circle>
+    <circle cx="450" cy="180" r="20" fill="#38bdf8">
+      <animate attributeName="opacity" dur="1.2s" begin="0.6s" repeatCount="indefinite" values="1;0.4;1"/>
+    </circle>
+    <circle cx="520" cy="180" r="20" fill="#10b981">
+      <animate attributeName="opacity" dur="1.2s" begin="0.2s" repeatCount="indefinite" values="1;0.4;1"/>
+    </circle>
+    <circle cx="590" cy="180" r="20" fill="#1e293b" stroke="#34d399" stroke-width="3" stroke-dasharray="8 6">
+      <animateTransform attributeName="transform" type="rotate" from="0 590 180" to="360 590 180" dur="4s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <text x="350" y="280" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="22" fill="#34d399">backpressure balanced · 409 requeued</text>
+</svg>

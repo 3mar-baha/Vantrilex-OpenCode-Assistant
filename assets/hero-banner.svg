@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320">
+  <defs>
+    <linearGradient id="hbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0f1d"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="htype" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="0.5" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="hvox" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="320" fill="url(#hbg)"/>
+  <path d="M0,250 C200,200 340,290 540,240 S860,190 1200,240 L1200,320 L0,320 Z" fill="#0ea5e9" opacity="0.22">
+    <animate attributeName="d" dur="7s" repeatCount="indefinite" values="M0,250 C200,200 340,290 540,240 S860,190 1200,240 L1200,320 L0,320 Z;M0,230 C220,280 360,200 560,250 S880,280 1200,220 L1200,320 L0,320 Z;M0,250 C200,200 340,290 540,240 S860,190 1200,240 L1200,320 L0,320 Z"/>
+  </path>
+  <path d="M0,275 C240,240 380,305 580,270 S880,235 1200,270 L1200,320 L0,320 Z" fill="#2563eb" opacity="0.28">
+    <animate attributeName="d" dur="11s" repeatCount="indefinite" values="M0,275 C240,240 380,305 580,270 S880,235 1200,270 L1200,320 L0,320 Z;M0,260 C260,295 400,240 600,278 S900,292 1200,255 L1200,320 L0,320 Z;M0,275 C240,240 380,305 580,270 S880,235 1200,270 L1200,320 L0,320 Z"/>
+  </path>
+  <g fill="url(#hvox)">
+    <rect x="110" y="120" width="18" height="80" rx="9"/>
+    <rect x="138" y="90" width="18" height="140" rx="9"/>
+    <rect x="166" y="60" width="18" height="200" rx="9"/>
+    <rect x="194" y="100" width="18" height="120" rx="9"/>
+    <rect x="222" y="130" width="18" height="60" rx="9"/>
+  </g>
+  <text x="280" y="160" font-family="system-ui, -apple-system, sans-serif" font-size="64" font-weight="700" fill="url(#htype)">Voxaura</text>
+  <text x="282" y="205" font-family="system-ui, -apple-system, sans-serif" font-size="26" fill="#60a5fa">ambient desktop companion over OpenCode v2</text>
+  <rect x="0" y="0" width="1200" height="320" fill="none" stroke="#38bdf8" stroke-opacity="0.15" stroke-width="2"/>
+</svg>

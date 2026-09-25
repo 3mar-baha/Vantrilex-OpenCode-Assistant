@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 60">
+  <style>
+    .t { font-family: ui-monospace, monospace; font-size: 24px; fill: #38bdf8; }
+    .cover { animation: type 6s steps(55) infinite; }
+    .caret { animation: move 6s steps(55) infinite; }
+    @keyframes type { 0% { width: 800px; } 70%,100% { width: 0; } }
+    @keyframes move { 0% { x: 30px; } 70%,100% { x: 830px; } }
+  </style>
+  <rect width="880" height="60" fill="#0a0f1d"/>
+  <text x="30" y="40" class="t">serve 447ms · hello 16ms · TTFB 644ms · 211 tests · E2E 8/8</text>
+  <rect class="cover" x="30" y="8" width="0" height="46" fill="#0a0f1d"/>
+  <rect class="caret" x="830" y="12" width="12" height="36" fill="#0ea5e9"/>
+</svg>

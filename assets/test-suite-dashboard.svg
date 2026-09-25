@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320">
+  <defs>
+    <filter id="td-glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="760" height="320" rx="20" fill="#0a0f1d" stroke="#1e293b" stroke-width="2"/>
+  <g stroke="#1e293b" stroke-width="1" opacity="0.6">
+    <line x1="40" y1="60" x2="720" y2="60"/>
+    <line x1="40" y1="120" x2="720" y2="120"/>
+    <line x1="40" y1="180" x2="720" y2="180"/>
+    <line x1="40" y1="240" x2="720" y2="240"/>
+  </g>
+  <text x="380" y="34" text-anchor="middle" dominant-baseline="central" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#f8fafc">quality gates · live</text>
+  <g>
+    <circle cx="190" cy="150" r="80" fill="none" stroke="#1e293b" stroke-width="20"/>
+    <circle cx="190" cy="150" r="80" fill="none" stroke="#10b981" stroke-width="20" stroke-linecap="round" stroke-dasharray="502.66" stroke-dashoffset="502.66" transform="rotate(-90 190 150)" filter="url(#td-glow)">
+      <animate attributeName="stroke-dashoffset" dur="2.2s" fill="freeze" values="502.66;0"/>
+    </circle>
+    <text x="190" y="140" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="36" font-weight="700" fill="#f8fafc">211</text>
+    <text x="190" y="170" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="18" fill="#34d399">unit</text>
+    <text x="190" y="268" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="20" fill="#60a5fa">test:vantrilex</text>
+  </g>
+  <g>
+    <circle cx="570" cy="150" r="80" fill="none" stroke="#1e293b" stroke-width="20"/>
+    <circle cx="570" cy="150" r="80" fill="none" stroke="#10b981" stroke-width="20" stroke-linecap="round" stroke-dasharray="502.66" stroke-dashoffset="502.66" transform="rotate(-90 570 150)" filter="url(#td-glow)">
+      <animate attributeName="stroke-dashoffset" dur="2.2s" begin="0.4s" fill="freeze" values="502.66;0"/>
+    </circle>
+    <text x="570" y="140" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="36" font-weight="700" fill="#f8fafc">8/8</text>
+    <text x="570" y="170" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="18" fill="#34d399">e2e</text>
+    <text x="570" y="268" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="20" fill="#60a5fa">test:e2e</text>
+  </g>
+  <rect x="315" y="112" width="130" height="30" rx="15" fill="#1e293b"/>
+  <rect x="315" y="112" width="130" height="30" rx="15" fill="#10b981">
+    <animate attributeName="width" dur="1.6s" fill="freeze" values="0;130"/>
+  </rect>
+  <rect x="305" y="188" width="150" height="36" rx="18" fill="none" stroke="#34d399" stroke-width="2"/>
+  <text x="380" y="207" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace, monospace" font-size="22" font-weight="700" fill="#34d399">100% PASS</text>
+</svg>

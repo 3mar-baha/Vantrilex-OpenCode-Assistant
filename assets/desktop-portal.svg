@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 380">
+  <rect width="600" height="380" rx="20" fill="#0a0f1d" stroke="#1e293b" stroke-width="2"/>
+  <rect x="90" y="50" width="420" height="280" rx="16" fill="#0f172a" stroke="#38bdf8" stroke-width="3">
+    <animate attributeName="stroke-opacity" dur="2.4s" repeatCount="indefinite" values="1;0.35;1"/>
+  </rect>
+  <rect x="90" y="50" width="420" height="34" rx="16" fill="#1e293b"/>
+  <circle cx="116" cy="67" r="7" fill="#38bdf8"/>
+  <circle cx="140" cy="67" r="7" fill="#0ea5e9"/>
+  <circle cx="164" cy="67" r="7" fill="#2563eb"/>
+  <g fill="#38bdf8">
+    <rect x="130" y="120" width="90" height="52" rx="8" opacity="0.9"/>
+    <rect x="240" y="120" width="90" height="52" rx="8" opacity="0.6">
+      <animate attributeName="opacity" dur="1.8s" repeatCount="indefinite" values="0.6;1;0.6"/>
+    </rect>
+    <rect x="350" y="120" width="90" height="52" rx="8" opacity="0.9"/>
+    <rect x="130" y="190" width="200" height="52" rx="8" opacity="0.45"/>
+    <rect x="350" y="190" width="90" height="52" rx="8" opacity="0.75">
+      <animate attributeName="opacity" dur="2.2s" repeatCount="indefinite" values="0.75;0.4;0.75"/>
+    </rect>
+  </g>
+  <g fill="#34d399">
+    <circle cx="150" cy="280" r="8">
+      <animate attributeName="opacity" dur="1.5s" repeatCount="indefinite" values="0.25;1;0.25"/>
+    </circle>
+    <circle cx="185" cy="280" r="8">
+      <animate attributeName="opacity" dur="1.5s" begin="0.5s" repeatCount="indefinite" values="0.25;1;0.25"/>
+    </circle>
+    <circle cx="220" cy="280" r="8">
+      <animate attributeName="opacity" dur="1.5s" begin="1s" repeatCount="indefinite" values="0.25;1;0.25"/>
+    </circle>
+  </g>
+  <text x="300" y="348" text-anchor="middle" dominant-baseline="central" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="#60a5fa">tauri shell · matrix sync</text>
+</svg>

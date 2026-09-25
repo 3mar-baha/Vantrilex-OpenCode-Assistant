@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300">
+  <defs>
+    <filter id="af-glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1200" height="300" rx="20" fill="#0a0f1d" stroke="#1e293b" stroke-width="2"/>
+  <text x="600" y="40" text-anchor="middle" dominant-baseline="central" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#f8fafc">control-plane pipeline</text>
+  <line x1="150" y1="150" x2="1050" y2="150" stroke="#1e293b" stroke-width="6"/>
+  <g fill="none" stroke="#38bdf8" stroke-width="4" opacity="0.7">
+    <path d="M272,138 l18,12 l-18,12"/>
+    <path d="M572,138 l18,12 l-18,12"/>
+    <path d="M872,138 l18,12 l-18,12"/>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="22" fill="#f8fafc" text-anchor="middle">
+    <circle cx="150" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#38bdf8" stroke-width="3"/>
+    <text x="150" y="232" dominant-baseline="central">CLI</text>
+    <circle cx="450" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#0ea5e9" stroke-width="3"/>
+    <text x="450" y="232" dominant-baseline="central">WS-4097</text>
+    <circle cx="750" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#60a5fa" stroke-width="3"/>
+    <text x="750" y="232" dominant-baseline="central">Orchestrator</text>
+    <circle cx="1050" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#2563eb" stroke-width="3"/>
+    <text x="1050" y="232" dominant-baseline="central">Client</text>
+  </g>
+  <circle cx="-50" cy="-50" r="9" fill="#38bdf8" filter="url(#af-glow)">
+    <animateMotion dur="2.4s" repeatCount="indefinite" path="M150,150 L1050,150"/>
+  </circle>
+  <circle cx="-50" cy="-50" r="7" fill="#0ea5e9" filter="url(#af-glow)">
+    <animateMotion dur="2.4s" begin="0.8s" repeatCount="indefinite" path="M150,150 L1050,150"/>
+  </circle>
+  <circle cx="-50" cy="-50" r="7" fill="#60a5fa" filter="url(#af-glow)">
+    <animateMotion dur="2.4s" begin="1.6s" repeatCount="indefinite" path="M150,150 L1050,150"/>
+  </circle>
+</svg>
