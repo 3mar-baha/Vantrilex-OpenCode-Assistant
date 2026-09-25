@@ -14,7 +14,7 @@ agents. You talk to it (in Arabic, with two voice personas), and it operates
 **OpenCode v2** — an AI agent runtime — on your behalf: running coding
 sessions, switching models, executing commands, and speaking results back.
 
-**Package name:** `opencode-voice-runtime` · **Version:** 0.2.0 · **License:** MIT
+**Package name:** `opencode-voice-runtime` · **Version:** 0.3.0 · **License:** MIT
 
 Think of it as three layers:
 

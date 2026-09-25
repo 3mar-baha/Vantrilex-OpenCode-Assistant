@@ -10,6 +10,7 @@
     "ml/checkpoints/**",
     "coverage/**",
     "apps/desktop/dist/**",
+    "apps/desktop/src-tauri/sidecar/**",
     "**/target/**"
   ]
 }

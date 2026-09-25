@@ -320,6 +320,35 @@ fn plain_path(path: &Path) -> String {
     raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_string()
 }
 
+/// Canonical vault ROOT for this launch (the same root the Obsidian memory
+/// graph uses — one place for keys and notes):
+///   1. an explicit VOXAURA_VAULT_DIR
+///   2. the `vault/` directory found among the daemon entrypoint's ancestors
+///      (the developer/repo layout)
+///   3. `%LOCALAPPDATA%\Voxaura\vault` (a real install has no repo to sit in)
+fn resolve_vault_dir(entry: Option<&Path>) -> PathBuf {
+    if let Ok(explicit) = std::env::var("VOXAURA_VAULT_DIR") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    if let Some(entry) = entry {
+        let mut cursor = entry.parent().map(PathBuf::from);
+        while let Some(dir) = cursor {
+            let candidate = dir.join("vault");
+            if candidate.is_dir() {
+                return candidate;
+            }
+            cursor = dir.parent().map(PathBuf::from);
+        }
+    }
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| runtime_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("Voxaura").join("vault")
+}
+
 /// Prefer the bundled Node runtime; fall back to PATH for development.
 fn resolve_node_bin(resource_dir: Option<&Path>) -> String {
     if let Ok(explicit) = std::env::var("VOXAURA_NODE_BIN") {
@@ -381,7 +410,8 @@ fn ensure_daemon(app: &tauri::AppHandle) -> Result<String, String> {
         .arg("serve")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .env("OPENCODE_SERVER_PASSWORD", &password);
+        .env("OPENCODE_SERVER_PASSWORD", &password)
+        .env("VOXAURA_VAULT_DIR", resolve_vault_dir(Some(&entry)));
     // Capture child stderr into the runtime dir: without it a failed bring-up
     // is silent and undiagnosable.
     match runtime_dir() {

@@ -124,9 +124,18 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   };
 }
 
-/** Resolve the vault path from the environment, defaulting to the repo layout. */
+/**
+ * Resolve the vault database path. Precedence: an explicit db path, then the
+ * canonical vault ROOT (VOXAURA_VAULT_DIR — the same root the Obsidian memory
+ * graph uses), then `<cwd>/vault`. One root for keys and memory, so the graph
+ * and the keyring never drift apart.
+ */
 export function vaultPathFromEnv(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
-  return env['VOXAURA_VAULT_PATH'] ?? `${cwd}/vault/keyring.dat`;
+  const explicit = env['VOXAURA_VAULT_PATH'];
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+  const root = env['VOXAURA_VAULT_DIR'];
+  if (typeof root === 'string' && root.length > 0) return join(root, 'keyring.dat');
+  return join(cwd, 'vault', 'keyring.dat');
 }
 
 /**

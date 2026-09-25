@@ -10,7 +10,7 @@ import { FileVault } from './voice/vault.js';
 import { Keyring } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
 import { OpenRouterBrainClient, requiresConfirmation } from './voice/brain.js';
-import { ensureVault } from './memory/vault.js';
+import { ensureVault, resolveVaultRoot } from './memory/vault.js';
 import { FishHttpTransport, TtsEngine, FileAudioOut } from './voice/tts.js';
 import { loadConfig as loadFullConfig } from './common/config.js';
 
@@ -173,10 +173,20 @@ async function serveDaemon(): Promise<number> {
 const command = process.argv[2];
 // Self-bootstrap the Obsidian memory vault on first boot (portability
 // invariant): missing notes are scaffolded; failures never block the CLI.
-try {
-  ensureVault('voxaura');
-} catch {
-  // Fresh installs without a writable cwd proceed without memory notes.
+// Memory-vault bootstrap is an OPERATOR concern. `serve` is a long-running
+// daemon that may be launched from an arbitrary working directory (an installed
+// build runs with cwd = its own folder), so scaffolding notes there would litter
+// the filesystem — it must never create the memory graph implicitly.
+const OPERATOR_COMMANDS = new Set(['doctor', 'vault', 'live']);
+if (command !== undefined && OPERATOR_COMMANDS.has(command)) {
+  try {
+    // Canonical memory graph: VOXAURA_VAULT_DIR when set, else <cwd>/vault —
+    // the same root the daemon uses for keyring.dat, so keys and notes share
+    // one vault.
+    ensureVault('voxaura', resolveVaultRoot());
+  } catch {
+    // Fresh installs without a writable cwd proceed without memory notes.
+  }
 }
 if (command === 'doctor') {
   process.exit(await doctor());

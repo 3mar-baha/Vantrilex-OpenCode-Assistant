@@ -1,5 +1,33 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.3.0 — Zero-click desktop release (2026-09-25)
+
+**Repairs (audit response)**
+- **H2/H3**: production daemon composition (`src/daemon.ts`) + `serve` CLI; UI key
+  intake persists to the encrypted vault via `src/voice/key-store.ts`.
+- **H1**: FR-12 execution gate — destructive commands (`execSessionShell`) are
+  parked until an explicit `confirm` (60 s TTL, cancel path).
+- **H4**: per-install IPC token (`~/.opencode-voice-runtime/ipc.token`, 0600)
+  fetched at runtime by the webview; nothing baked into the bundle.
+- **M3**: hardened CSP (`object-src`/`base-uri`/`frame-ancestors`/`form-action`
+  `'none'`, explicit `script-src`/`img-src`).
+- **M4**: 1 MiB inbound frame cap, rejected before allocation.
+- **M6**: truthful `setPersona` state + 45 s bridge staleness watchdog.
+
+**Desktop**
+- Zero-click 3-tier bring-up: the shell probes 4096/4097 and starts what is
+  missing (opencode serve, then the Node daemon), sharing one per-install serve
+  password; adopts healthy services instead of double-spawning.
+- Win32 Job Object with `KILL_ON_JOB_CLOSE`: children die even on a force-kill.
+- Self-contained installer: bundled Node sidecar (`node.exe` + pruned runtime
+  deps, 100.4 MB) declared as Tauri resources — no end-user prerequisites.
+- HUD decluttered (no raw model ids), `إيقاف/إعادة التوليد` toggle, auto-sized
+  windows with a 16 px bottom buffer, hidden scrollbar chrome, dark canvas to
+  prevent white flashes, dedicated Settings and API-keys windows.
+
+**Deferred to v0.4.0:** renderer audio capture (L1) and runtime 3-agent
+orchestration (P5).
+
 ## Hierarchical Multi-Agent Governance (2026-09-25)
 
 - Nemotron (`openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`) promoted to

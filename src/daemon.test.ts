@@ -103,9 +103,12 @@ describe('daemon composition (production wiring)', () => {
 });
 
 describe('env resolvers', () => {
-  test('vault path and IPC token come from env only', () => {
+  test('vault path prefers explicit db, then the canonical vault root', () => {
     expect(vaultPathFromEnv({ VOXAURA_VAULT_PATH: '/tmp/k.dat' } as NodeJS.ProcessEnv)).toBe('/tmp/k.dat');
-    expect(vaultPathFromEnv({} as NodeJS.ProcessEnv, '/repo')).toBe('/repo/vault/keyring.dat');
+    expect(
+      vaultPathFromEnv({ VOXAURA_VAULT_DIR: '/repo/vault' } as NodeJS.ProcessEnv, '/elsewhere'),
+    ).toBe(join('/repo/vault', 'keyring.dat'));
+    expect(vaultPathFromEnv({} as NodeJS.ProcessEnv, '/repo')).toBe(join('/repo', 'vault', 'keyring.dat'));
     expect(ipcTokenFromEnv({ VOICE_RUNTIME_IPC_TOKEN: 'abc' } as NodeJS.ProcessEnv)).toBe('abc');
     expect(ipcTokenFromEnv({} as NodeJS.ProcessEnv)).toBe('');
   });
