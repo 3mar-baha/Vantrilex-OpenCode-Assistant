@@ -57,3 +57,14 @@ node dist/cli.js doctor
 npm run test:vantrilex
 cd apps/desktop && npm run test:e2e
 ```
+
+## قاموس المصطلحات
+
+| المصطلح | المعنى |
+|---|---|
+| Daemon (الخادم الخلفي) | خدمة Node التي تدير الجلسات والأوامر |
+| Serve | محرك OpenCode v2 على المنفذ 4096 |
+| WS-4097 | بروتوكول WebSocket بين الواجهة والخادم (`voice-ui.v1`) |
+| FR-12 | قاعدة التأكيد قبل أي فعل مدمر |
+| Ledger (السجل) | سجل تدقيق إلحاقي لكل الأحداث |
+| Vault (الخزينة) | تخزين مشفر للمفاتيح + ملاحظات Obsidian للذاكرة |
