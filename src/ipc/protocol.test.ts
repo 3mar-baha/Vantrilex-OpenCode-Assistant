@@ -10,6 +10,7 @@ import {
   InventoryFrameSchema,
   IPC_TOKEN_ENV,
   maskFrame,
+  MAX_MESSAGE_BYTES,
   Opcode,
   parseSeq,
   UI_SUBPROTOCOL,
@@ -193,5 +194,21 @@ describe('frame schemas', () => {
   test('ack and error kinds are namespaced', () => {
     expect(ACK_KIND).toBe('ack');
     expect(ERROR_KIND).toBe('error');
+  });
+});
+
+describe('inbound message cap (DoS guard)', () => {
+  test('a declared length above the cap is refused before allocation', () => {
+    const header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 127; // 64-bit length form
+    header.writeUInt32BE(0, 2);
+    header.writeUInt32BE(MAX_MESSAGE_BYTES + 1, 6);
+    const r = new FrameReassembler();
+    expect(() => r.push(header)).toThrowError(/message cap/);
+  });
+
+  test('the cap is a sane megabyte-scale bound', () => {
+    expect(MAX_MESSAGE_BYTES).toBe(1024 * 1024);
   });
 });

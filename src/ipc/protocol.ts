@@ -11,6 +11,8 @@ export const SERVE_PORT = 4096;
 export const PING_INTERVAL_MS = 5000;
 export const MISSED_PINGS_LIMIT = 3;
 export const RESUME_BUFFER_CAP = 256;
+/** Hard inbound message cap — a single frame may never exceed this. */
+export const MAX_MESSAGE_BYTES = 1024 * 1024;
 export const ACK_KIND = 'ack';
 export const ERROR_KIND = 'error';
 
@@ -179,6 +181,9 @@ function parseHeader(
     length = lo;
     head += 8;
   }
+  if (length > MAX_MESSAGE_BYTES) {
+    throw new WsProtocolError('frame exceeds message cap — refusing allocation');
+  }
   return { fin, opcode, masked, length, head };
 }
 
@@ -295,6 +300,7 @@ export const UiCommandSchema = z.object({
     'toggleSessionSkill',
     'execSessionShell',
     'saveApiKeys',
+    'confirm',
   ]),
   persona: z.enum(['kareem', 'nour']).optional(),
   minutes: z.number().int().positive().optional(),
@@ -307,6 +313,8 @@ export const UiCommandSchema = z.object({
   groqKey: z.string().min(1).optional(),
   fishKey: z.string().min(1).optional(),
   openrouterKey: z.string().min(1).optional(),
+  confirmId: z.string().min(1).optional(),
+  approve: z.boolean().optional(),
 });
 export type UiCommand = z.infer<typeof UiCommandSchema>;
 

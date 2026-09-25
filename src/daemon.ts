@@ -31,6 +31,8 @@ export interface DaemonHandle {
   readonly token: string;
   /** Publish a session snapshot to every connected shell. */
   publishSessions(): Promise<number>;
+  /** The persona the daemon currently speaks with (real server-side state). */
+  activePersona(): 'kareem' | 'nour';
   stop(): Promise<void>;
 }
 
@@ -56,6 +58,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   });
 
   let activeSession: SessionId | undefined;
+  let activePersona: 'kareem' | 'nour' = 'kareem';
   const vault = new FileVault(options.vaultPath);
 
   ui.onCommand = createCommandHandler({
@@ -64,6 +67,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       activeSession = id;
     },
     activeSessionId: () => activeSession,
+    setPersona: (persona) => {
+      activePersona = persona;
+    },
     saveKeys: {
       saveKeys: async (keys) => {
         writeKeyPools(vault, {
@@ -106,6 +112,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     servePort: options.servePort,
     token: options.ipcToken,
     publishSessions,
+    activePersona: () => activePersona,
     stop: async () => {
       inventory.dispose();
       await ui.close();

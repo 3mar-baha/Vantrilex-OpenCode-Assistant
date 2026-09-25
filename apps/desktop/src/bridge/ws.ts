@@ -36,7 +36,8 @@ export type CommandKind =
   | 'setSessionModel'
   | 'toggleSessionSkill'
   | 'execSessionShell'
-  | 'saveApiKeys';
+  | 'saveApiKeys'
+  | 'confirm';
 
 export interface CommandMsg {
   readonly id: string;
@@ -52,6 +53,8 @@ export interface CommandMsg {
   readonly groqKey?: string;
   readonly fishKey?: string;
   readonly openrouterKey?: string;
+  readonly confirmId?: string;
+  readonly approve?: boolean;
 }
 
 export interface SocketLike {

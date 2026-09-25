@@ -93,7 +93,11 @@ describe('createCommandHandler', () => {
     expect(h.calls.model).toEqual([['ses_x', { providerID: 'anthropic', id: 'opus' }]]);
     await h.handler(cmd({ kind: 'toggleSessionSkill', skill: 'probe', skillAction: 'detach' }));
     expect(h.calls.skill).toEqual([['ses_active', 'probe', 'detach']]);
-    await h.handler(cmd({ kind: 'execSessionShell', command: 'git status' }));
+    // FR-12: shell is parked first, then executed on explicit confirm.
+    const parked = await h.handler(cmd({ kind: 'execSessionShell', command: 'git status' }));
+    expect(parked).toEqual({ ok: true, detail: 'confirmation-required' });
+    expect(h.calls.shell).toEqual([]);
+    await h.handler(cmd({ kind: 'confirm', id: 'c2', confirmId: 'c1' }));
     expect(h.calls.shell).toEqual([['ses_active', 'git status']]);
   });
 
@@ -125,10 +129,11 @@ describe('createCommandHandler', () => {
     expect(await h.handler(cmd({ kind: 'setSessionAgent', agent: 'x' }))).toEqual({ ok: false, detail: 'SESSION_BUSY' });
   });
 
-  test('local intents (mute/abort/deafen/arm/setPersona) are no-ops that ack', async () => {
+  test('local intents (mute/abort/deafen/arm) ack; setPersona acks with detail', async () => {
     const h = harness();
-    for (const kind of ['mute', 'abort', 'deafen', 'arm', 'setPersona'] as const) {
+    for (const kind of ['mute', 'abort', 'deafen', 'arm'] as const) {
       expect(await h.handler(cmd({ kind }))).toEqual({ ok: true });
     }
+    expect(await h.handler(cmd({ kind: 'setPersona', persona: 'nour' }))).toMatchObject({ ok: true });
   });
 });
