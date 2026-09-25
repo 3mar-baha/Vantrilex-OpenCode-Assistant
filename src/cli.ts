@@ -10,6 +10,7 @@ import { FileVault } from './voice/vault.js';
 import { Keyring } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
 import { GroqBrainClient, requiresConfirmation } from './voice/brain.js';
+import { ensureVault } from './memory/vault.js';
 import { FishHttpTransport, TtsEngine, FileAudioOut } from './voice/tts.js';
 import { loadConfig as loadFullConfig } from './common/config.js';
 
@@ -129,6 +130,13 @@ async function liveLoop(): Promise<number> {
 }
 
 const command = process.argv[2];
+// Self-bootstrap the Obsidian memory vault on first boot (portability
+// invariant): missing notes are scaffolded; failures never block the CLI.
+try {
+  ensureVault('voxaura');
+} catch {
+  // Fresh installs without a writable cwd proceed without memory notes.
+}
 if (command === 'doctor') {
   process.exit(await doctor());
 } else if (command === 'vault' && process.argv[3] === 'bootstrap') {
