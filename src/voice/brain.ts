@@ -142,3 +142,95 @@ export class GroqBrainClient implements BrainClient {
     }
   }
 }
+
+/** Project-default OpenRouter slug for the brain (coordinator default, verified live). */
+export const BRAIN_OPENROUTER_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
+
+export const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+/**
+ * OpenRouter brain — same BrainClient contract as the Groq path, routed via
+ * Bearer auth to the OpenRouter chat endpoint. `response_format: json_object`
+ * is required (OpenRouter-spec) so completions arrive parseable; the shared
+ * normalize/extract pipeline still guards the shape. Key is caller-supplied
+ * (env or vault) — never hardcoded, never logged.
+ */
+export class OpenRouterBrainClient implements BrainClient {
+  constructor(
+    private readonly apiKey: string,
+    private readonly model: string = BRAIN_OPENROUTER_MODEL,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+
+  async respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean; attempts: number }> {
+    const started = Date.now();
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const result = await this.respondOnce(transcript, sessionContext, started);
+        return { ...result, attempts: attempt };
+      } catch (err) {
+        lastError = err;
+        const retryableEmpty = err instanceof OrchestratorError && err.code === 'BRAIN_TIMEOUT' && err.retryable;
+        if (!retryableEmpty || attempt === 3) throw err;
+      }
+    }
+    throw lastError;
+  }
+
+  private async respondOnce(transcript: string, sessionContext: string, started: number): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), BRAIN_CEILING_MS);
+    try {
+      const res = await this.fetchImpl(OPENROUTER_CHAT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+          'X-Title': 'opencode-voice-runtime',
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: AMMANI_SYSTEM_PROMPT },
+            { role: 'user', content: `Context: ${sessionContext}\nDeveloper said: ${transcript}` },
+          ],
+          temperature: 0.4,
+          max_tokens: 300,
+          stream: false,
+          response_format: { type: 'json_object' },
+        }),
+        signal: controller.signal,
+      });
+      const elapsedMs = Date.now() - started;
+      if (res.status === 401 || res.status === 403) {
+        throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain rejected credentials (rotate OPENROUTER_API_KEY)');
+      }
+      if (!res.ok) {
+        throw new OrchestratorError('BRAIN_TIMEOUT', true, `brain endpoint HTTP ${res.status} — retrying once`);
+      }
+      const payload = (await res.json()) as {
+        choices?: Array<{ message?: { content?: unknown } }>;
+        error?: { message?: unknown };
+      };
+      if (typeof payload?.error?.message === 'string') {
+        throw new OrchestratorError('BRAIN_TIMEOUT', false, `brain provider error: ${payload.error.message.slice(0, 200)}`);
+      }
+      const content = payload?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || content.trim().length === 0) {
+        throw new OrchestratorError('BRAIN_TIMEOUT', true, 'brain returned empty completion — retrying once');
+      }
+      const output = normalizeBrainJson(extractJson(content));
+      if (output === null) {
+        throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain returned non-JSON output — fallback briefing');
+      }
+      return { output, elapsedMs, goldenBreached: elapsedMs > BRAIN_GOLDEN_MS };
+    } catch (err) {
+      if (err instanceof OrchestratorError) throw err;
+      const aborted = err instanceof Error && err.name === 'AbortError';
+      throw new OrchestratorError('BRAIN_TIMEOUT', true, aborted ? 'brain exceeded 5.0s ceiling — fallback briefing' : `brain call failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}

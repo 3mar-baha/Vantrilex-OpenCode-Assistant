@@ -9,7 +9,8 @@ import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
-import { GroqBrainClient, requiresConfirmation } from './voice/brain.js';
+import { OpenRouterBrainClient, requiresConfirmation } from './voice/brain.js';
+import { OrchestratorError } from './common/errors.js';
 import { ensureVault } from './memory/vault.js';
 import { FishHttpTransport, TtsEngine, FileAudioOut } from './voice/tts.js';
 import { loadConfig as loadFullConfig } from './common/config.js';
@@ -99,8 +100,13 @@ async function liveLoop(): Promise<number> {
       report['stt_chunks'] = transcript.chunkCount;
       report['stt_text_len'] = transcript.text.length;
 
-      // 3. Brain round-trip (fixed digestive prompt; latency + budget verdict).
-      const brain = new GroqBrainClient(groqApiKey);
+      // 3. Brain round-trip via OpenRouter (fixed digestive prompt; latency + budget verdict).
+      // Key from env only — never hardcoded, never printed (fail-closed when unset).
+      const openrouterKey = process.env['OPENROUTER_API_KEY'] ?? '';
+      if (openrouterKey.length === 0) {
+        throw new OrchestratorError('BRAIN_TIMEOUT', false, 'OPENROUTER_API_KEY unset — brain skipped');
+      }
+      const brain = new OpenRouterBrainClient(openrouterKey);
       const brainStart = Date.now();
       const { output, elapsedMs, goldenBreached } = await brain.respond(
         'اختبار حي: التيستات خضرا',
