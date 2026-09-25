@@ -61,6 +61,14 @@ inside OpenCode session boundaries and reports concise English summaries with
 receipts. A.R.E.E.B. (أَرِيب) is the Type-1 foundation model behind the
 persona layer.
 
+### Role contract matrix
+
+| Role | Model | MCP surface | Forbidden |
+|---|---|---|---|
+| Dots3 intake | `dots-studio/dots-3-note-preview:free` | conversation only | tool dispatch |
+| Nemotron coordinator | `nvidia/nemotron-3-ultra-550b-a55b:free` | sequential-thinking, memory, filesystem, github, context7 | direct OS execution |
+| Inkling driver | `thinkingmachines/inkling:free` | filesystem, memory, sequential-thinking, obsidian-vault, github | out-of-session acts, model/agent switches, credentials |
+
 ---
 
 ## 2. Architecture deep-dive
@@ -72,6 +80,37 @@ persona layer.
 Packets travel **CLI Engine** → **WS-4097 Gateway** over IPC → **Orchestrator**
 over JSON-RPC → **Client Interface** over SSE stream into `opencode serve`
 2.0.12 on the shared database.
+
+### Frame catalog (frozen contracts)
+
+| Direction | Frame | Key fields |
+|---|---|---|
+| Daemon → shell | `hello` | `contractVersion`, `nodePid`, `servePort`, `layaReady`, `seq` |
+| Daemon → shell | `inventory` | level-triggered session snapshot (latest replays on resume) |
+| Daemon → shell | `agents` | discovered-agent snapshot `[{id, name}]` |
+| Shell → daemon | command | `id` + `kind` (10 kinds, schema-validated) |
+| Daemon → shell | `ack` | `id`, `ok`, optional `detail` (never throws the socket) |
+| Daemon → shell | `event` | `seq`, `eventId`, `state` (shared seq with ledger) |
+
+### Command catalog (renderer intents)
+
+| Kind | Effect | Transport |
+|---|---|---|
+| `switchSession` | set active session context | in-daemon |
+| `setSessionAgent` | POST `/api/session/{id}/agent` | 204 |
+| `setSessionModel` | POST `/api/session/{id}/model` with `ModelRef` | 204 |
+| `toggleSessionSkill` | attach/detach skill | 204 |
+| `execSessionShell` | POST `/api/session/{id}/shell` (async output over events) | 204 |
+| `abort` / `mute` / `deafen` / `arm` / `setPersona` | local daemon intents (voice + persona layer) | ack |
+
+### Failure-code map (total, fail-closed)
+
+| Signal | Code | Handling |
+|---|---|---|
+| Session missing | 404 `SESSION_NOT_FOUND` | halt lane, report |
+| Session occupied | 409 `SESSION_BUSY` | bounded backoff requeue |
+| Bad credentials | 401 | halt everything, rotate, never blind-retry |
+| Other non-2xx | transient | bounded retries under idempotency keys |
 
 <p align="center">
   <img src="assets/system-state-machine.svg" alt="Session lifecycle finite-state machine" width="100%" />
@@ -120,6 +159,16 @@ version-specific: flat `{text}` for the canonical 2.0.x CLI, nested
 `{prompt:{text}}` for 1.18.x, selected by `ServeClient.promptEnvelope`.
 
 ---
+
+### Runtime version matrix (verified)
+
+| Generation | Source | Prompt envelope |
+|---|---|---|
+| 2.0.x (canonical) | desktop-bundled 2.0.12 CLI | flat `{text}` (default) |
+| 1.18.x | npm `latest` (no 2.x published) | nested `{prompt:{text}}` |
+
+`ServeClient.promptEnvelope` selects the shape; the wrong envelope is a
+400-class failure, so version is detected, never assumed.
 
 ## 3. Orchestrator & concurrency engine
 
@@ -200,6 +249,15 @@ git-ignored while the Obsidian memory notes remain committable. A forensic
 audit across 350 tracked files confirmed zero plaintext keys and zero tracked
 backup/journal artifacts, and `.gitignore` additionally covers `*.bak`,
 `*-wal`, and `*-shm`.
+
+### Vault file layout
+
+| Path | Contents | Tracked? |
+|---|---|---|
+| `vault/keyring.dat` | AES-256-GCM pool blobs | never (ignored) |
+| `~/.opencode-voice-runtime/machine.key` | 0600 scrypt root | never (outside repo) |
+| `vault/projects/<project>/01–06` | atomic memory notes | yes |
+| `vault/indexes/MOC-master.md` | retrieval index | yes |
 
 ---
 
@@ -300,7 +358,35 @@ recovery: `VAULT_CORRUPT` or empty vault → re-run `vault bootstrap`; serve
 unreachable → check password + `probeHealth`; 409 storms → backoff requeue is
 automatic; 401 → halt and rotate credentials, never retry blind.
 
+### Gate inventory
+
+| Gate | Command | What it proves |
+|---|---|---|
+| Types | `tsc --noEmit` (via `test:vantrilex`) | strict contracts hold |
+| Lint | eslint + oxlint, zero warnings | style + Alicia rules |
+| Unit | vitest root (157) + desktop (54) | behavior at seams |
+| E2E | Playwright 8/8 | shell boots, bridge live, commands round-trip |
+| Live | `live_console_test.ts` | real serve, real APIs, measured budgets |
+| Packaging | `packaging-preflight.mjs` | 14/15 (MSVC linker pending) |
+
 ---
+
+### Provider & model catalog
+
+Default model: `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` (promoted
+after a live HTTP 200 smoke with `msg_…` receipt and identity reply).
+Registered OpenRouter slugs: Nemotron coordinator, Dots3 intake, Inkling
+driver, plus `stealth/space-bunny-alpha` on standby. Six MCP servers are
+wired — `sequential-thinking`, `memory`, `filesystem` (project-relative),
+`github`, `context7`, and `obsidian-vault` (project-relative `vault/`) —
+with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.
+
+### Packaging & release
+
+`scripts/packaging-preflight.mjs` scores 14/15: NSIS (`makensis`) installed
+via winget, `tauri.conf.json` valid, icons (ICO + ICNS) present, `Cargo.lock`
+pinned, renderer deps and `dist/` built. The single gap is the MSVC linker
+required by the `msvc` Rust toolchain to link the Windows binary.
 
 ## 9. Footer & governance
 
