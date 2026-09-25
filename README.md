@@ -162,6 +162,13 @@ version-specific: flat `{text}` for the canonical 2.0.x CLI, nested
 
 ### Runtime version matrix (verified)
 
+<p align="center">
+  <img src="assets/runtime-version-matrix.svg" alt="Runtime compatibility: Node, Rust, Tauri, TypeScript, OS targets" width="100%" />
+</p>
+
+<details>
+<summary>📊 Raw tabular data</summary>
+
 | Generation | Source | Prompt envelope |
 |---|---|---|
 | 2.0.x (canonical) | desktop-bundled 2.0.12 CLI | flat `{text}` (default) |
@@ -169,6 +176,8 @@ version-specific: flat `{text}` for the canonical 2.0.x CLI, nested
 
 `ServeClient.promptEnvelope` selects the shape; the wrong envelope is a
 400-class failure, so version is detected, never assumed.
+
+</details>
 
 ## 3. Orchestrator & concurrency engine
 
@@ -337,11 +346,20 @@ throws on a missing directory. Secrets are banned from notes by rule.
 
 The operator CLI exposes exactly three commands (`src/cli.ts`):
 
+<p align="center">
+  <img src="assets/command-catalog.svg" alt="CLI cheatsheet: doctor, vault bootstrap, live, serve I/O contracts" width="100%" />
+</p>
+
+<details>
+<summary>📊 Raw tabular data</summary>
+
 | Command | Purpose | Exit contract |
 |---|---|---|
 | `doctor` | Pre-flight: env presence (values hidden) + serve health probe | 0 healthy, 1 otherwise |
 | `vault bootstrap` | Migrate comma key pools into the encrypted vault | 0 on success, 1 if pools missing |
 | `live` | Full TTS → STT → brain → TTS round-trip with latency JSON | 0 on success, 1 with partial report |
+
+</details>
 
 Environment variables: `OPENCODE_SERVER_PASSWORD` (serve auth),
 `GROQ_API_KEYS` / `FISH_AUDIO_KEYS` (comma pools, unset after bootstrap),

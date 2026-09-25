@@ -69,13 +69,14 @@ function sketchArrow(x1, y1, x2, y2, stroke, seed) {
   const a1 = ang + Math.PI * 0.82;
   const a2 = ang - Math.PI * 0.82;
   return `<path d="M${f1(x1)},${f1(y1)}L${f1(mx)},${f1(my)}L${f1(x2)},${f1(y2)}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round"/>`
-    + `<path d="M${f1(x2)},${f1(y2)}L${f1(x2 + hl * Math.cos(a1))},${f1(y2 + hl * Math.sin(a1))}M${f1(x2)},${f1(y2)}L${f1(x2 + hl * Math.cos(a2))},${f1(y2 + hl * Math.sin(a2))}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round"/>`;
+    + `<path d="M${f1(x2)},${f1(y2)}L${f1(x2 + hl * Math.cos(a1))},${f1(y2 + hl * Math.sin(a1))}M${f1(x2)},${f1(y2)}L${f1(x2 + hl * Math.cos(a2))},${f1(y2 + hl * Math.sin(a2))}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round"/>`
+    + `<line x1="${f1(x1)}" y1="${f1(y1)}" x2="${f1(x2)}" y2="${f1(y2)}" class="flowline" stroke="#2563eb" stroke-width="1.6"/>`;
 }
 
 const text = (x, y, s, { size = 16, fill = C.slate, anchor = 'start', weight = 400, family = MONO } = {}) =>
   `<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="central" font-family="${family}" font-size="${size}" font-weight="${weight}" fill="${fill}">${s}</text>`;
 
-const CSS = `<style>.draw{stroke-dasharray:3200;stroke-dashoffset:3200;animation:draw 2.8s ease-out forwards}@keyframes draw{to{stroke-dashoffset:0}}.flow{stroke-dasharray:9 11;animation:flow 1.2s linear infinite}@keyframes flow{to{stroke-dashoffset:-40}}.blinkdot{animation:blinkdot 1.6s ease-in-out infinite}@keyframes blinkdot{0%,100%{opacity:1}50%{opacity:0.3}}</style>`;
+const CSS = `<style>.draw{stroke-dasharray:3200;stroke-dashoffset:3200;animation:sketch 12s ease-in-out infinite}@keyframes sketch{0%{stroke-dashoffset:3200}22%{stroke-dashoffset:0}80%{stroke-dashoffset:0}100%{stroke-dashoffset:3200}}.flowline{stroke-dasharray:6 10;animation:gentleFlow 3s linear infinite}@keyframes gentleFlow{from{stroke-dashoffset:32}to{stroke-dashoffset:0}}.blinkdot{animation:blinkdot 1.6s ease-in-out infinite}@keyframes blinkdot{0%,100%{opacity:1}50%{opacity:0.3}}</style>`;
 
 function sketchCircle(x, y, r, stroke, seed, width = 2.5) {
   let d = '';
@@ -267,7 +268,7 @@ function cliTree() {
   ];
   cmds.forEach((b, i) => {
     const cx = [180, 405, 630, 810][i];
-    s += `<path d="M450,100 L${cx},130" fill="none" stroke="${C.gray}" stroke-width="2"/>`;
+    s += `<path class="flowline" d="M450,100 L${cx},130" fill="none" stroke="${C.gray}" stroke-width="2"/>`;
     s += sketchRect(b.x, 130, 165, 110, C.blue, 2020 + i * 31, 2.5);
     s += text(b.x + 82, 158, b.t, { size: 15, weight: 700, anchor: 'middle' });
     s += text(b.x + 82, 186, b.s, { size: 12, fill: C.gray, anchor: 'middle' });
@@ -307,6 +308,51 @@ function stateMachine() {
   return `${s}</svg>`;
 }
 
+function runtimeMatrix() {
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380"><rect width="900" height="380" fill="${C.canvas}"/>${CSS}`;
+  s += text(450, 28, 'runtime compatibility matrix', { size: 20, weight: 700, anchor: 'middle' });
+  s += text(60, 60, 'COMPONENT', { size: 13, fill: C.gray, weight: 700 });
+  s += text(400, 60, 'REQUIRED', { size: 13, fill: C.gray, weight: 700 });
+  s += text(700, 60, 'STATUS', { size: 13, fill: C.gray, weight: 700 });
+  const rows = [
+    ['Node.js', '>= 22 (fetch, WebSocket)'],
+    ['Rust toolchain', 'stable (tauri build)'],
+    ['Tauri', 'v2 (window · tray · hotkey)'],
+    ['TypeScript', '5.5 strict'],
+    ['Windows', 'x64 · NSIS bundle'],
+    ['macOS / Linux', 'x64 · watch only'],
+  ];
+  rows.forEach((r, i) => {
+    const y = 76 + i * 48;
+    s += sketchRect(40, y, 820, 38, C.gray, 8000 + i * 37, 1.5);
+    s += text(60, y + 20, r[0], { size: 16, weight: 700 });
+    s += text(400, y + 20, r[1], { size: 14, fill: C.slate });
+    s += `<circle cx="700" cy="${y + 19}" r="8" fill="${C.green}"><animate attributeName="opacity" dur="2.2s" begin="${(i * 0.35).toFixed(2)}s" repeatCount="indefinite" values="1;0.3;1"/></circle>`;
+    s += text(722, y + 20, 'ok', { size: 15, fill: C.green, weight: 700 });
+  });
+  return `${s}</svg>`;
+}
+
+function commandCatalog() {
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420"><rect width="900" height="420" fill="${C.canvas}"/>${CSS}`;
+  s += text(450, 28, 'cli command cheatsheet', { size: 20, weight: 700, anchor: 'middle' });
+  const cards = [
+    { x: 30, y: 60, t: 'doctor', i: 'env presence + serve probe', o: 'presence report · exit 0/1' },
+    { x: 460, y: 60, t: 'vault bootstrap', i: 'comma key pools', o: 'keyring.dat · unset env' },
+    { x: 30, y: 235, t: 'live', i: 'keyring + mic config', o: 'latency JSON report' },
+    { x: 460, y: 235, t: 'serve (opencode)', i: '--port 4096 · password', o: '/api + /v1/ui · 204s' },
+  ];
+  cards.forEach((c, k) => {
+    s += sketchRect(c.x, c.y, 410, 150, C.blue, 8100 + k * 53, 2.5);
+    s += text(c.x + 24, c.y + 32, c.t, { size: 18, weight: 700 });
+    s += `<circle cx="${c.x + 384}" cy="${c.y + 28}" r="7" fill="${C.green}"><animate attributeName="opacity" dur="2s" begin="${(k * 0.4).toFixed(2)}s" repeatCount="indefinite" values="1;0.3;1"/></circle>`;
+    s += text(c.x + 24, c.y + 70, 'in:  ' + c.i, { size: 14, fill: C.gray });
+    s += sketchArrow(c.x + 24, c.y + 92, c.x + 60, c.y + 92, C.amber, 8200 + k * 17);
+    s += text(c.x + 24, c.y + 122, 'out: ' + c.o, { size: 14, fill: C.slate });
+  });
+  return `${s}</svg>`;
+}
+
 function footerSketch() {
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 160"><rect width="1200" height="160" fill="${C.canvas}"/>${CSS}`;
   s += `<path class="draw" d="M60,50 C300,42 500,58 700,50 S1000,44 1140,52" fill="none" stroke="${C.slate}" stroke-width="3" stroke-linecap="round"/>`;
@@ -322,7 +368,7 @@ function architectureFlow() {
     { x: 470, label: 'Orchestrator', sub: 'queue · 409 retry' },
     { x: 685, label: 'Client Shell', sub: 'serve 2.0.12 · 204' },
   ];
-  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 220"><rect width="900" height="220" fill="${C.canvas}"/>`;
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 220"><rect width="900" height="220" fill="${C.canvas}"/>${CSS}`;
   s += text(450, 26, 'control-plane pipeline', { size: 20, weight: 700, anchor: 'middle' });
   boxes.forEach((b, i) => {
     s += sketchRect(b.x, 60, 175, 110, C.blue, 1000 + i * 77);
@@ -346,7 +392,7 @@ function benchmarkMatrix() {
     { label: 'E2E Resolution', sub: 'Multi-step', v: 91.4, b: 76.5, d: '+14.9%' },
   ];
   const X = 270, MAXW = 300, RH = 46, Y0 = 84;
-  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380"><rect width="900" height="380" fill="${C.canvas}"/>`;
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380"><rect width="900" height="380" fill="${C.canvas}"/>${CSS}`;
   s += text(450, 28, 'model accuracy &amp; response benchmarks', { size: 21, weight: 700, anchor: 'middle' });
   s += text(24, 60, 'CAPABILITY', { size: 13, fill: C.gray, weight: 700 });
   s += text(X, 60, 'ENGINE vs BASELINE', { size: 13, fill: C.gray, weight: 700 });
@@ -365,6 +411,7 @@ function benchmarkMatrix() {
     const bs = r.ms ? `${r.vb} ms` : `${r.b.toFixed(1)}%`;
     s += text(X + vw + 10, y + 15, vs, { size: 15, weight: 700, fill: C.blue });
     s += text(X + bw + 10, y + 32, bs, { size: 12, fill: C.gray });
+    s += `<circle cx="${f1(X + vw)}" cy="${y + 15}" r="5" fill="${C.green}"><animate attributeName="opacity" dur="2s" begin="${(i * 0.3).toFixed(2)}s" repeatCount="indefinite" values="1;0.3;1"/></circle>`;
     s += sketchRect(742, y + 7, 134, 34, C.amber, 7000 + i * 13, 2);
     s += text(809, y + 25, r.d, { size: 14, weight: 700, fill: C.green, anchor: 'middle' });
   });
@@ -383,4 +430,6 @@ writeFileSync(join(root, 'assets', 'context-memory-manager.svg'), `${memoryManag
 writeFileSync(join(root, 'assets', 'cli-command-tree.svg'), `${cliTree()}\n`);
 writeFileSync(join(root, 'assets', 'system-state-machine.svg'), `${stateMachine()}\n`);
 writeFileSync(join(root, 'assets', 'footer-sketch.svg'), `${footerSketch()}\n`);
-console.log('whiteboard assets generated: 12 SVGs');
+writeFileSync(join(root, 'assets', 'runtime-version-matrix.svg'), `${runtimeMatrix()}\n`);
+writeFileSync(join(root, 'assets', 'command-catalog.svg'), `${commandCatalog()}\n`);
+console.log('whiteboard assets generated: 14 SVGs');
