@@ -21,6 +21,9 @@ Thumbs.db
 *.key
 vault/keyring.dat
 vault/machine.key
+*.bak
+*-wal
+*-shm
 credentials/
 *-credentials.json
 diag*.zip
