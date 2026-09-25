@@ -22,6 +22,8 @@
     "test": "vitest run",
     "test:desktop": "npm --prefix apps/desktop run test",
     "test:vantrilex": "npm run typecheck && npm run lint && npm run lint:ox && npm run test && npm run test:desktop",
+    "dev": "npm --prefix apps/desktop run dev",
+    "dev:web": "npm --prefix apps/desktop run dev:web",
     "doctor": "node dist/cli.js doctor"
   },
   "dependencies": {
