@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { ApiKeysModal, type ApiKeyBundle } from './ApiKeysModal.js';
-import { PortalShell } from './PortalShell.js';
+import { ApiKeysModal, type ApiKeyBundle } from '../portals/ApiKeysModal.js';
+import { PortalShell } from '../portals/PortalShell.js';
 
 // Large square settings dialog with sidebar tabs. Arabic-first copy; technical
 // tokens (API, MCP, model/agent ids) stay Latin verbatim. The API-keys tab
@@ -47,9 +47,14 @@ export function SettingsDialog(props: SettingsDialogProps): JSX.Element {
         data-testid="settings-dialog"
         role="dialog"
         aria-label="إعدادات Voxaura"
-        className="w-[680px] h-[580px] max-w-[90vw] max-h-[85vh] rounded-2xl shadow-2xl backdrop-blur-xl bg-[#0f172a]/95 border border-slate-700/80"
+        className="flex w-[700px] h-[580px] max-w-[95vw] max-h-[85vh] rounded-2xl shadow-2xl backdrop-blur-xl bg-[#0f172a]/95 border border-slate-700/80 overflow-hidden"
       >
-        <div role="tablist" aria-label="أقسام الإعدادات" data-testid="settings-tabs">
+        <div
+          role="tablist"
+          aria-label="أقسام الإعدادات"
+          data-testid="settings-tabs"
+          className="flex w-56 shrink-0 flex-col gap-1 border-e border-slate-700/60 bg-slate-900/60 p-4"
+        >
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -57,18 +62,20 @@ export function SettingsDialog(props: SettingsDialogProps): JSX.Element {
               aria-selected={tab === t.id}
               data-testid={`tab-${t.id}`}
               onClick={() => setTab(t.id)}
+              className="rounded-xl px-4 py-3 text-start text-base aria-selected:bg-slate-700/70 aria-selected:text-white text-slate-300 hover:bg-slate-800/70"
             >
               {t.title}
             </button>
           ))}
         </div>
-        <div data-testid="settings-content">
+        <div data-testid="settings-content" className="min-w-0 flex-1 space-y-5 overflow-y-auto p-6">
           {tab === 'keys' && (
             <ApiKeysModal
               onSave={props.onSaveKeys}
               onClose={props.onClose}
               saving={props.keysSaving}
               saveError={props.keysError}
+              embedded
             />
           )}
           {tab === 'models' && (

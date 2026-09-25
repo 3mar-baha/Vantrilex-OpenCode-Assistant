@@ -17,6 +17,8 @@ export interface ApiKeysModalProps {
   readonly onClose: () => void;
   readonly saving?: boolean;
   readonly saveError?: string | undefined;
+  /** When embedded inside another dialog, render only the form (no shell). */
+  readonly embedded?: boolean;
 }
 
 const FIELDS = [
@@ -27,7 +29,7 @@ const FIELDS = [
 
 type FieldId = (typeof FIELDS)[number]['id'];
 
-export function ApiKeysModal({ onSave, onClose, saving = false, saveError }: ApiKeysModalProps): JSX.Element {
+export function ApiKeysModal({ onSave, onClose, saving = false, saveError, embedded = false }: ApiKeysModalProps): JSX.Element {
   const refs: Record<FieldId, React.RefObject<HTMLInputElement>> = {
     groq: useRef<HTMLInputElement>(null),
     fish: useRef<HTMLInputElement>(null),
@@ -39,38 +41,42 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError }: Api
 
   const read = (id: FieldId): string => refs[id].current?.value.trim() ?? '';
 
-  return (
-    <PortalShell label="مفاتيح الـ API" onClose={onClose}>
+  const form = (
+    <>
       <p data-testid="apikey-banner" role="alert">
         يرجى إدخال جميع المفاتيح الثلاثة المطلوبة (Groq, Fish Audio, OpenRouter) لتفعيل النظام / All 3 API
         keys are required to activate Voxaura
       </p>
       {FIELDS.map((f) => (
-        <div key={f.id}>
-          <label htmlFor={`apikey-${f.id}`}>
-            {f.label} <span>{f.hint}</span>
+        <div key={f.id} className="space-y-2 rounded-xl border border-slate-700/60 bg-slate-900/50 p-4">
+          <label htmlFor={`apikey-${f.id}`} className="block text-base font-semibold text-slate-100">
+            {f.label} <span className="block text-sm font-normal text-slate-400">{f.hint}</span>
           </label>
-          <input
-            id={`apikey-${f.id}`}
-            data-testid={`apikey-${f.id}`}
-            ref={refs[f.id]}
-            type={revealed[f.id] ? 'text' : 'password'}
-            defaultValue=""
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(e) => setPresent((s) => ({ ...s, [f.id]: e.target.value.trim().length > 0 }))}
-          />
-          <button
-            data-testid={`toggle-${f.id}`}
-            aria-label={`إظهار أو إخفاء ${f.label}`}
-            aria-pressed={revealed[f.id]}
-            onClick={() => setRevealed((s) => ({ ...s, [f.id]: !s[f.id] }))}
-          >
-            {revealed[f.id] ? 'إخفاء' : 'إظهار'}
-          </button>
-          <span data-testid={`badge-${f.id}`} aria-live="polite">
-            {present[f.id] ? 'موجود' : 'مفقود'}
-          </span>
+          <div className="flex items-center gap-2">
+            <input
+              id={`apikey-${f.id}`}
+              data-testid={`apikey-${f.id}`}
+              ref={refs[f.id]}
+              type={revealed[f.id] ? 'text' : 'password'}
+              defaultValue=""
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setPresent((s) => ({ ...s, [f.id]: e.target.value.trim().length > 0 }))}
+              className="min-w-0 flex-1 bg-slate-800/80 border border-slate-700 text-slate-100 px-4 py-2.5 rounded-xl placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+            />
+            <button
+              data-testid={`toggle-${f.id}`}
+              aria-label={`إظهار أو إخفاء ${f.label}`}
+              aria-pressed={revealed[f.id]}
+              onClick={() => setRevealed((s) => ({ ...s, [f.id]: !s[f.id] }))}
+              className="shrink-0 rounded-xl border border-slate-700 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-800"
+            >
+              {revealed[f.id] ? 'إخفاء' : 'إظهار'}
+            </button>
+            <span data-testid={`badge-${f.id}`} aria-live="polite" className="shrink-0 text-sm text-slate-300">
+              {present[f.id] ? 'موجود' : 'مفقود'}
+            </span>
+          </div>
         </div>
       ))}
       {saveError !== undefined && (
@@ -85,9 +91,17 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError }: Api
           const keys = { groq: read('groq'), fish: read('fish'), openrouter: read('openrouter') };
           if (keys.groq.length > 0 && keys.fish.length > 0 && keys.openrouter.length > 0) onSave(keys);
         }}
+        className="w-full rounded-xl bg-sky-600 px-4 py-3 text-base font-bold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {saving ? 'جارٍ الحفظ…' : 'حفظ وتفعيل'}
       </button>
+    </>
+  );
+
+  if (embedded) return form;
+  return (
+    <PortalShell label="مفاتيح الـ API" onClose={onClose}>
+      {form}
     </PortalShell>
   );
 }

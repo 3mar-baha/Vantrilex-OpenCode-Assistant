@@ -1,13 +1,13 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { VoxauraBridge } from './bridge/ws.js';
 import { ActionBar } from './components/actionbar/ActionBar.js';
-import { Crest } from './components/brand/Crest.js';
 import { WaveformEmblem } from './components/brand/WaveformEmblem.js';
-import { SiriWaveVisualizer } from './components/audio/SiriWaveVisualizer.js';
-import { matrixForDaemonState, stateAccent } from './matrix/matrix-state.js';
+import { SiriWaveCanvas } from './components/waveform/SiriWaveCanvas.js';
+import { matrixForDaemonState } from './matrix/matrix-state.js';
 import type { MatrixState } from './matrix/matrix-state.js';
-import { SettingsDialog } from './components/portals/SettingsDialog.js';
+import { SettingsDialog } from './components/settings/SettingsDialog.js';
 import { ApiKeysModal } from './components/portals/ApiKeysModal.js';
+import { Mic } from 'lucide-react';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
@@ -184,16 +184,24 @@ export function App(): JSX.Element {
 
   return (
     <div
-      className="min-h-full bg-obsidian text-stone-200"
+      className="flex min-h-screen items-center justify-center bg-[#0a0f1d] p-4 text-slate-200"
       data-testid="voxaura-shell"
       dir="rtl"
       style={{ fontFamily: ARABIC_FONT }}
     >
-      <header>
-        <Crest size={24} />
-        <WaveformEmblem />
-        <h1 data-testid="app-title">Voxaura</h1>
-        <span data-testid="bridge-status">{statusPill}</span>
+      <div className="flex w-full max-w-[420px] flex-col gap-5 rounded-3xl border border-slate-700/70 bg-slate-900/80 p-5 shadow-2xl backdrop-blur-xl">
+        <header className="flex items-center gap-3">
+          <WaveformEmblem />
+          <h1 data-testid="app-title" className="text-2xl font-bold text-slate-50">
+            Voxaura
+          </h1>
+          <span
+            data-testid="bridge-status"
+            className="ms-auto rounded-full border border-slate-700/70 bg-slate-800/70 px-3 py-1 text-sm text-sky-300"
+          >
+            {statusPill}
+          </span>
+        </header>
         <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
         <AgentModelBadge
           agent={agentModel.agent}
@@ -203,17 +211,40 @@ export function App(): JSX.Element {
           onSelectAgent={handleSelectAgent}
           onSwitchModel={handleSwitchModel}
         />
-      </header>
-      <main>
-        <SiriWaveVisualizer mode={matrix === 0 ? 'idle' : 'active'} color={stateAccent(matrix)} />
-        <ActionBar onAction={handleAction} />
-      </main>
-      <button data-testid="open-settings" onClick={() => setSettingsOpen(true)}>
-        الإعدادات
-      </button>
-      <button data-testid="open-apikeys" onClick={() => setKeysOpen(true)}>
-        مفاتيح الـ API
-      </button>
+        <main className="flex flex-col items-center gap-4">
+          <div
+            className="w-full rounded-2xl border border-slate-700/60 bg-slate-950/60 p-2"
+            style={{ filter: 'drop-shadow(0 0 12px rgba(56, 189, 248, 0.45))' }}
+          >
+            <SiriWaveCanvas mode={matrix === 0 ? 'idle' : 'active'} color="#38bdf8" />
+          </div>
+          <button
+            data-testid="mic-core"
+            aria-label="الميكروفون"
+            onClick={() => handleAction('deafen')}
+            className="flex h-20 w-20 items-center justify-center rounded-full border border-sky-400/40 bg-sky-500/15 text-sky-300 shadow-[0_0_28px_rgba(56,189,248,0.35)] transition hover:bg-sky-500/25"
+          >
+            <Mic size={32} />
+          </button>
+          <ActionBar onAction={handleAction} />
+        </main>
+        <div className="flex gap-3">
+          <button
+            data-testid="open-settings"
+            onClick={() => setSettingsOpen(true)}
+            className="flex-1 rounded-xl border border-slate-700/70 bg-slate-800/70 px-4 py-2.5 text-slate-100 hover:bg-slate-700/70"
+          >
+            الإعدادات
+          </button>
+          <button
+            data-testid="open-apikeys"
+            onClick={() => setKeysOpen(true)}
+            className="flex-1 rounded-xl border border-sky-500/40 bg-sky-500/15 px-4 py-2.5 text-sky-200 hover:bg-sky-500/25"
+          >
+            مفاتيح الـ API
+          </button>
+        </div>
+      </div>
       {keysOpen && (
         <ApiKeysModal
           onSave={handleSaveKeys}

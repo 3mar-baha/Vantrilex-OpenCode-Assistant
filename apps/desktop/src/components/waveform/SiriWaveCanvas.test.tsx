@@ -1,7 +1,7 @@
 import { act } from 'react-dom/test-utils';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { SiriWaveVisualizer, type SiriWaveMode } from './SiriWaveVisualizer.js';
+import { SiriWaveCanvas, type SiriWaveMode } from './SiriWaveCanvas.js';
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
@@ -11,7 +11,7 @@ function mount(mode: SiriWaveMode): void {
   document.body.appendChild(host);
   root = createRoot(host);
   act(() => {
-    root!.render(<SiriWaveVisualizer mode={mode} color="#38bdf8" />);
+    root!.render(<SiriWaveCanvas mode={mode} color="#38bdf8" />);
   });
 }
 
@@ -27,7 +27,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('SiriWaveVisualizer (Canvas 2D multi-harmonic wave)', () => {
+describe('SiriWaveCanvas (kopiro multi-curve wave)', () => {
   test('renders a labelled canvas in both modes without crashing', () => {
     mount('idle');
     const canvas = document.body.querySelector('[data-testid="siri-wave"]');
