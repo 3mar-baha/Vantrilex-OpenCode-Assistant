@@ -137,13 +137,13 @@ async function liveLoop(): Promise<number> {
 // Daemon: adopt the running serve and host the WS-4097 control plane.
 async function serveDaemon(): Promise<number> {
   loadDotEnvLocal();
-  const { startDaemon, vaultPathFromEnv, ipcTokenFromEnv } = await import('./daemon.js');
+  const { startDaemon, vaultPathFromEnv, ipcTokenFromEnv, ensureIpcToken } = await import('./daemon.js');
   const cfg = loadConfig();
   const password = process.env['OPENCODE_SERVER_PASSWORD'] ?? '';
-  const token = ipcTokenFromEnv();
+  const token = ipcTokenFromEnv() || ensureIpcToken();
   const ipcPort = Number.parseInt(process.env['VOICE_IPC_PORT'] ?? '4097', 10);
-  if (password.length === 0 || token.length === 0) {
-    console.log('miss serve: OPENCODE_SERVER_PASSWORD and VOICE_RUNTIME_IPC_TOKEN are required');
+  if (password.length === 0) {
+    console.log('miss serve: OPENCODE_SERVER_PASSWORD is required');
     return 1;
   }
   try {

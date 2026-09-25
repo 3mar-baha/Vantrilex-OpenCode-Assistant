@@ -8,6 +8,7 @@ import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { AGENT_CHAIN } from './settings/chain.js';
+import { envToken, resolveIpcToken } from './settings/ipc-token.js';
 import { openKeysWindow, openSettingsWindow } from './settings/open-settings.js';
 import './index.css';
 
@@ -19,10 +20,7 @@ type BridgeState = 'connecting' | 'live' | 'degraded' | 'refused';
 const FONT = 'var(--vx-font)';
 
 export function App(): JSX.Element {
-  const [bridge, setBridge] = useState<BridgeState>(() => {
-    const token = import.meta.env['VOICE_RUNTIME_IPC_TOKEN'] as string | undefined;
-    return typeof token === 'string' && token.length > 0 ? 'connecting' : 'degraded';
-  });
+  const [bridge, setBridge] = useState<BridgeState>(envToken() !== undefined ? 'connecting' : 'degraded');
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
   const [matrix, setMatrix] = useState<MatrixState>(0);
   const [userMuted, setUserMuted] = useState(false);
@@ -37,6 +35,7 @@ export function App(): JSX.Element {
   const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
+  const lastFrameAt = useRef<number>(Date.now());
   const personaRef = useRef(persona);
   const cmdCounter = useRef(0);
   useEffect(() => {
@@ -50,29 +49,47 @@ export function App(): JSX.Element {
   };
 
   useEffect(() => {
-    const token = import.meta.env['VOICE_RUNTIME_IPC_TOKEN'] as string | undefined;
-    if (typeof token !== 'string' || token.length === 0) return;
-    const b = new VoxauraBridge({
-      token,
-      contractVersion: '3.1.0',
-      onHello: () => setBridge('live'),
-      onEvent: (event) => {
-        const mapped = matrixForDaemonState(event.state, personaRef.current);
-        if (mapped !== null) setMatrix(mapped);
-        setLastEventAt(new Date().toLocaleTimeString('ar'));
-      },
-      onInventory: (sessions) =>
-        dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) }),
-      onAgents: (list) => setAgents(list.map((a) => ({ id: a.id, name: a.name }))),
-      onClose: () => setBridge((s) => (s === 'live' ? 'degraded' : s)),
-      onRefusal: () => setBridge('refused'),
+    let disposed = false;
+    let client: VoxauraBridge | null = null;
+    void resolveIpcToken().then((token) => {
+      if (disposed || token === undefined) {
+        if (!disposed && token === undefined) setBridge('degraded');
+        return;
+      }
+      const b = new VoxauraBridge({
+        token,
+        contractVersion: '3.1.0',
+        onHello: () => setBridge('live'),
+        onEvent: (event) => {
+          const mapped = matrixForDaemonState(event.state, personaRef.current);
+          if (mapped !== null) setMatrix(mapped);
+          setLastEventAt(new Date().toLocaleTimeString('ar'));
+          lastFrameAt.current = Date.now();
+        },
+        onInventory: (sessions) =>
+          dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) }),
+        onAgents: (list) => setAgents(list.map((a) => ({ id: a.id, name: a.name }))),
+        onClose: () => setBridge((s) => (s === 'live' ? 'degraded' : s)),
+        onRefusal: () => setBridge('refused'),
+      });
+      client = b;
+      bridgeRef.current = b;
+      b.connect();
     });
-    bridgeRef.current = b;
-    b.connect();
     return () => {
-      b.dispose();
+      disposed = true;
+      client?.dispose();
       bridgeRef.current = null;
     };
+  }, []);
+
+  // Staleness watchdog: a silent socket must not keep showing "متصل".
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (bridgeRef.current === null) return;
+      if (Date.now() - lastFrameAt.current > 45_000) setBridge((s) => (s === 'live' ? 'degraded' : s));
+    }, 5_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {

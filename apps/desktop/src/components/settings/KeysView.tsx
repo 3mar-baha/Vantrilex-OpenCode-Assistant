@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiKeysModal, type ApiKeyBundle } from '../portals/ApiKeysModal.js';
 import { VoxauraBridge } from '../../bridge/ws.js';
+import { resolveIpcToken } from '../../settings/ipc-token.js';
 
 // KeysView — the dedicated API-keys window (?view=keys). Decoupled from the
 // general settings window so the credential task has a focused surface: no
@@ -17,9 +18,11 @@ export function KeysView(): JSX.Element {
   const bridgeRef = useRef<VoxauraBridge | null>(null);
 
   useEffect(() => {
-    const token = import.meta.env['VOICE_RUNTIME_IPC_TOKEN'] as string | undefined;
-    if (typeof token !== 'string' || token.length === 0) return;
-    const b = new VoxauraBridge({
+    let disposed = false;
+    let client: VoxauraBridge | null = null;
+    void resolveIpcToken().then((token) => {
+      if (disposed || token === undefined) return;
+      const b = new VoxauraBridge({
       token,
       contractVersion: '3.1.0',
       onHello: () => undefined,
@@ -27,10 +30,13 @@ export function KeysView(): JSX.Element {
       onClose: () => undefined,
       onRefusal: () => undefined,
     });
-    bridgeRef.current = b;
-    b.connect();
+      client = b;
+      bridgeRef.current = b;
+      b.connect();
+    });
     return () => {
-      b.dispose();
+      disposed = true;
+      client?.dispose();
       bridgeRef.current = null;
     };
   }, []);

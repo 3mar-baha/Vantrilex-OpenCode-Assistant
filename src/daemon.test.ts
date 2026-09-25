@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { ipcTokenFromEnv, startDaemon, vaultPathFromEnv, type DaemonHandle } from './daemon.js';
+import { ensureIpcToken, ipcTokenPath } from './daemon.js';
 import { readKeyPools } from './voice/key-store.js';
 import { FileVault } from './voice/vault.js';
 
@@ -107,5 +108,12 @@ describe('env resolvers', () => {
     expect(vaultPathFromEnv({} as NodeJS.ProcessEnv, '/repo')).toBe('/repo/vault/keyring.dat');
     expect(ipcTokenFromEnv({ VOICE_RUNTIME_IPC_TOKEN: 'abc' } as NodeJS.ProcessEnv)).toBe('abc');
     expect(ipcTokenFromEnv({} as NodeJS.ProcessEnv)).toBe('');
+  });
+
+  test('ensureIpcToken generates a per-install token once and reuses it', () => {
+    const path = ipcTokenPath(join(mkdtempSync(join(tmpdir(), 'ipctoken-'))));
+    const first = ensureIpcToken(path);
+    expect(first.length).toBe(64); // 32 random bytes, hex
+    expect(ensureIpcToken(path)).toBe(first);
   });
 });

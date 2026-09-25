@@ -1,3 +1,7 @@
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { OrchestratorError } from './common/errors.js';
 import type { SessionId } from './common/brands.js';
 import { UiServer } from './ipc/index.js';
@@ -125,7 +129,35 @@ export function vaultPathFromEnv(env: NodeJS.ProcessEnv = process.env, cwd = pro
   return env['VOXAURA_VAULT_PATH'] ?? `${cwd}/vault/keyring.dat`;
 }
 
-/** Resolve the IPC token from the environment (fail-closed: never a default). */
+/**
+ * Resolve the IPC token (H4). Precedence: explicit env → per-install token file
+ * (0600, written by `ensureIpcToken`) → empty (fail-closed, never a default).
+ */
 export function ipcTokenFromEnv(env: NodeJS.ProcessEnv = process.env): string {
   return env['VOICE_RUNTIME_IPC_TOKEN'] ?? '';
+}
+
+/** Default location of the per-install IPC token (0600, never committed). */
+export function ipcTokenPath(home: string = homedir()): string {
+  return join(home, '.opencode-voice-runtime', 'ipc.token');
+}
+
+/**
+ * Return the per-install IPC token, generating it on first use (H4). The value
+ * is random per machine, written 0600, and never baked into the bundle or logs.
+ */
+export function ensureIpcToken(path: string = ipcTokenPath()): string {
+  if (existsSync(path)) {
+    const existing = readFileSync(path, 'utf8').trim();
+    if (existing.length > 0) return existing;
+  }
+  const token = randomBytes(32).toString('hex');
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, token, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Windows ACLs already scope the user profile; best-effort on POSIX.
+  }
+  return token;
 }

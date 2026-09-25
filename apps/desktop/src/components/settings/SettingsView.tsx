@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { VoxauraBridge } from '../../bridge/ws.js';
+import { resolveIpcToken } from '../../settings/ipc-token.js';
 
 // SettingsView — the general settings window surface (?view=settings).
 // Credentials live in the dedicated keys window (?view=keys); this surface owns
@@ -47,9 +48,11 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
   const bridgeRef = useRef<VoxauraBridge | null>(null);
 
   useEffect(() => {
-    const token = import.meta.env['VOICE_RUNTIME_IPC_TOKEN'] as string | undefined;
-    if (typeof token !== 'string' || token.length === 0) return;
-    const b = new VoxauraBridge({
+    let disposed = false;
+    let client: VoxauraBridge | null = null;
+    void resolveIpcToken().then((token) => {
+      if (disposed || token === undefined) return;
+      const b = new VoxauraBridge({
       token,
       contractVersion: '3.1.0',
       onHello: () => undefined,
@@ -57,10 +60,13 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
       onClose: () => undefined,
       onRefusal: () => undefined,
     });
-    bridgeRef.current = b;
-    b.connect();
+      client = b;
+      bridgeRef.current = b;
+      b.connect();
+    });
     return () => {
-      b.dispose();
+      disposed = true;
+      client?.dispose();
       bridgeRef.current = null;
     };
   }, []);
