@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiKeysModal, type ApiKeyBundle } from '../portals/ApiKeysModal.js';
 import { VoxauraBridge } from '../../bridge/ws.js';
 import { resolveIpcToken } from '../../settings/ipc-token.js';
+import { useAutoSize } from '../../window/useAutoSize.js';
 
 // KeysView — the dedicated API-keys window (?view=keys). Decoupled from the
 // general settings window so the credential task has a focused surface: no
@@ -16,6 +17,8 @@ export function KeysView(): JSX.Element {
   const [error, setError] = useState<string | undefined>(undefined);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useAutoSize(rootRef, { minWidth: 560, minHeight: 460, maxWidth: 820, maxHeight: 1000, paddingX: 2, paddingY: 2 });
 
   useEffect(() => {
     let disposed = false;
@@ -74,9 +77,10 @@ export function KeysView(): JSX.Element {
 
   return (
     <div
+      ref={rootRef}
       dir="rtl"
       data-testid="keys-view"
-      className="flex h-screen w-screen flex-col overflow-hidden bg-[#121316] text-[#f4f4f5]"
+      className="flex w-full flex-col overflow-hidden bg-[#121316] text-[#f4f4f5]"
       style={{ fontFamily: 'var(--vx-font)' }}
     >
       <header className="flex items-center gap-3 border-b border-[#26282e] bg-[#18191d] px-5 py-3">

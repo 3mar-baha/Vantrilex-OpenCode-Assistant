@@ -9,7 +9,9 @@ import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { AGENT_CHAIN } from './settings/chain.js';
 import { envToken, resolveIpcToken } from './settings/ipc-token.js';
+import { ensureServices } from './settings/services.js';
 import { openKeysWindow, openSettingsWindow } from './settings/open-settings.js';
+import { useAutoSize } from './window/useAutoSize.js';
 import './index.css';
 
 // Voxaura companion HUD — one control per intent, no duplicated toolbars.
@@ -35,6 +37,8 @@ export function App(): JSX.Element {
   const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useAutoSize(cardRef);
   const lastFrameAt = useRef<number>(Date.now());
   const personaRef = useRef(persona);
   const cmdCounter = useRef(0);
@@ -51,6 +55,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     let disposed = false;
     let client: VoxauraBridge | null = null;
+    // Zero-click: bring the tiers up first (no-op off Tauri). The bridge also
+    // retries with backoff, so a slow cold start converges without the user.
+    void ensureServices().then((result) => {
+      if (!disposed && result !== null && !result.ok) setAnnounce(`تعذّر بدء الخدمات: ${result.detail}`);
+    });
     void resolveIpcToken().then((token) => {
       if (disposed || token === undefined) {
         if (!disposed && token === undefined) setBridge('degraded');
@@ -193,11 +202,16 @@ export function App(): JSX.Element {
     <div
       dir="rtl"
       data-testid="voxaura-shell"
-      className="flex min-h-screen items-center justify-center bg-[#121316] p-4 text-[#f4f4f5]"
+      data-tauri-drag-region
+      className="inline-block bg-[#121316] text-[#f4f4f5]"
       style={{ fontFamily: FONT }}
     >
-      <div className="flex w-full max-w-[440px] flex-col overflow-hidden rounded-lg border border-[#26282e] bg-[#18191d]">
-        <header className="flex items-center gap-3 border-b border-[#26282e] px-4 py-3">
+      <div
+        ref={cardRef}
+        data-tauri-drag-region
+        className="flex w-[440px] flex-col overflow-hidden rounded-lg border border-[#26282e] bg-[#18191d]"
+      >
+        <header data-tauri-drag-region className="flex items-center gap-3 border-b border-[#26282e] px-4 py-3">
           <WaveformEmblem />
           <h1 data-testid="app-title" className="text-base font-semibold">
             Voxaura

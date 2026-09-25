@@ -15,11 +15,12 @@
         "title": "Voxaura",
         "width": 440,
         "height": 600,
-        "minWidth": 400,
-        "resizable": true,
+        "resizable": false,
+        "maximizable": false,
+        "alwaysOnTop": false,
         "decorations": false,
         "transparent": true,
-        "alwaysOnTop": true
+        "shadow": true
       }
     ],
     "security": {

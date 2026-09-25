@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { VoxauraBridge } from '../../bridge/ws.js';
 import { resolveIpcToken } from '../../settings/ipc-token.js';
+import { useAutoSize } from '../../window/useAutoSize.js';
 
 // SettingsView — the general settings window surface (?view=settings).
 // Credentials live in the dedicated keys window (?view=keys); this surface owns
@@ -46,6 +47,8 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
   const [persona, setPersona] = useState<'kareem' | 'nour'>(initialPersona);
   const [copied, setCopied] = useState(false);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useAutoSize(rootRef, { minWidth: 560, minHeight: 460, maxWidth: 900, maxHeight: 1000, paddingX: 2, paddingY: 2 });
 
   useEffect(() => {
     let disposed = false;
@@ -102,9 +105,10 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
 
   return (
     <div
+      ref={rootRef}
       dir="rtl"
       data-testid="settings-view"
-      className="flex h-screen w-screen overflow-hidden bg-[#121316] text-[#f4f4f5]"
+      className="flex w-full overflow-hidden bg-[#121316] text-[#f4f4f5]"
       style={{ fontFamily: 'var(--vx-font)' }}
     >
       <aside

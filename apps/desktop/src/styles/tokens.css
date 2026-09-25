@@ -27,6 +27,35 @@
   --vx-radius: 6px;
 }
 
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: var(--vx-canvas);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Zero visible scrollbars, without clipping content.
+   Deliberate deviation from blanket `overflow: hidden !important`: the Settings
+   and Keys windows legitimately hold more rows than their frame, and clipping
+   them would make content unreachable. Instead the chrome is removed (width 0)
+   while scrolling still works where a panel needs it. */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 .voxaura-portal {
   background: var(--vx-panel);
   border: 1px solid var(--vx-line);
