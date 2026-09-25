@@ -2,6 +2,7 @@
   "name": "opencode-voice-runtime",
   "version": "0.2.0",
   "description": "Decoupled ambient voice and runtime orchestrator over OpenCode v2 (opencode serve).",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "opencode-voice": "./dist/cli.js"
