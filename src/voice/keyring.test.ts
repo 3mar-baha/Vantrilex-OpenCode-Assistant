@@ -5,7 +5,7 @@ import { describe, expect, test } from 'vitest';
 import { Keyring } from './keyring.js';
 import { decryptPool, FileVault } from './vault.js';
 
-const pools = { groq: ['K1-g', 'K2-g', 'K3-g'], fish: ['K1-f'] };
+const pools = { groq: ['K1-g', 'K2-g', 'K3-g'], fish: ['K1-f'], openrouter: ['K1-o'] };
 
 describe('lock-free rotation distribution (ADR-005 proof)', () => {
   test('25 concurrent acquisitions resolve slots 0-9/10-19/20-24', async () => {
@@ -62,13 +62,25 @@ describe('lock-free rotation distribution (ADR-005 proof)', () => {
       ring.destroy();
     }
   });
+
+  test('fromKeys refuses an empty third pool (fail-closed activation)', () => {
+    expect(() => Keyring.fromKeys({ groq: ['a'], fish: ['b'], openrouter: [] })).toThrowError(/no keys/);
+    const ring = Keyring.fromKeys({ groq: ['a'], fish: ['b'], openrouter: ['c'] });
+    try {
+      const k = ring.acquire('openrouter');
+      expect(k.material.length).toBeGreaterThan(0);
+      ring.release(k, true);
+    } finally {
+      ring.destroy();
+    }
+  });
 });
 
 describe('file vault', () => {
   test('encrypt round-trip; corrupt checksum refused', () => {
     const dir = mkdtempSync(join(tmpdir(), 'vault-'));
     const vault = new FileVault(join(dir, 'keyring.dat'));
-    const blob = vault.save({ groq: { keys: ['g1', 'g2'] }, fish: { keys: ['f1'] } });
+    const blob = vault.save({ groq: { keys: ['g1', 'g2'] }, fish: { keys: ['f1'] }, openrouter: { keys: ['o1'] } });
     expect(vault.load()).not.toBeNull();
     expect(decryptPool(blob.pools.groq).keys).toEqual(['g1', 'g2']);
     const tampered = { ...blob.pools.groq, ciphertext: `${blob.pools.groq.ciphertext}X` };
@@ -78,9 +90,21 @@ describe('file vault', () => {
   test('bootstrap reads comma pools from env-shaped input', () => {
     const dir = mkdtempSync(join(tmpdir(), 'vault-'));
     const vault = new FileVault(join(dir, 'keyring.dat'));
-    const blob = vault.bootstrapFromEnv({ GROQ_API_KEYS: 'a,b', FISH_AUDIO_KEYS: 'c' } as NodeJS.ProcessEnv);
+    const blob = vault.bootstrapFromEnv({ GROQ_API_KEYS: 'a,b', FISH_AUDIO_KEYS: 'c', OPENROUTER_API_KEYS: 'd' } as NodeJS.ProcessEnv);
     expect(blob).not.toBeNull();
     expect(decryptPool((blob as NonNullable<typeof blob>).pools.groq).keys).toEqual(['a', 'b']);
+    expect(decryptPool((blob as NonNullable<typeof blob>).pools.openrouter).keys).toEqual(['d']);
     expect(vault.bootstrapFromEnv({} as NodeJS.ProcessEnv)).toBeNull();
+  });
+
+  test('bootstrap is fail-closed: any missing pool refuses', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vault-'));
+    const vault = new FileVault(join(dir, 'keyring.dat'));
+    expect(
+      vault.bootstrapFromEnv({ GROQ_API_KEYS: 'a', FISH_AUDIO_KEYS: 'b' } as NodeJS.ProcessEnv),
+    ).toBeNull();
+    expect(
+      vault.bootstrapFromEnv({ GROQ_API_KEYS: 'a', OPENROUTER_API_KEYS: 'c' } as NodeJS.ProcessEnv),
+    ).toBeNull();
   });
 });

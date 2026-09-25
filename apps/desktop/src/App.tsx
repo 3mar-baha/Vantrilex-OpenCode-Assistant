@@ -5,6 +5,7 @@ import { Crest } from './components/brand/Crest.js';
 import { PixelMatrix } from './matrix/PixelMatrix.js';
 import { matrixForDaemonState } from './matrix/matrix-state.js';
 import { SettingsPortal } from './components/portals/SettingsPortal.js';
+import { ApiKeysModal, type ApiKeyBundle } from './components/portals/ApiKeysModal.js';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
@@ -31,6 +32,9 @@ export function App(): JSX.Element {
     return typeof token === 'string' && token.length > 0 ? 'connecting' : 'degraded';
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [keysSaving, setKeysSaving] = useState(false);
+  const [keysError, setKeysError] = useState<string | undefined>(undefined);
   const [activeTab, setActiveTab] = useState('identity');
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
   const [matrix, setMatrix] = useState<MatrixState>(0);
@@ -123,6 +127,32 @@ export function App(): JSX.Element {
     void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionModel', sessionId: active, model: target });
   };
 
+  const handleSaveKeys = (keys: ApiKeyBundle): void => {
+    const bridge = bridgeRef.current;
+    if (bridge === null) {
+      setKeysError('Bridge offline — keys not sent');
+      return;
+    }
+    setKeysSaving(true);
+    setKeysError(undefined);
+    void bridge
+      .sendCommand({
+        id: nextCmdId(),
+        kind: 'saveApiKeys',
+        groqKey: keys.groq,
+        fishKey: keys.fish,
+        openrouterKey: keys.openrouter,
+      })
+      .then((ok) => {
+        setKeysSaving(false);
+        if (ok) {
+          setKeysOpen(false);
+        } else {
+          setKeysError('Daemon rejected the keys — all 3 are required');
+        }
+      });
+  };
+
   const handleAction = (action: ClusterAction, minutes?: number): void => {
     if (action === 'settings') {
       setSettingsOpen(true);
@@ -161,6 +191,17 @@ export function App(): JSX.Element {
       <button data-testid="open-settings" onClick={() => setSettingsOpen(true)}>
         Settings
       </button>
+      <button data-testid="open-apikeys" onClick={() => setKeysOpen(true)}>
+        API keys
+      </button>
+      {keysOpen && (
+        <ApiKeysModal
+          onSave={handleSaveKeys}
+          onClose={() => setKeysOpen(false)}
+          saving={keysSaving}
+          saveError={keysError}
+        />
+      )}
       {settingsOpen && (
         <SettingsPortal
           tabs={TABS}

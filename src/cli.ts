@@ -10,7 +10,6 @@ import { FileVault } from './voice/vault.js';
 import { Keyring } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
 import { OpenRouterBrainClient, requiresConfirmation } from './voice/brain.js';
-import { OrchestratorError } from './common/errors.js';
 import { ensureVault } from './memory/vault.js';
 import { FishHttpTransport, TtsEngine, FileAudioOut } from './voice/tts.js';
 import { loadConfig as loadFullConfig } from './common/config.js';
@@ -19,7 +18,7 @@ const VAULT_PATH = 'vault/keyring.dat';
 
 async function doctor(): Promise<number> {
   const cfg = loadConfig();
-  const names = ['OPENCODE_SERVER_PASSWORD', 'GROQ_API_KEYS', 'FISH_AUDIO_KEYS'] as const;
+  const names = ['OPENCODE_SERVER_PASSWORD', 'GROQ_API_KEYS', 'FISH_AUDIO_KEYS', 'OPENROUTER_API_KEYS'] as const;
   for (const name of names) {
     const set = (process.env[name] ?? '').length > 0;
     console.log(`${set ? 'ok  ' : 'miss'} ${name} ${set ? '(set, value hidden)' : '(unset)'}`);
@@ -55,12 +54,13 @@ async function vaultBootstrap(): Promise<number> {
   const vault = new FileVault(VAULT_PATH);
   const blob = vault.bootstrapFromEnv();
   if (blob === null) {
-    console.log('miss vault: GROQ_API_KEYS and FISH_AUDIO_KEYS both required (env or .env.local)');
+    console.log('miss vault: GROQ_API_KEYS, FISH_AUDIO_KEYS and OPENROUTER_API_KEYS all required (env or .env.local)');
     return 1;
   }
   const groqCount = (process.env['GROQ_API_KEYS'] ?? '').split(',').filter((k) => k.length > 0).length;
   const fishCount = (process.env['FISH_AUDIO_KEYS'] ?? '').split(',').filter((k) => k.length > 0).length;
-  console.log(`ok   vault: encrypted ${groqCount} groq + ${fishCount} fish keys -> ${VAULT_PATH} (counts only, zero material)`);
+  const openrouterCount = (process.env['OPENROUTER_API_KEYS'] ?? '').split(',').filter((k) => k.length > 0).length;
+  console.log(`ok   vault: encrypted ${groqCount} groq + ${fishCount} fish + ${openrouterCount} openrouter keys -> ${VAULT_PATH} (counts only, zero material)`);
   console.log('next: unset env pools — the vault is now the single source');
   return 0;
 }
@@ -101,12 +101,11 @@ async function liveLoop(): Promise<number> {
       report['stt_text_len'] = transcript.text.length;
 
       // 3. Brain round-trip via OpenRouter (fixed digestive prompt; latency + budget verdict).
-      // Key from env only — never hardcoded, never printed (fail-closed when unset).
-      const openrouterKey = process.env['OPENROUTER_API_KEY'] ?? '';
-      if (openrouterKey.length === 0) {
-        throw new OrchestratorError('BRAIN_TIMEOUT', false, 'OPENROUTER_API_KEY unset — brain skipped');
-      }
-      const brain = new OpenRouterBrainClient(openrouterKey);
+      // Key from the vault pool — the single source; fail-closed when absent.
+      const orKey = ring.acquire('openrouter');
+      const openrouterApiKey = Buffer.from(orKey.material).toString('utf8');
+      ring.release(orKey, true);
+      const brain = new OpenRouterBrainClient(openrouterApiKey);
       const brainStart = Date.now();
       const { output, elapsedMs, goldenBreached } = await brain.respond(
         'اختبار حي: التيستات خضرا',

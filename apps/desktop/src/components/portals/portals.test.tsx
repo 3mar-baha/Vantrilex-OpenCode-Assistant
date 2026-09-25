@@ -125,10 +125,11 @@ describe('ConfirmPortal (FR-12 T2 surface)', () => {
 
 describe('CredentialPortal (counts only)', () => {
   test('shows pool counts and never key material', () => {
-    mount(<CredentialPortal groqKeys={3} fishKeys={2} onClose={() => undefined} />);
+    mount(<CredentialPortal groqKeys={3} fishKeys={2} openrouterKeys={1} onClose={() => undefined} />);
     const text = document.body.textContent ?? '';
     expect(document.body.querySelector('[data-testid="groq-count"]')?.textContent).toContain('3');
     expect(document.body.querySelector('[data-testid="fish-count"]')?.textContent).toContain('2');
-    expect(text).not.toMatch(/gsk_|sk-fish_|Bearer /);
+    expect(document.body.querySelector('[data-testid="openrouter-count"]')?.textContent).toContain('1');
+    expect(text).not.toMatch(/gsk_|sk-fish_|sk-or-|Bearer /);
   });
 });

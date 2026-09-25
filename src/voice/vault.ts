@@ -8,7 +8,8 @@ import { OrchestratorError } from '../common/errors.js';
 // Encrypted vault — docs/12 §12.2, docs/20 §20.5. Ciphertext-only VaultBlob on
 // disk; machine-scoped key file (0600). Electron `safeStorage` is preferred when
 // present (dynamic import, no hard dependency); otherwise AES-256-GCM.
-export type KeyPool = 'groq' | 'fish';
+export const KEY_POOLS = ['groq', 'fish', 'openrouter'] as const;
+export type KeyPool = (typeof KEY_POOLS)[number];
 
 export interface VaultBlob {
   readonly version: 1;
@@ -82,10 +83,12 @@ export class FileVault {
   }
 
   save(pools: Record<KeyPool, PoolSecrets>): VaultBlob {
+    const encrypted = {} as Record<KeyPool, { readonly nonce: string; readonly ciphertext: string; readonly checksum: string }>;
+    for (const pool of KEY_POOLS) encrypted[pool] = encryptPool(pools[pool]);
     const blob: VaultBlob = {
       version: 1,
       updatedAt: nowIso(),
-      pools: { groq: encryptPool(pools.groq), fish: encryptPool(pools.fish) },
+      pools: encrypted,
     };
     mkdirSync(join(this.path, '..'), { recursive: true });
     const tmp = `${this.path}.tmp`;
@@ -98,7 +101,9 @@ export class FileVault {
   bootstrapFromEnv(env: NodeJS.ProcessEnv = process.env): VaultBlob | null {
     const groq = (env['GROQ_API_KEYS'] ?? '').split(',').map((k) => k.trim()).filter((k) => k.length > 0);
     const fish = (env['FISH_AUDIO_KEYS'] ?? '').split(',').map((k) => k.trim()).filter((k) => k.length > 0);
-    if (groq.length === 0 || fish.length === 0) return null;
-    return this.save({ groq: { keys: groq }, fish: { keys: fish } });
+    const openrouter = (env['OPENROUTER_API_KEYS'] ?? '').split(',').map((k) => k.trim()).filter((k) => k.length > 0);
+    // Fail-closed 3-key mandate: every pool must be non-empty.
+    if (groq.length === 0 || fish.length === 0 || openrouter.length === 0) return null;
+    return this.save({ groq: { keys: groq }, fish: { keys: fish }, openrouter: { keys: openrouter } });
   }
 }

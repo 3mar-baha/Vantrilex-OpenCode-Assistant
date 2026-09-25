@@ -294,6 +294,7 @@ export const UiCommandSchema = z.object({
     'setSessionModel',
     'toggleSessionSkill',
     'execSessionShell',
+    'saveApiKeys',
   ]),
   persona: z.enum(['kareem', 'nour']).optional(),
   minutes: z.number().int().positive().optional(),
@@ -303,6 +304,9 @@ export const UiCommandSchema = z.object({
   skill: z.string().min(1).optional(),
   skillAction: z.enum(['attach', 'detach']).optional(),
   command: z.string().min(1).optional(),
+  groqKey: z.string().min(1).optional(),
+  fishKey: z.string().min(1).optional(),
+  openrouterKey: z.string().min(1).optional(),
 });
 export type UiCommand = z.infer<typeof UiCommandSchema>;
 

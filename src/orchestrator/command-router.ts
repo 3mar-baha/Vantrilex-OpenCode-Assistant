@@ -17,10 +17,15 @@ export interface CommandClient {
   execSessionShell(sessionId: SessionId, command: string): Promise<unknown>;
 }
 
+export interface KeySaver {
+  saveKeys(keys: { groq: string; fish: string; openrouter: string }): Promise<unknown>;
+}
+
 export interface CommandRouterDeps {
   readonly client: CommandClient;
   readonly switchSession: (id: SessionId) => void;
   readonly activeSessionId: () => SessionId | undefined;
+  readonly saveKeys?: KeySaver;
 }
 
 /** `provider/id` → ModelRef; a bare id defaults to the `opencode` provider. */
@@ -70,6 +75,16 @@ export function createCommandHandler(deps: CommandRouterDeps): (cmd: UiCommand) 
           if (session === null) return { ok: false, detail: 'no active session' };
           if (cmd.command === undefined) return { ok: false, detail: 'command required' };
           await deps.client.execSessionShell(session, cmd.command);
+          return { ok: true };
+        }
+        case 'saveApiKeys': {
+          // 3-key mandate: all pools required, never partial. Values travel
+          // localhost-only and land directly in the encrypted vault.
+          if (deps.saveKeys === undefined) return { ok: false, detail: 'key intake unavailable' };
+          if (cmd.groqKey === undefined || cmd.fishKey === undefined || cmd.openrouterKey === undefined) {
+            return { ok: false, detail: 'all 3 keys required' };
+          }
+          await deps.saveKeys.saveKeys({ groq: cmd.groqKey, fish: cmd.fishKey, openrouter: cmd.openrouterKey });
           return { ok: true };
         }
         case 'abort':

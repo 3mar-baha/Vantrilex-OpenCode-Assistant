@@ -35,7 +35,8 @@ export type CommandKind =
   | 'setSessionAgent'
   | 'setSessionModel'
   | 'toggleSessionSkill'
-  | 'execSessionShell';
+  | 'execSessionShell'
+  | 'saveApiKeys';
 
 export interface CommandMsg {
   readonly id: string;
@@ -48,6 +49,9 @@ export interface CommandMsg {
   readonly skill?: string;
   readonly skillAction?: 'attach' | 'detach';
   readonly command?: string;
+  readonly groqKey?: string;
+  readonly fishKey?: string;
+  readonly openrouterKey?: string;
 }
 
 export interface SocketLike {

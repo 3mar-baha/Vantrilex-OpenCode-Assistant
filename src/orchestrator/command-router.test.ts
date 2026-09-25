@@ -58,6 +58,33 @@ describe('createCommandHandler', () => {
     expect(await h.handler(cmd({ kind: 'switchSession' }))).toEqual({ ok: false, detail: 'sessionId required' });
   });
 
+  test('saveApiKeys requires all three keys and delegates to the saver', async () => {
+    const saved: Array<{ groq: string; fish: string; openrouter: string }> = [];
+    const h = harness();
+    const withSaver = createCommandHandler({
+      client: {
+        setSessionAgent: async () => ({}),
+        setSessionModel: async () => ({}),
+        toggleSessionSkill: async () => ({}),
+        execSessionShell: async () => ({}),
+      },
+      switchSession: () => undefined,
+      activeSessionId: () => undefined,
+      saveKeys: { saveKeys: async (k) => void saved.push(k) },
+    });
+    expect(await withSaver(cmd({ kind: 'saveApiKeys', groqKey: 'g', fishKey: 'f', openrouterKey: 'o' }))).toEqual({ ok: true });
+    expect(saved).toEqual([{ groq: 'g', fish: 'f', openrouter: 'o' }]);
+    expect(await withSaver(cmd({ kind: 'saveApiKeys', groqKey: 'g', fishKey: 'f' }))).toEqual({
+      ok: false,
+      detail: 'all 3 keys required',
+    });
+    expect(saved).toHaveLength(1);
+    expect(await h.handler(cmd({ kind: 'saveApiKeys', groqKey: 'g', fishKey: 'f', openrouterKey: 'o' }))).toEqual({
+      ok: false,
+      detail: 'key intake unavailable',
+    });
+  });
+
   test('agent/model/skill/shell target the explicit or active session', async () => {
     const h = harness();
     await h.handler(cmd({ kind: 'setSessionAgent', agent: 'build' }));

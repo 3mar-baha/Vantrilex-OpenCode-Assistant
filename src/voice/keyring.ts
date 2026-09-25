@@ -1,5 +1,5 @@
 import { nowIso } from '../common/brands.js';
-import { decryptPool, type FileVault, type KeyPool } from './vault.js';
+import { decryptPool, type FileVault, KEY_POOLS, type KeyPool } from './vault.js';
 
 // Lock-free keyring — docs/20, ADR-005. Slot assignment is a wait-free atomic
 // fetch-and-add on a SharedArrayBuffer counter; keyIndex = floor(slot/10) % n,
@@ -33,27 +33,27 @@ export class Keyring {
     const ring = new Keyring();
     const blob = vault.load();
     if (blob === null) throw new Error('vault empty — run vault bootstrap first');
-    (['groq', 'fish'] as const).forEach((pool) => {
+    for (const pool of KEY_POOLS) {
       const secrets = decryptPool(blob.pools[pool]);
       if (secrets.keys.length === 0) throw new Error(`pool ${pool} has no keys`);
       ring.keys.set(pool, [...secrets.keys]);
       const buffer = new SharedArrayBuffer(4);
       ring.counters.set(pool, { buffer, view: new Int32Array(buffer) });
       ring.lastKeyIndex.set(pool, 0);
-    });
+    }
     return ring;
   }
 
   /** For tests: build directly from key lists without disk. */
   static fromKeys(pools: Record<KeyPool, string[]>): Keyring {
     const ring = new Keyring();
-    (['groq', 'fish'] as const).forEach((pool) => {
+    for (const pool of KEY_POOLS) {
       if (pools[pool].length === 0) throw new Error(`pool ${pool} has no keys`);
       ring.keys.set(pool, [...pools[pool]]);
       const buffer = new SharedArrayBuffer(4);
       ring.counters.set(pool, { buffer, view: new Int32Array(buffer) });
       ring.lastKeyIndex.set(pool, 0);
-    });
+    }
     return ring;
   }
 
