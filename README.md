@@ -22,33 +22,29 @@ machine coordination, hierarchical agents: Dots3 → Nemotron → Inkling.
 
 ## Table of contents
 
-- [Model accuracy & response benchmarks](#model-accuracy--response-benchmarks)
-- [Performance & observability](#performance--observability)
+- [Model accuracy & benchmarks](#model-accuracy--benchmarks)
 - [Architecture & data flow](#architecture--data-flow)
-- [Platform capabilities](#platform-capabilities)
 - [Quick start](#quick-start)
 - [Docs map](#docs-map)
 
-## Model accuracy & response benchmarks
+## Model accuracy & benchmarks
+
+<p align="center">
+  <img src="assets/benchmark-matrix.svg" alt="Vantrilex engine vs baseline across five capability benchmarks" width="100%" />
+</p>
+
+<details>
+<summary>📊 Raw tabular data</summary>
 
 | Capability | Vantrilex engine | Baseline agent | Metric target |
 |---|---|---|---|
 | Code generation (Pass@1) | 94.8% | 81.2% | Syntax & logic verified |
 | Tool-calling precision | 99.1% | 88.4% | Zero invalid RPCs |
-| Context retention & zero-hallucination | 98.6% | 84.0% | File-grounded truth |
-| Time to first token (TTFT) | < 180 ms | 450 ms | High-throughput stream |
-| End-to-end task resolution | 91.4% | 76.5% | Multi-step autonomy |
+| Zero-hallucination rate | 98.6% | 84.0% | File-grounded truth |
+| Latency (TTFT) | 180 ms | 450 ms | 2.5× faster stream |
+| E2E task resolution | 91.4% | 76.5% | Multi-step autonomy |
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/latency-benchmark.svg" alt="Fish TTS TTFB 644ms under the 800ms budget" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/test-suite-dashboard.svg" alt="211 unit tests and 8/8 E2E green" width="100%" />
-    </td>
-  </tr>
-</table>
+</details>
 
 <details>
 <summary>🔬 Evaluation methodology & harness</summary>
@@ -61,58 +57,40 @@ machine coordination, hierarchical agents: Dots3 → Nemotron → Inkling.
   oxlint, 211 unit tests, 8 Playwright E2E — all green, exit 0.
 - **Ledger**: every measured figure is recorded in `docs/10-CHECKPOINT.md`
   with commit SHAs. Engine-vs-baseline deltas above are project-reported from
-  these harnesses; reproduce with the two commands below and compare against
+  these harnesses; reproduce with the quick-start commands and compare against
   the checkpoint ledger before citing.
 
 </details>
 
-## Performance & observability
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/latency-benchmark.svg" alt="Fish TTS TTFB 644ms under budget" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/system-health.svg" alt="System health: optimal" width="62%" />
-    </td>
-  </tr>
-</table>
-
-Measured on the live control plane: serve boot 447 ms, bridge hello 16 ms,
-Fish TTS first-chunk TTFB 644 ms against an 800 ms budget.
-
 ## Architecture & data flow
 
 <p align="center">
-  <img src="assets/architecture-flow.svg" alt="CLI to WS-4097 to orchestrator to serve pipeline" width="100%" />
+  <img src="assets/architecture-flow.svg" alt="CLI to WS-4097 gateway to orchestrator to client pipeline" width="100%" />
 </p>
 
-Packets travel CLI → WS-4097 bridge (hello / inventory / ack, `?lastSeq=`
-resume) → Node orchestrator (queue, backpressure, sibling-serve protection) →
-`opencode serve` 2.0.12 on the shared DB (Basic auth, `{data}` envelopes,
+Packets travel **CLI Engine** → **WS-4097 Gateway** over IPC (hello / inventory /
+ack, `?lastSeq=` resume) → **Orchestrator** over JSON-RPC (queue, backpressure,
+sibling-serve protection, 409 requeue) → **Client Interface** over SSE stream
+(`opencode serve` 2.0.12 on the shared DB: Basic auth, `{data}` envelopes,
 204 controls, flat `{text}` prompt envelope).
 
-## Platform capabilities
+<details>
+<summary>ASCII topology</summary>
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/desktop-portal.svg" alt="Tauri shell with live matrix sync" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/feature-orchestrator.svg" alt="Queue balancing across workers" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/feature-vault.svg" alt="Zero-secret AES-256-GCM vault" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/feature-e2e.svg" alt="E2E harness steps going green" width="100%" />
-    </td>
-  </tr>
-</table>
+```text
+┌──────────────┐   WS-4097    ┌──────────────────┐   HTTP/Basic   ┌────────────────┐
+│ Voxaura shell│◄────────────►│  Node daemon     │◄──────────────►│ opencode serve │
+│ Tauri+React  │ hello/inv/ack│ orchestrator     │ /api/session   │ 2.0.12 CLI     │
+└──────────────┘              │ queue/backpress. │                │ shared DB      │
+                              └────────┬─────────┘                └────────────────┘
+                                       │ skills / vault / RAG
+                              ┌────────▼─────────┐
+                              │ Dots3 → Nemotron │  Obsidian vault/
+                              │     → Inkling    │  .opencode/agents/
+                              └──────────────────┘  docs/RAG-*.md
+```
+
+</details>
 
 ## Quick start
 

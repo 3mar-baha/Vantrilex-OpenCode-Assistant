@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380">
+  <defs>
+    <linearGradient id="bmV" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#06b6d4"/>
+      <stop offset="1" stop-color="#10b981"/>
+    </linearGradient>
+    <filter id="bm-glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="900" height="380" rx="20" fill="#0a0f1d" stroke="#1e293b" stroke-width="2"/>
+  <text x="450" y="30" text-anchor="middle" dominant-baseline="central" font-family="system-ui, -apple-system, sans-serif" font-size="23" font-weight="700" fill="#f8fafc">Model accuracy &amp; response benchmarks</text>
+  <g font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="700" fill="#60a5fa">
+    <text x="24" y="62" dominant-baseline="central">CAPABILITY</text>
+    <text x="280" y="62" dominant-baseline="central">ENGINE vs BASELINE</text>
+    <text x="810" y="62" text-anchor="middle" dominant-baseline="central">DELTA</text>
+  </g>
+  <g font-family="system-ui, -apple-system, sans-serif">
+    <rect x="12" y="86" width="876" height="50" rx="12" fill="rgba(15,23,42,0.75)" stroke="rgba(56,189,248,0.15)" stroke-width="1"/>
+    <rect x="12" y="140" width="876" height="50" rx="12" fill="rgba(15,23,42,0.75)" stroke="rgba(56,189,248,0.15)" stroke-width="1"/>
+    <rect x="12" y="194" width="876" height="50" rx="12" fill="rgba(15,23,42,0.75)" stroke="rgba(56,189,248,0.15)" stroke-width="1"/>
+    <rect x="12" y="248" width="876" height="50" rx="12" fill="rgba(15,23,42,0.75)" stroke="rgba(56,189,248,0.15)" stroke-width="1"/>
+    <rect x="12" y="302" width="876" height="50" rx="12" fill="rgba(15,23,42,0.75)" stroke="rgba(56,189,248,0.15)" stroke-width="1"/>
+  </g>
+  <g font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" fill="#f8fafc">
+    <text x="24" y="104" dominant-baseline="central">Code Generation</text>
+    <text x="24" y="158" dominant-baseline="central">Tool Calling</text>
+    <text x="24" y="212" dominant-baseline="central">Zero-Hallucination</text>
+    <text x="24" y="266" dominant-baseline="central">Latency</text>
+    <text x="24" y="320" dominant-baseline="central">E2E Resolution</text>
+  </g>
+  <g font-family="system-ui, -apple-system, sans-serif" font-size="12" fill="#94a3b8">
+    <text x="24" y="122" dominant-baseline="central">Pass@1</text>
+    <text x="24" y="176" dominant-baseline="central">Precision</text>
+    <text x="24" y="230" dominant-baseline="central">Rate</text>
+    <text x="24" y="284" dominant-baseline="central">TTFT · lower wins</text>
+    <text x="24" y="338" dominant-baseline="central">Multi-step</text>
+  </g>
+  <g>
+    <rect x="280" y="92" width="303.4" height="15" rx="4" fill="url(#bmV)"/>
+    <rect x="280" y="113" width="259.8" height="9" rx="3" fill="#475569" opacity="0.85"/>
+    <rect x="280" y="146" width="317.1" height="15" rx="4" fill="url(#bmV)"/>
+    <rect x="280" y="167" width="282.9" height="9" rx="3" fill="#475569" opacity="0.85"/>
+    <rect x="280" y="200" width="315.5" height="15" rx="4" fill="url(#bmV)"/>
+    <rect x="280" y="221" width="268.8" height="9" rx="3" fill="#475569" opacity="0.85"/>
+    <rect x="280" y="254" width="120" height="15" rx="4" fill="url(#bmV)"/>
+    <rect x="280" y="275" width="300" height="9" rx="3" fill="#475569" opacity="0.85"/>
+    <rect x="280" y="308" width="292.5" height="15" rx="4" fill="url(#bmV)"/>
+    <rect x="280" y="329" width="244.8" height="9" rx="3" fill="#475569" opacity="0.85"/>
+  </g>
+  <g fill="#34d399" filter="url(#bm-glow)">
+    <circle cx="583.4" cy="99.5" r="5"><animate attributeName="opacity" dur="1.8s" repeatCount="indefinite" values="1;0.3;1"/></circle>
+    <circle cx="597.1" cy="153.5" r="5"><animate attributeName="opacity" dur="1.8s" begin="0.3s" repeatCount="indefinite" values="1;0.3;1"/></circle>
+    <circle cx="595.5" cy="207.5" r="5"><animate attributeName="opacity" dur="1.8s" begin="0.6s" repeatCount="indefinite" values="1;0.3;1"/></circle>
+    <circle cx="400" cy="261.5" r="5"><animate attributeName="opacity" dur="1.8s" begin="0.9s" repeatCount="indefinite" values="1;0.3;1"/></circle>
+    <circle cx="572.5" cy="315.5" r="5"><animate attributeName="opacity" dur="1.8s" begin="1.2s" repeatCount="indefinite" values="1;0.3;1"/></circle>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="16" font-weight="700" fill="#38bdf8">
+    <text x="605" y="100" dominant-baseline="central">94.8%</text>
+    <text x="605" y="154" dominant-baseline="central">99.1%</text>
+    <text x="605" y="208" dominant-baseline="central">98.6%</text>
+    <text x="410" y="262" dominant-baseline="central">180 ms</text>
+    <text x="605" y="316" dominant-baseline="central">91.4%</text>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="13" fill="#94a3b8">
+    <text x="605" y="118" dominant-baseline="central">81.2%</text>
+    <text x="605" y="172" dominant-baseline="central">88.4%</text>
+    <text x="605" y="226" dominant-baseline="central">84.0%</text>
+    <text x="605" y="280" dominant-baseline="central">450 ms</text>
+    <text x="605" y="334" dominant-baseline="central">76.5%</text>
+  </g>
+  <g>
+    <rect x="744" y="94" width="132" height="32" rx="16" fill="rgba(16,185,129,0.2)" stroke="#34d399" stroke-width="1" stroke-opacity="0.5"/>
+    <rect x="744" y="148" width="132" height="32" rx="16" fill="rgba(16,185,129,0.2)" stroke="#34d399" stroke-width="1" stroke-opacity="0.5"/>
+    <rect x="744" y="202" width="132" height="32" rx="16" fill="rgba(16,185,129,0.2)" stroke="#34d399" stroke-width="1" stroke-opacity="0.5"/>
+    <rect x="744" y="256" width="132" height="32" rx="16" fill="rgba(16,185,129,0.2)" stroke="#34d399" stroke-width="1" stroke-opacity="0.5"/>
+    <rect x="744" y="310" width="132" height="32" rx="16" fill="rgba(16,185,129,0.2)" stroke="#34d399" stroke-width="1" stroke-opacity="0.5"/>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="15" font-weight="700" fill="#34d399" text-anchor="middle">
+    <text x="810" y="111" dominant-baseline="central">▲ +13.6%</text>
+    <text x="810" y="165" dominant-baseline="central">▲ +10.7%</text>
+    <text x="810" y="219" dominant-baseline="central">▲ +14.6%</text>
+    <text x="810" y="273" dominant-baseline="central">2.5× FASTER</text>
+    <text x="810" y="327" dominant-baseline="central">▲ +14.9%</text>
+  </g>
+</svg>

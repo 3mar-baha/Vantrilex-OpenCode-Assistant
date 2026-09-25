@@ -1,35 +1,56 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 220">
   <defs>
-    <filter id="af-glow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="4" result="b"/>
+    <filter id="pfl-glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.5" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
-  <rect width="1200" height="300" rx="20" fill="#0a0f1d" stroke="#1e293b" stroke-width="2"/>
-  <text x="600" y="40" text-anchor="middle" dominant-baseline="central" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#f8fafc">control-plane pipeline</text>
-  <line x1="150" y1="150" x2="1050" y2="150" stroke="#1e293b" stroke-width="6"/>
-  <g fill="none" stroke="#38bdf8" stroke-width="4" opacity="0.7">
-    <path d="M272,138 l18,12 l-18,12"/>
-    <path d="M572,138 l18,12 l-18,12"/>
-    <path d="M872,138 l18,12 l-18,12"/>
+  <style>
+    .flow { stroke-dasharray: 12 12; animation: dashmove 1.1s linear infinite; }
+    @keyframes dashmove { to { stroke-dashoffset: -48; } }
+    .pulse-dot { animation: dotpulse 1.6s ease-in-out infinite; }
+    @keyframes dotpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  </style>
+  <rect width="900" height="220" rx="20" fill="#0a0f1d" stroke="#1e293b" stroke-width="2"/>
+  <text x="450" y="28" text-anchor="middle" dominant-baseline="central" font-family="system-ui, -apple-system, sans-serif" font-size="21" font-weight="700" fill="#f8fafc">control-plane pipeline</text>
+  <g font-family="system-ui, -apple-system, sans-serif">
+    <rect x="50" y="70" width="170" height="100" rx="14" fill="rgba(15,23,42,0.75)" stroke="#38bdf8" stroke-width="2"/>
+    <rect x="260" y="70" width="170" height="100" rx="14" fill="rgba(15,23,42,0.75)" stroke="#0ea5e9" stroke-width="2"/>
+    <rect x="470" y="70" width="170" height="100" rx="14" fill="rgba(15,23,42,0.75)" stroke="#60a5fa" stroke-width="2"/>
+    <rect x="680" y="70" width="170" height="100" rx="14" fill="rgba(15,23,42,0.75)" stroke="#2563eb" stroke-width="2"/>
   </g>
-  <g font-family="ui-monospace, monospace" font-size="22" fill="#f8fafc" text-anchor="middle">
-    <circle cx="150" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#38bdf8" stroke-width="3"/>
-    <text x="150" y="232" dominant-baseline="central">CLI</text>
-    <circle cx="450" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#0ea5e9" stroke-width="3"/>
-    <text x="450" y="232" dominant-baseline="central">WS-4097</text>
-    <circle cx="750" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#60a5fa" stroke-width="3"/>
-    <text x="750" y="232" dominant-baseline="central">Orchestrator</text>
-    <circle cx="1050" cy="150" r="34" fill="rgba(15,23,42,0.75)" stroke="#2563eb" stroke-width="3"/>
-    <text x="1050" y="232" dominant-baseline="central">Client</text>
+  <g font-family="system-ui, -apple-system, sans-serif" font-size="17" font-weight="700" fill="#f8fafc" text-anchor="middle">
+    <text x="135" y="112" dominant-baseline="central">CLI Engine</text>
+    <text x="345" y="112" dominant-baseline="central">WS-4097 Gateway</text>
+    <text x="555" y="112" dominant-baseline="central">Orchestrator</text>
+    <text x="765" y="112" dominant-baseline="central">Client Interface</text>
   </g>
-  <circle cx="-50" cy="-50" r="9" fill="#38bdf8" filter="url(#af-glow)">
-    <animateMotion dur="2.4s" repeatCount="indefinite" path="M150,150 L1050,150"/>
-  </circle>
-  <circle cx="-50" cy="-50" r="7" fill="#0ea5e9" filter="url(#af-glow)">
-    <animateMotion dur="2.4s" begin="0.8s" repeatCount="indefinite" path="M150,150 L1050,150"/>
-  </circle>
-  <circle cx="-50" cy="-50" r="7" fill="#60a5fa" filter="url(#af-glow)">
-    <animateMotion dur="2.4s" begin="1.6s" repeatCount="indefinite" path="M150,150 L1050,150"/>
-  </circle>
+  <g font-family="ui-monospace, monospace" font-size="14" fill="#60a5fa" text-anchor="middle">
+    <text x="135" y="142" dominant-baseline="central">doctor · vault · live</text>
+    <text x="345" y="142" dominant-baseline="central">hello · inv · ack</text>
+    <text x="555" y="142" dominant-baseline="central">queue · 409 retry</text>
+    <text x="765" y="142" dominant-baseline="central">serve 2.0.12 · 204</text>
+  </g>
+  <g>
+    <line x1="220" y1="120" x2="260" y2="120" stroke="#1e293b" stroke-width="6"/>
+    <line x1="430" y1="120" x2="470" y2="120" stroke="#1e293b" stroke-width="6"/>
+    <line x1="640" y1="120" x2="680" y2="120" stroke="#1e293b" stroke-width="6"/>
+    <line class="flow" x1="220" y1="120" x2="260" y2="120" stroke="#38bdf8" stroke-width="3"/>
+    <line class="flow" x1="430" y1="120" x2="470" y2="120" stroke="#38bdf8" stroke-width="3"/>
+    <line class="flow" x1="640" y1="120" x2="680" y2="120" stroke="#38bdf8" stroke-width="3"/>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#0a0f1d" text-anchor="middle">
+    <rect x="185" y="42" width="110" height="24" rx="12" fill="#38bdf8"/>
+    <text x="240" y="55" dominant-baseline="central">IPC</text>
+    <rect x="395" y="42" width="110" height="24" rx="12" fill="#0ea5e9"/>
+    <text x="450" y="55" dominant-baseline="central">JSON-RPC</text>
+    <rect x="605" y="42" width="110" height="24" rx="12" fill="#60a5fa"/>
+    <text x="660" y="55" dominant-baseline="central">SSE Stream</text>
+  </g>
+  <g fill="#34d399" filter="url(#pfl-glow)">
+    <circle class="pulse-dot" cx="204" cy="86" r="6"/>
+    <circle class="pulse-dot" cx="414" cy="86" r="6"/>
+    <circle class="pulse-dot" cx="624" cy="86" r="6"/>
+    <circle class="pulse-dot" cx="834" cy="86" r="6"/>
+  </g>
 </svg>
