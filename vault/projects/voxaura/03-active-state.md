@@ -4,8 +4,7 @@
 
 - Default model: `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`
   (promoted after live HTTP 200 smoke, receipt confirmed).
-- Role slugs registered: Dots3 intake, Nemotron coordinator, Inkling driver,
-  plus `stealth/space-bunny-alpha` (standby).
+- Role slugs registered: Dots3 intake, Nemotron coordinator, Inkling driver.
 - MCPs wired: context7, github, filesystem (project-relative), obsidian-vault
   (project-relative `vault/`), memory, sequential-thinking.
 - Packaging: NSIS present; only gap is the MSVC linker for the Windows binary.
