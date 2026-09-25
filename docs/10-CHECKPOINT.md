@@ -240,4 +240,21 @@ reports are tracked. Decision record: `09` ADR-008.*
 
 ---
 
+## Security remediation (audit response)
+
+| Item | Change | Commit | Evidence |
+|---|---|---|---|
+| **H2** no production daemon | `src/daemon.ts` composes ServeClient + UiServer + inventory + command router; `serve` CLI subcommand | aae8555 | 7 daemon tests; fail-closed on missing serve/password/token |
+| **H3** keys could not persist | `src/voice/key-store.ts` merges pools and writes the encrypted vault; daemon wires `saveApiKeys` → vault | aae8555 | 5 key-store tests incl. one-pool-preserves-others |
+| **H1** unconfirmed destructive exec | FR-12 gate parks `execSessionShell` until an explicit `confirm`; 60 s TTL; reject path | 4d279db | `fr12-route.test.ts` (5 tests): unconfirmed never executes |
+| **M4** unbounded inbound frame | `MAX_MESSAGE_BYTES = 1 MiB` enforced before allocation | 4d279db | protocol cap tests |
+| **M6** persona no-op / stale pill | router returns truthful detail; daemon stores active persona; 45 s staleness watchdog | 4d279db, c3161b5 | router tests; E2E status assertions |
+| **H4** token baked into bundle | per-install random token at `~/.opencode-voice-runtime/ipc.token` (0600); webview fetches it via the `ipc_token` Tauri command | c3161b5 | `ensureIpcToken` tests; `cargo check` exit 0 |
+| **M3** thin CSP | added `object-src/base-uri/frame-ancestors/form-action 'none'`, `script-src 'self'`, `img-src 'self' data:` | c3161b5 | `cargo check`; E2E 11/11 |
+| **M2** broad `core:default` | **Accepted with rationale** — narrowing without a runtime harness risks silently breaking window APIs; revisit once a packaged smoke test exists | — | documented, not silently dropped |
+
+**Gates after remediation:** root 182 + desktop 63 unit; E2E 11/11; `cargo check` exit 0.
+
+**Still open (capability, not defect):** L1 renderer audio capture (mic button is a mute toggle, not capture start) and P5 runtime 3-agent orchestration.
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
