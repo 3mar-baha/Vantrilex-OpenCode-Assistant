@@ -12,7 +12,7 @@ async function fire(state: string): Promise<unknown> {
 
 test('wave follows daemon lifecycle: running→active, abort→idle', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('في وضع الاستعداد', { timeout: 10_000 });
+  await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
   const wave = page.getByTestId('siri-wave');
   await expect(wave).toHaveAttribute('data-mode', 'idle');
 

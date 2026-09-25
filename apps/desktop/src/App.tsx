@@ -1,21 +1,19 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { Mic } from 'lucide-react';
 import { VoxauraBridge } from './bridge/ws.js';
-import { ActionBar } from './components/actionbar/ActionBar.js';
 import { WaveformEmblem } from './components/brand/WaveformEmblem.js';
 import { SiriWaveCanvas } from './components/waveform/SiriWaveCanvas.js';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
+import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { AGENT_CHAIN } from './settings/chain.js';
-import { openSettingsWindow } from './settings/open-settings.js';
-import type { ClusterAction } from './components/sidebar/IconCluster.js';
+import { openKeysWindow, openSettingsWindow } from './settings/open-settings.js';
 import './index.css';
 
-// Voxaura companion HUD — restrained engineering surface. All settings live in
-// the dedicated native settings window (see settings/open-settings.ts); this
-// tree owns no modal overlays. Latin technical tokens stay verbatim.
+// Voxaura companion HUD — one control per intent, no duplicated toolbars.
+// Every interactive element carries an Arabic tooltip; the status pill is
+// driven entirely by live daemon state, never local guesswork.
 type BridgeState = 'connecting' | 'live' | 'degraded' | 'refused';
 
 const FONT = 'var(--vx-font)';
@@ -27,6 +25,10 @@ export function App(): JSX.Element {
   });
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
   const [matrix, setMatrix] = useState<MatrixState>(0);
+  const [userMuted, setUserMuted] = useState(false);
+  const [botMuted, setBotMuted] = useState(false);
+  const [announce, setAnnounce] = useState('');
+  const [lastEventAt, setLastEventAt] = useState<string | null>(null);
   const [sessionState, dispatchSession] = useReducer(sessionsReducer, initialSessionsState);
   const [agentModel, setAgentModel] = useState<{ agent: string | null; model: string | null }>({
     agent: null,
@@ -49,7 +51,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     const token = import.meta.env['VOICE_RUNTIME_IPC_TOKEN'] as string | undefined;
-    if (typeof token !== 'string' || token.length === 0) return; // degraded initial state stands
+    if (typeof token !== 'string' || token.length === 0) return;
     const b = new VoxauraBridge({
       token,
       contractVersion: '3.1.0',
@@ -57,6 +59,7 @@ export function App(): JSX.Element {
       onEvent: (event) => {
         const mapped = matrixForDaemonState(event.state, personaRef.current);
         if (mapped !== null) setMatrix(mapped);
+        setLastEventAt(new Date().toLocaleTimeString('ar'));
       },
       onInventory: (sessions) =>
         dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) }),
@@ -72,27 +75,35 @@ export function App(): JSX.Element {
     };
   }, []);
 
-  // Ctrl+, opens the native settings window (browser popup off-Tauri).
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.ctrlKey && e.key === ',') {
         e.preventDefault();
-        void openSettingsWindow(`persona=${personaRef.current}`);
+        void openSettingsWindow(personaRef.current);
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  const send = (cmd: Parameters<VoxauraBridge['sendCommand']>[0], ok: string, fail: string): void => {
+    const bridgeClient = bridgeRef.current;
+    if (bridgeClient === null) {
+      setAnnounce('الخادم غير متصل');
+      return;
+    }
+    void bridgeClient.sendCommand(cmd).then((accepted) => setAnnounce(accepted ? ok : fail));
+  };
+
   const handleSelectPersona = (id: 'kareem' | 'nour'): void => {
     setPersona(id);
     setMatrix(id === 'kareem' ? 3 : 4);
-    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setPersona', persona: id });
+    send({ id: nextCmdId(), kind: 'setPersona', persona: id }, 'تم تبديل الشخصية', 'تعذّر تبديل الشخصية');
   };
 
   const handleSelectSession = (id: string): void => {
     dispatchSession({ kind: 'select', id });
-    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'switchSession', sessionId: id });
+    send({ id: nextCmdId(), kind: 'switchSession', sessionId: id }, 'تم تبديل الجلسة', 'تعذّر تبديل الجلسة');
   };
 
   const promptTarget = (label: string): string | null => {
@@ -103,56 +114,63 @@ export function App(): JSX.Element {
   const handleSelectAgent = (agentId: string): void => {
     const active = sessionState.activeId;
     setAgentModel((s) => ({ ...s, agent: agentId }));
-    if (active === null) return;
-    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: agentId });
+    if (active === null) {
+      setAnnounce('اختر جلسة أولاً');
+      return;
+    }
+    send({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: agentId }, 'تم تعيين الوكيل', 'تعذّر تعيين الوكيل');
   };
 
   const handleSwitchAgent = (): void => {
     const active = sessionState.activeId;
-    if (active === null) return;
+    if (active === null) {
+      setAnnounce('اختر جلسة أولاً');
+      return;
+    }
     const target = promptTarget('بدّل الوكيل (المعرف):');
     if (target === null) return;
     setAgentModel((s) => ({ ...s, agent: target }));
-    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: target });
+    send({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: target }, 'تم تعيين الوكيل', 'تعذّر تعيين الوكيل');
   };
 
   const handleSwitchModel = (): void => {
     const active = sessionState.activeId;
-    if (active === null) return;
+    if (active === null) {
+      setAnnounce('اختر جلسة أولاً');
+      return;
+    }
     const target = promptTarget('بدّل النموذج (المعرف):');
     if (target === null) return;
     setAgentModel((s) => ({ ...s, model: target }));
-    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionModel', sessionId: active, model: target });
+    send({ id: nextCmdId(), kind: 'setSessionModel', sessionId: active, model: target }, 'تم تبديل النموذج', 'تعذّر تبديل النموذج');
   };
 
-  const handleAction = (action: ClusterAction, minutes?: number): void => {
-    if (action === 'settings') {
-      void openSettingsWindow(`persona=${personaRef.current}`);
-      return;
-    }
-    if (action === 'abort') setMatrix(0);
-    const id = nextCmdId();
-    if (action === 'mute') {
-      void bridgeRef.current?.sendCommand(
-        minutes !== undefined ? { id, kind: 'mute', minutes } : { id, kind: 'mute' },
-      );
-      return;
-    }
-    void bridgeRef.current?.sendCommand({ id, kind: action });
+  const toggleUserMute = (): void => {
+    const next = !userMuted;
+    setUserMuted(next);
+    send({ id: nextCmdId(), kind: 'deafen' }, next ? 'تم صمّ الميكروفون' : 'تم تشغيل الميكروفون', 'تعذّر تغيير حالة الميكروفون');
+  };
+
+  const toggleBotMute = (): void => {
+    const next = !botMuted;
+    setBotMuted(next);
+    send({ id: nextCmdId(), kind: 'mute' }, next ? 'تم كتم صوت المساعد' : 'تم تشغيل صوت المساعد', 'تعذّر تغيير حالة الصوت');
   };
 
   const statusPill =
     bridge !== 'live'
-      ? '● غير متصل'
+      ? { text: '● غير متصل', state: 'offline' }
       : matrix === 0
-        ? '● في وضع الاستعداد'
+        ? { text: '● متصل وبانتظار الأوامر', state: 'ready' }
         : matrix === 1
-          ? '● جاري الاستماع...'
+          ? { text: '● جاري الاستماع...', state: 'listening' }
           : matrix === 2
-            ? '● جاري المعالجة...'
-            : '● جاري التحدث...';
+            ? { text: '● جاري المعالجة...', state: 'processing' }
+            : { text: '● جاري التحدث...', state: 'speaking' };
 
   const live = matrix !== 0;
+  const noSessions = sessionState.sessions.length === 0;
+  const hasAgents = agents.length > 0;
 
   return (
     <div
@@ -167,18 +185,38 @@ export function App(): JSX.Element {
           <h1 data-testid="app-title" className="text-base font-semibold">
             Voxaura
           </h1>
-          <span className="vx-kbd ms-1">Ctrl + ,</span>
+          <span className="vx-kbd ms-1" title="اختصار فتح الإعدادات">
+            Ctrl + ,
+          </span>
           <span
             data-testid="bridge-status"
+            data-state={statusPill.state}
+            role="status"
+            aria-live="polite"
+            title={`حالة الاتصال: ${statusPill.text.replace('● ', '')}`}
             className="ms-auto text-sm text-[#a1a1aa]"
-            data-live={live}
           >
-            {statusPill}
+            {statusPill.text}
           </span>
         </header>
 
+        {bridge !== 'live' && (
+          <p
+            data-testid="reconnect-hint"
+            title="يُعاد الاتصال تلقائياً بتراجع تدريجي"
+            className="border-b border-[#26282e] bg-[#0e0f12] px-4 py-2 text-xs text-[#fbbf24]"
+          >
+            انقطع الاتصال بالخادم — تتم إعادة المحاولة تلقائياً…
+          </p>
+        )}
+
         <div className="flex flex-col gap-3 border-b border-[#26282e] px-4 py-3">
           <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
+          {noSessions && (
+            <p data-testid="empty-sessions" title="لا توجد جلسات بعد" className="text-xs text-[#71717a]">
+              لا توجد جلسات بعد — افتح جلسة في OpenCode لتظهر هنا.
+            </p>
+          )}
           <AgentModelBadge
             agent={agentModel.agent}
             model={agentModel.model}
@@ -187,6 +225,11 @@ export function App(): JSX.Element {
             onSelectAgent={handleSelectAgent}
             onSwitchModel={handleSwitchModel}
           />
+          {!hasAgents && (
+            <p data-testid="empty-agents" className="text-xs text-[#71717a]" title="لم يُكتشف أي وكيل">
+              لم يُكتشف أي وكيل بعد — يتطلب جلسة نشطة.
+            </p>
+          )}
           <div role="radiogroup" aria-label="شخصية الصوت" className="flex items-center gap-2">
             <span className="text-xs text-[#71717a]">الصوت</span>
             {(['kareem', 'nour'] as const).map((p) => (
@@ -195,6 +238,7 @@ export function App(): JSX.Element {
                 role="radio"
                 aria-checked={persona === p}
                 data-testid={`hud-persona-${p}`}
+                title={p === 'kareem' ? 'كريم — الصوت الافتراضي' : 'نور — الصوت البديل'}
                 onClick={() => handleSelectPersona(p)}
                 className={`rounded-[6px] border px-3 py-1 text-xs ${
                   persona === p
@@ -210,21 +254,63 @@ export function App(): JSX.Element {
 
         <main className="flex flex-col items-center gap-4 px-4 py-5">
           <SiriWaveCanvas mode={live ? 'active' : 'idle'} color="#3b82f6" />
-          <button
-            data-testid="mic-core"
-            aria-label="الميكروفون"
-            onClick={() => handleAction('deafen')}
-            className="flex h-16 w-16 items-center justify-center rounded-full border border-[#26282e] bg-[#0e0f12] text-[#a1a1aa] transition hover:border-[#3b82f6] hover:text-[#f4f4f5]"
+          <div className="flex items-center gap-3" data-testid="control-row">
+            <button
+              data-testid="mic-toggle"
+              aria-pressed={userMuted}
+              aria-label="ميكروفون المستخدم"
+              title={userMuted ? 'الميكروفون مكتوم — اضغط للتشغيل' : 'الميكروفون يعمل — اضغط للكتم'}
+              onClick={toggleUserMute}
+              className={`flex h-14 w-14 items-center justify-center rounded-full border transition ${
+                userMuted
+                  ? 'border-[#f87171] text-[#f87171]'
+                  : 'border-[#26282e] bg-[#0e0f12] text-[#a1a1aa] hover:border-[#3b82f6] hover:text-[#f4f4f5]'
+              }`}
+            >
+              {userMuted ? <MicOffGlyph /> : <MicGlyph />}
+            </button>
+            <button
+              data-testid="bot-toggle"
+              aria-pressed={botMuted}
+              aria-label="صوت المساعد"
+              title={botMuted ? 'صوت المساعد مكتوم — اضغط للتشغيل' : 'صوت المساعد يعمل — اضغط للكتم'}
+              onClick={toggleBotMute}
+              className={`flex h-14 w-14 items-center justify-center rounded-full border transition ${
+                botMuted
+                  ? 'border-[#f87171] text-[#f87171]'
+                  : 'border-[#26282e] bg-[#0e0f12] text-[#a1a1aa] hover:border-[#3b82f6] hover:text-[#f4f4f5]'
+              }`}
+            >
+              {botMuted ? <BotOffGlyph /> : <BotGlyph />}
+            </button>
+          </div>
+          <p
+            data-testid="announce"
+            role="status"
+            aria-live="polite"
+            title="آخر نتيجة أمر"
+            className="min-h-[16px] text-xs text-[#71717a]"
           >
-            <Mic size={26} />
+            {announce}
+          </p>
+          <button
+            data-testid="abort-button"
+            title="إيقاف التوليد فوراً"
+            onClick={() => {
+              setMatrix(0);
+              send({ id: nextCmdId(), kind: 'abort' }, 'تم إيقاف التوليد', 'تعذّر إيقاف التوليد');
+            }}
+            className="rounded-[6px] border border-[#26282e] px-3 py-1 text-xs text-[#a1a1aa] hover:border-[#f87171] hover:text-[#f87171]"
+          >
+            إيقاف التوليد
           </button>
-          <ActionBar onAction={handleAction} />
         </main>
 
         <div className="flex border-t border-[#26282e]">
           <button
             data-testid="open-settings"
-            onClick={() => handleAction('settings')}
+            title="الإعدادات العامة (Ctrl + ,)"
+            onClick={() => void openSettingsWindow(persona)}
             className="flex-1 px-4 py-2.5 text-sm text-[#a1a1aa] hover:bg-[#1d1e23] hover:text-[#f4f4f5]"
           >
             الإعدادات
@@ -232,7 +318,8 @@ export function App(): JSX.Element {
           <span className="w-px bg-[#26282e]" />
           <button
             data-testid="open-apikeys"
-            onClick={() => handleAction('settings')}
+            title="نافذة مفاتيح الـ API"
+            onClick={() => void openKeysWindow()}
             className="flex-1 px-4 py-2.5 text-sm text-[#a1a1aa] hover:bg-[#1d1e23] hover:text-[#f4f4f5]"
           >
             مفاتيح الـ API
@@ -241,12 +328,20 @@ export function App(): JSX.Element {
 
         <dl className="grid grid-cols-3 divide-x divide-[#26282e] border-t border-[#26282e] text-center [direction:ltr]">
           {AGENT_CHAIN.map((c) => (
-            <div key={c.id} className="px-2 py-2">
+            <div key={c.id} className="px-2 py-2" title={`${c.name} — ${c.role}`}>
               <dt className="font-mono text-[11px] text-[#f4f4f5]">{c.name}</dt>
               <dd className="text-[11px] text-[#71717a]">{c.role}</dd>
             </div>
           ))}
         </dl>
+
+        <p
+          data-testid="last-event"
+          title="آخر حدث من الخادم"
+          className="border-t border-[#26282e] px-4 py-1.5 text-center text-[11px] text-[#71717a]"
+        >
+          {lastEventAt !== null ? `آخر تحديث: ${lastEventAt}` : 'بانتظار أول حدث من الخادم'}
+        </p>
       </div>
     </div>
   );

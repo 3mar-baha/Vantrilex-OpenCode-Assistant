@@ -31,6 +31,7 @@ export function AgentModelBadge({
         <select
           data-testid="agent-select"
           aria-label="الوكيل النشط"
+          title="اختر الوكيل النشط"
           value={agent ?? ''}
           onChange={(e) => onSelectAgent?.(e.target.value)}
         >
@@ -46,11 +47,11 @@ export function AgentModelBadge({
       ) : (
         <span data-testid="badge-agent">الوكيل: {agent ?? 'غير معيّن'}</span>
       )}
-      <button data-testid="badge-switch-agent" aria-label="بدّل الوكيل" onClick={onSwitchAgent}>
+      <button data-testid="badge-switch-agent" aria-label="بدّل الوكيل" title="تعيين وكيل للجلسة النشطة" onClick={onSwitchAgent}>
         ⇄
       </button>
       <span data-testid="badge-model">النموذج: {model ?? 'غير معيّن'}</span>
-      <button data-testid="badge-switch-model" aria-label="بدّل النموذج" onClick={onSwitchModel}>
+      <button data-testid="badge-switch-model" aria-label="بدّل النموذج" title="تعيين نموذج للجلسة النشطة" onClick={onSwitchModel}>
         ⇄
       </button>
     </div>

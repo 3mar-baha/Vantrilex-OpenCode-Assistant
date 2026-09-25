@@ -24,6 +24,7 @@ export function SessionChip({ sessions, activeId, onSelect }: SessionChipProps):
               <button
                 data-testid={`session-${s.id}`}
                 aria-current={s.id === activeId}
+                title={`تبديل إلى الجلسة ${s.id} (${s.state})`}
                 onClick={() => onSelect(s.id)}
               >
                 {s.id} · {s.state}

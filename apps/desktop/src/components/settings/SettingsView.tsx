@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ApiKeysModal, type ApiKeyBundle } from '../portals/ApiKeysModal.js';
 import { VoxauraBridge } from '../../bridge/ws.js';
 
-// SettingsView — the dedicated settings window surface (?view=settings).
-// Fills the native window; no HUD chrome. It owns its own WS-4097 connection
-// so key saves and persona switches reach the daemon independently of the
-// companion window. Latin technical tokens stay verbatim.
+// SettingsView — the general settings window surface (?view=settings).
+// Credentials live in the dedicated keys window (?view=keys); this surface owns
+// models/skills/voice/system. It keeps its own WS-4097 link for persona changes.
 export interface ChainEntry {
   readonly id: string;
   readonly name: string;
@@ -17,14 +15,13 @@ export interface SettingsViewProps {
   readonly initialPersona?: 'kareem' | 'nour';
 }
 
-type TabId = 'keys' | 'models' | 'skills' | 'voice' | 'system';
+type TabId = 'models' | 'skills' | 'voice' | 'system';
 
-const TABS: ReadonlyArray<{ id: TabId; title: string }> = [
-  { id: 'keys', title: 'مفاتيح الـ API' },
-  { id: 'models', title: 'النماذج والوكلاء' },
-  { id: 'skills', title: 'المهارات والـ MCP' },
-  { id: 'voice', title: 'الصوت والشخصيات' },
-  { id: 'system', title: 'النظام والخزنة' },
+const TABS: ReadonlyArray<{ id: TabId; title: string; tip: string }> = [
+  { id: 'models', title: 'النماذج والوكلاء', tip: 'سلسلة الوكلاء والنماذج النشطة' },
+  { id: 'skills', title: 'المهارات والـ MCP', tip: 'المهارات وخوادم MCP المتصلة' },
+  { id: 'voice', title: 'الصوت والشخصيات', tip: 'اختيار شخصية الصوت كريم أو نور' },
+  { id: 'system', title: 'النظام والخزنة', tip: 'حالة الخزنة والذاكرة والجسر' },
 ];
 
 const MCP_SERVERS = ['sequential-thinking', 'memory', 'filesystem', 'github', 'context7', 'obsidian-vault'] as const;
@@ -44,11 +41,9 @@ function nextCmdId(): string {
 }
 
 export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewProps): JSX.Element {
-  const [tab, setTab] = useState<TabId>('keys');
+  const [tab, setTab] = useState<TabId>('models');
   const [persona, setPersona] = useState<'kareem' | 'nour'>(initialPersona);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | undefined>(undefined);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
 
   useEffect(() => {
@@ -70,34 +65,6 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
     };
   }, []);
 
-  const saveKeys = (keys: ApiKeyBundle): void => {
-    const bridge = bridgeRef.current;
-    if (bridge === null) {
-      setSaveError('الخادم غير متصل — لم تُرسل المفاتيح');
-      return;
-    }
-    setSaving(true);
-    setSaveError(undefined);
-    void bridge
-      .sendCommand({
-        id: nextCmdId(),
-        kind: 'saveApiKeys',
-        groqKey: keys.groq,
-        fishKey: keys.fish,
-        openrouterKey: keys.openrouter,
-      })
-      .then((ok) => {
-        setSaving(false);
-        if (ok) setSavedAt(new Date().toLocaleTimeString('ar'));
-        else setSaveError('رفض الخادم المفاتيح — الثلاثة مطلوبة');
-      });
-  };
-
-  const selectPersona = (id: 'kareem' | 'nour'): void => {
-    setPersona(id);
-    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setPersona', persona: id });
-  };
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') window.close();
@@ -105,6 +72,27 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
+
+  const selectPersona = (id: 'kareem' | 'nour'): void => {
+    setPersona(id);
+    void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setPersona', persona: id });
+  };
+
+  // Redacted diagnostics only — never key material.
+  const copyDiagnostics = (): void => {
+    const report = [
+      'Voxaura diagnostics (redacted)',
+      `persona: ${persona}`,
+      `chain: ${chain.map((c) => c.name).join(' -> ')}`,
+      `mcp: ${MCP_SERVERS.join(', ')}`,
+      `skills: ${BRIDGE_SKILLS.join(', ')}`,
+      `version: 0.2.0`,
+    ].join('\n');
+    void navigator.clipboard?.writeText(report).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
 
   return (
     <div
@@ -121,7 +109,9 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
       >
         <div className="flex items-center gap-2 border-b border-[#26282e] px-4 py-3">
           <span className="text-sm font-semibold">الإعدادات</span>
-          <span className="vx-kbd ms-auto">Esc</span>
+          <span className="vx-kbd ms-auto" title="إغلاق النافذة">
+            Esc
+          </span>
         </div>
         <nav className="flex flex-col p-2">
           {TABS.map((t) => (
@@ -130,6 +120,7 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
               role="tab"
               aria-selected={tab === t.id}
               data-testid={`tab-${t.id}`}
+              title={t.tip}
               onClick={() => setTab(t.id)}
               className="vx-tab px-3 py-2 text-start text-sm hover:bg-[#1d1e23]"
             >
@@ -137,38 +128,31 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
             </button>
           ))}
         </nav>
+        <div className="mt-auto border-t border-[#26282e] p-3">
+          <button
+            data-testid="copy-diagnostics"
+            title="نسخ تشخيصات النظام (بدون مفاتيح)"
+            onClick={copyDiagnostics}
+            className="w-full rounded-[6px] border border-[#26282e] px-3 py-2 text-xs text-[#a1a1aa] hover:text-[#f4f4f5]"
+          >
+            {copied ? 'تم النسخ' : 'نسخ التشخيصات'}
+          </button>
+        </div>
       </aside>
-      <section data-testid="settings-content" className="min-w-0 flex-1 overflow-y-auto p-6">
-        {tab === 'keys' && (
-          <div className="flex flex-col gap-4">
-            <header className="flex items-baseline gap-3">
-              <h2 className="text-lg font-semibold">مفاتيح الـ API</h2>
-              <span className="text-sm text-[#a1a1aa]">مطلوبة لتفعيل النظام بالكامل</span>
-            </header>
-            <ApiKeysModal
-              onSave={saveKeys}
-              onClose={() => window.close()}
-              saving={saving}
-              saveError={saveError}
-              embedded
-            />
-            {savedAt !== null && (
-              <p data-testid="keys-saved" className="text-sm text-[#4ade80]">
-                حُفظت المفاتيح في الخزنة المشفرة · {savedAt}
-              </p>
-            )}
-          </div>
-        )}
 
+      <section data-testid="settings-content" className="min-w-0 flex-1 overflow-y-auto p-6">
         {tab === 'models' && (
           <div className="flex flex-col gap-4">
             <h2 className="text-lg font-semibold">سلسلة الوكلاء النشطة</h2>
-            <p className="text-sm text-[#a1a1aa]">تعمل هذه السلسلة داخل جلسات OpenCode v2 حصراً.</p>
+            <p className="text-sm text-[#a1a1aa]" title="وكلاء OpenCode v2">
+              تعمل هذه السلسلة داخل جلسات OpenCode v2 حصراً.
+            </p>
             <ul data-testid="chain-list" className="flex flex-wrap items-center gap-2">
               {chain.map((c) => (
                 <li
                   key={c.id}
                   data-testid={`chain-${c.id}`}
+                  title={`${c.name} — ${c.role}`}
                   className="rounded-[6px] border border-[#26282e] bg-[#18191d] px-3 py-2 text-sm"
                 >
                   <span className="font-semibold">{c.name}</span>
@@ -178,14 +162,14 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
             </ul>
             <table className="w-full border-collapse text-sm">
               <thead>
-                <tr className="text-start text-[#a1a1aa]">
+                <tr className="text-[#a1a1aa]">
                   <th className="border-b border-[#26282e] px-2 py-2 text-start font-medium">الدور</th>
                   <th className="border-b border-[#26282e] px-2 py-2 text-start font-medium">Model</th>
                 </tr>
               </thead>
               <tbody data-testid="model-roster">
                 {MODEL_ROSTER.map((m) => (
-                  <tr key={m.slug}>
+                  <tr key={m.slug} title={m.slug}>
                     <td className="border-b border-[#26282e] px-2 py-2">{m.role}</td>
                     <td className="border-b border-[#26282e] px-2 py-2 font-mono text-[#a1a1aa]">{m.slug}</td>
                   </tr>
@@ -201,7 +185,11 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
               <h2 className="text-lg font-semibold">مهارات الجسر</h2>
               <ul data-testid="bridge-skills" className="mt-2 flex flex-wrap gap-2">
                 {BRIDGE_SKILLS.map((s) => (
-                  <li key={s} className="rounded-[6px] border border-[#26282e] bg-[#18191d] px-3 py-1 font-mono text-xs text-[#a1a1aa]">
+                  <li
+                    key={s}
+                    title={`مهارة: ${s}`}
+                    className="rounded-[6px] border border-[#26282e] bg-[#18191d] px-3 py-1 font-mono text-xs text-[#a1a1aa]"
+                  >
                     {s}
                   </li>
                 ))}
@@ -211,7 +199,11 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
               <h2 className="text-lg font-semibold">خوادم MCP المتصلة</h2>
               <ul data-testid="mcp-servers" className="mt-2 flex flex-wrap gap-2">
                 {MCP_SERVERS.map((s) => (
-                  <li key={s} className="rounded-[6px] border border-[#26282e] bg-[#18191d] px-3 py-1 font-mono text-xs text-[#a1a1aa]">
+                  <li
+                    key={s}
+                    title={`خادم MCP: ${s}`}
+                    className="rounded-[6px] border border-[#26282e] bg-[#18191d] px-3 py-1 font-mono text-xs text-[#a1a1aa]"
+                  >
                     {s}
                   </li>
                 ))}
@@ -223,13 +215,14 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
         {tab === 'voice' && (
           <div className="flex flex-col gap-4">
             <h2 className="text-lg font-semibold">شخصية الصوت</h2>
-            <div role="radiogroup" aria-label="Voice persona" data-testid="persona-group" className="flex gap-2">
+            <div role="radiogroup" aria-label="شخصية الصوت" data-testid="persona-group" className="flex gap-2">
               {(['kareem', 'nour'] as const).map((p) => (
                 <button
                   key={p}
                   role="radio"
                   aria-checked={persona === p}
                   data-testid={`persona-${p}`}
+                  title={p === 'kareem' ? 'كريم — الصوت الافتراضي' : 'نور — الصوت البديل'}
                   onClick={() => selectPersona(p)}
                   className={`rounded-[6px] border px-4 py-2 text-sm ${
                     persona === p
@@ -251,23 +244,21 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
           <div className="flex flex-col gap-4">
             <h2 className="text-lg font-semibold">حالة النظام</h2>
             <ul className="flex flex-col gap-2 text-sm">
-              <li className="flex items-center justify-between border-b border-[#26282e] pb-2">
-                <span className="text-[#a1a1aa]">الخزنة</span>
-                <span>vault/keyring.dat (AES-256-GCM)</span>
-              </li>
-              <li className="flex items-center justify-between border-b border-[#26282e] pb-2">
-                <span className="text-[#a1a1aa]">الذاكرة</span>
-                <span>vault/projects/voxaura · Obsidian MCP</span>
-              </li>
-              <li className="flex items-center justify-between border-b border-[#26282e] pb-2">
-                <span className="text-[#a1a1aa]">الجسر</span>
-                <span>WS-4097 · /v1/ui</span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span className="text-[#a1a1aa]">الإصدار</span>
-                <span>v0.2.0</span>
-              </li>
+              {[
+                ['الخزنة', 'vault/keyring.dat (AES-256-GCM)'],
+                ['الذاكرة', 'vault/projects/voxaura · Obsidian MCP'],
+                ['الجسر', 'WS-4097 · /v1/ui'],
+                ['الإصدار', 'v0.2.0'],
+              ].map(([k, v]) => (
+                <li key={k} title={`${k}: ${v}`} className="flex items-center justify-between border-b border-[#26282e] pb-2">
+                  <span className="text-[#a1a1aa]">{k}</span>
+                  <span>{v}</span>
+                </li>
+              ))}
             </ul>
+            <p className="text-xs text-[#71717a]">
+              المفاتيح تُدار من نافذة «مفاتيح الـ API» المنفصلة.
+            </p>
           </div>
         )}
       </section>
