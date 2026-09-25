@@ -3,6 +3,7 @@ import { ApiKeysModal, type ApiKeyBundle } from '../portals/ApiKeysModal.js';
 import { VoxauraBridge } from '../../bridge/ws.js';
 import { resolveIpcToken } from '../../settings/ipc-token.js';
 import { useAutoSize } from '../../window/useAutoSize.js';
+import { closeCurrentWindow } from '../../window/close-current-window.js';
 
 // KeysView — the dedicated API-keys window (?view=keys). Decoupled from the
 // general settings window so the credential task has a focused surface: no
@@ -46,7 +47,7 @@ export function KeysView(): JSX.Element {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') window.close();
+      if (e.key === 'Escape') void closeCurrentWindow();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -89,7 +90,7 @@ export function KeysView(): JSX.Element {
         <span className="vx-kbd ms-auto">Esc</span>
       </header>
       <main className="flex-1 overflow-y-auto p-5">
-        <ApiKeysModal onSave={save} onClose={() => window.close()} saving={saving} saveError={error} embedded />
+        <ApiKeysModal onSave={save} onClose={() => void closeCurrentWindow()} saving={saving} saveError={error} embedded />
         {savedAt !== null && (
           <p data-testid="keys-saved" className="mt-4 text-sm text-[#4ade80]">
             حُفظت المفاتيح · {savedAt}

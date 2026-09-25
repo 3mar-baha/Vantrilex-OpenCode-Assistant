@@ -79,4 +79,20 @@ describe('AgentModelBadge', () => {
     select.dispatchEvent(new Event('change', { bubbles: true }));
     expect(onSelectAgent).toHaveBeenCalledWith('architect');
   });
+
+  test('compact mode hides the raw model id but keeps the switch control', () => {
+    mount(
+      <AgentModelBadge
+        agent="build"
+        model="opencode/muse-spark"
+        agents={[{ id: 'build', name: 'Build' }]}
+        onSwitchAgent={() => undefined}
+        onSwitchModel={() => undefined}
+        compact
+      />,
+    );
+    expect(document.body.querySelector('[data-testid="badge-model"]')).toBeNull();
+    expect(document.body.querySelector('[data-testid="badge-switch-model"]')).not.toBeNull();
+    expect(document.body.textContent ?? '').not.toContain('muse-spark');
+  });
 });

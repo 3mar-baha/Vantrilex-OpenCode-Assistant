@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { VoxauraBridge } from '../../bridge/ws.js';
 import { resolveIpcToken } from '../../settings/ipc-token.js';
 import { useAutoSize } from '../../window/useAutoSize.js';
+import { closeCurrentWindow } from '../../window/close-current-window.js';
 
 // SettingsView — the general settings window surface (?view=settings).
 // Credentials live in the dedicated keys window (?view=keys); this surface owns
@@ -45,6 +46,7 @@ function nextCmdId(): string {
 export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewProps): JSX.Element {
   const [tab, setTab] = useState<TabId>('models');
   const [persona, setPersona] = useState<'kareem' | 'nour'>(initialPersona);
+  const [modelTarget, setModelTarget] = useState('');
   const [copied, setCopied] = useState(false);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -76,7 +78,7 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') window.close();
+      if (e.key === 'Escape') void closeCurrentWindow();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -150,8 +152,9 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
         </div>
       </aside>
 
-      <section data-testid="settings-content" className="min-w-0 flex-1 overflow-y-auto p-6">
-        {tab === 'models' && (
+      <section data-testid="settings-content" className="min-w-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="max-w-[560px]">
+          {tab === 'models' && (
           <div className="flex flex-col gap-4">
             <h2 className="text-lg font-semibold">سلسلة الوكلاء النشطة</h2>
             <p className="text-sm text-[#a1a1aa]" title="وكلاء OpenCode v2">
@@ -186,6 +189,29 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
                 ))}
               </tbody>
             </table>
+            <div className="flex items-center gap-2">
+              <input
+                data-testid="model-input"
+                value={modelTarget}
+                onChange={(e) => setModelTarget(e.target.value)}
+                placeholder="provider/model"
+                title="معرّف النموذج بالصيغة provider/model"
+                className="vx-input min-w-0 flex-1"
+              />
+              <button
+                data-testid="switch-model"
+                title="تعيين النموذج للجلسة النشطة"
+                onClick={() => {
+                  const target = modelTarget.trim();
+                  if (target.length === 0) return;
+                  void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionModel', model: target });
+                  setModelTarget('');
+                }}
+                className="shrink-0 rounded-[6px] border border-[#3b82f6] px-3 py-2 text-sm text-[#f4f4f5] hover:bg-[#3b82f6]/10"
+              >
+                تبديل النموذج
+              </button>
+            </div>
           </div>
         )}
 
@@ -271,6 +297,7 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
             </p>
           </div>
         )}
+        </div>
       </section>
     </div>
   );

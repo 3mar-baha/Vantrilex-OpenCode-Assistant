@@ -14,6 +14,8 @@ export interface AgentModelBadgeProps {
   readonly onSwitchAgent: () => void;
   readonly onSelectAgent?: (id: string) => void;
   readonly onSwitchModel: () => void;
+  /** HUD mode: friendly agent selector only — raw model ids stay hidden. */
+  readonly compact?: boolean;
 }
 
 export function AgentModelBadge({
@@ -23,6 +25,7 @@ export function AgentModelBadge({
   onSwitchAgent,
   onSelectAgent,
   onSwitchModel,
+  compact = false,
 }: AgentModelBadgeProps): JSX.Element {
   const hasAgents = agents !== undefined && agents.length > 0;
   return (
@@ -50,7 +53,7 @@ export function AgentModelBadge({
       <button data-testid="badge-switch-agent" aria-label="بدّل الوكيل" title="تعيين وكيل للجلسة النشطة" onClick={onSwitchAgent}>
         ⇄
       </button>
-      <span data-testid="badge-model">النموذج: {model ?? 'غير معيّن'}</span>
+      {!compact && <span data-testid="badge-model">النموذج: {model ?? 'غير معيّن'}</span>}
       <button data-testid="badge-switch-model" aria-label="بدّل النموذج" title="تعيين نموذج للجلسة النشطة" onClick={onSwitchModel}>
         ⇄
       </button>

@@ -19,24 +19,96 @@
 // runtime through the `ipc_token` command below.
 use std::fs;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Manager, RunEvent};
 
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+#[cfg(windows)]
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
+
 const OPENCODE_PORT: u16 = 4096;
 const DAEMON_PORT: u16 = 4097;
 
+/// Windows Job Object with KILL_ON_JOB_CLOSE. Handles are not RAII-wrapped:
+/// the job must outlive every child for the kernel to enforce the kill, and it
+/// is intentionally never closed (process teardown closes it, which is exactly
+/// the trigger we want).
+#[cfg(windows)]
+struct KillOnCloseJob(HANDLE);
+
+#[cfg(windows)]
+unsafe impl Send for KillOnCloseJob {}
+#[cfg(windows)]
+unsafe impl Sync for KillOnCloseJob {}
+
+#[cfg(windows)]
+impl KillOnCloseJob {
+    fn create() -> Option<Self> {
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &mut info as *mut _ as *mut core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if ok == 0 {
+                let _ = CloseHandle(job);
+                return None;
+            }
+            Some(KillOnCloseJob(job))
+        }
+    }
+
+    fn adopt(&self, child: &Child) {
+        unsafe {
+            let handle = child.as_raw_handle() as HANDLE;
+            let _ = AssignProcessToJobObject(self.0, handle);
+        }
+    }
+}
+
+/// Single-flight guard: setup and the frontend both request bring-up; without
+/// this they race and spawn duplicate children (the loser exits, and the race
+/// can leave neither holding the port).
+static BRINGUP_INFLIGHT: AtomicBool = AtomicBool::new(false);
+
 /// Children spawned by THIS process. Killed on exit; never touched if they were
-/// already running before we started (we did not create them).
+/// already running before we started (we did not create them). On Windows the
+/// job object is the hard guarantee; this list is the graceful path.
 #[derive(Default)]
 struct Supervisor {
     children: Mutex<Vec<Child>>,
+    #[cfg(windows)]
+    job: std::sync::OnceLock<Option<KillOnCloseJob>>,
 }
 
 impl Supervisor {
+    #[cfg(windows)]
+    fn job(&self) -> Option<&KillOnCloseJob> {
+        self.job.get_or_init(KillOnCloseJob::create).as_ref()
+    }
+
     fn own(&self, child: Child) {
+        #[cfg(windows)]
+        if let Some(job) = self.job() {
+            job.adopt(&child);
+        }
         if let Ok(mut kids) = self.children.lock() {
             kids.push(child);
         }
@@ -57,6 +129,24 @@ fn runtime_dir() -> Option<PathBuf> {
     let mut path = PathBuf::from(home);
     path.push(".opencode-voice-runtime");
     Some(path)
+}
+
+/// Append one line to the supervisor log (0600 directory). Diagnostics only —
+/// never credentials, never transcript content.
+fn log_line(message: &str) {
+    let Some(dir) = runtime_dir() else { return };
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("supervisor.log");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut existing) = fs::read_to_string(&path) {
+        existing.push_str(&format!("[{stamp}] {message}\n"));
+        let _ = fs::write(&path, existing);
+    } else {
+        let _ = fs::write(&path, format!("[{stamp}] {message}\n"));
+    }
 }
 
 fn token_path() -> Option<PathBuf> {
@@ -147,34 +237,56 @@ fn resolve_opencode_bin() -> String {
     }
     if let Some(appdata) = std::env::var_os("APPDATA") {
         let cli_root = PathBuf::from(appdata).join("ai.opencode.desktop").join("cli");
-        if let Ok(entries) = fs::read_dir(&cli_root) {
-            let mut versions: Vec<PathBuf> = entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            versions.sort();
-            for dir in versions.into_iter().rev() {
-                let exe = dir.join("opencode-cli.exe");
-                if exe.exists() {
-                    return exe.to_string_lossy().to_string();
-                }
+        let Ok(entries) = fs::read_dir(&cli_root) else {
+            return "opencode".to_string();
+        };
+        let mut versions: Vec<(Vec<u32>, PathBuf)> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .map(|p| {
+                let key = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+                    .split('.')
+                    .map(|part| part.parse::<u32>().unwrap_or(0))
+                    .collect::<Vec<u32>>();
+                (key, p)
+            })
+            .collect();
+        // Numeric compare: 2.0.12 must beat 2.0.6 (lexicographic would not).
+        versions.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, dir) in versions.into_iter().rev() {
+            let exe = dir.join("opencode-cli.exe");
+            if exe.exists() {
+                log_line(&format!("opencode binary: {}", exe.display()));
+                return exe.to_string_lossy().to_string();
             }
         }
     }
+    log_line("opencode binary: falling back to PATH name `opencode`");
     "opencode".to_string()
 }
 
-/// Resolve the daemon entrypoint: explicit env, else search for `dist/cli.js`
-/// from the current directory AND up the ancestors of the executable. The
-/// upward walk matters: a double-clicked binary runs with cwd = its own
-/// directory (`target/release`), so the repo layout is only reachable by
-/// climbing out. A packaged build must supply VOXAURA_DAEMON_PATH (and Node).
-fn resolve_daemon_entry() -> Option<PathBuf> {
+/// Resolve the daemon entrypoint. Precedence:
+///   1. explicit VOXAURA_DAEMON_PATH
+///   2. the BUNDLED sidecar next to the installed binary (`resources/sidecar/`)
+///      — this is the self-contained path for a real install
+///   3. `dist/cli.js` from the current directory or up the exe's ancestors
+///      (the developer path: a double-clicked binary runs with cwd =
+///      target/release, so climbing out is what finds the repo layout)
+fn resolve_daemon_entry(resource_dir: Option<&Path>) -> Option<PathBuf> {
     if let Ok(explicit) = std::env::var("VOXAURA_DAEMON_PATH") {
         let p = PathBuf::from(explicit);
         if p.exists() {
             return Some(p);
+        }
+    }
+    if let Some(dir) = resource_dir {
+        let bundled = dir.join("sidecar").join("dist").join("cli.js");
+        if bundled.exists() {
+            return Some(bundled);
         }
     }
     let mut roots: Vec<PathBuf> = Vec::new();
@@ -197,8 +309,31 @@ fn resolve_daemon_entry() -> Option<PathBuf> {
     None
 }
 
-fn resolve_node_bin() -> String {
-    std::env::var("VOXAURA_NODE_BIN").unwrap_or_else(|_| "node".to_string())
+/// Windows extended-length paths (`\\?\O:\…`) are rejected by Node's module
+/// resolver (`lstat 'O:'` → EISDIR). Strip the prefix before handing a path to
+/// the child runtime.
+fn plain_path(path: &Path) -> String {
+    let raw = path.to_string_lossy().to_string();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_string()
+}
+
+/// Prefer the bundled Node runtime; fall back to PATH for development.
+fn resolve_node_bin(resource_dir: Option<&Path>) -> String {
+    if let Ok(explicit) = std::env::var("VOXAURA_NODE_BIN") {
+        if !explicit.trim().is_empty() {
+            return explicit;
+        }
+    }
+    if let Some(dir) = resource_dir {
+        let bundled = dir.join("sidecar").join("node.exe");
+        if bundled.exists() {
+            return plain_path(&bundled);
+        }
+    }
+    "node".to_string()
 }
 
 /// Spawn `opencode serve` when 4096 is cold. Returns a human-readable status.
@@ -230,18 +365,41 @@ fn ensure_daemon(app: &tauri::AppHandle) -> Result<String, String> {
     if port_open(DAEMON_PORT) {
         return Ok(format!("daemon already on {DAEMON_PORT}"));
     }
-    let Some(entry) = resolve_daemon_entry() else {
-        return Err("daemon entrypoint not found (set VOXAURA_DAEMON_PATH or run npm run build)".to_string());
+    let resource_dir = app.path().resource_dir().ok();
+    log_line(&format!(
+        "resolve: resource_dir={:?}",
+        resource_dir.as_ref().map(|p| p.display().to_string())
+    ));
+    let Some(entry) = resolve_daemon_entry(resource_dir.as_deref()) else {
+        return Err("daemon entrypoint not found (bundled sidecar missing and VOXAURA_DAEMON_PATH unset)".to_string());
     };
-    let node = resolve_node_bin();
+    let node = resolve_node_bin(resource_dir.as_deref());
+    log_line(&format!("resolve: node={node} entry={}", plain_path(&entry)));
     let password = ensure_serve_password()?;
     let mut cmd = Command::new(&node);
-    cmd.arg(&entry)
+    cmd.arg(plain_path(&entry))
         .arg("serve")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
         .env("OPENCODE_SERVER_PASSWORD", &password);
+    // Capture child stderr into the runtime dir: without it a failed bring-up
+    // is silent and undiagnosable.
+    match runtime_dir() {
+        Some(dir) => {
+            let _ = fs::create_dir_all(&dir);
+            match fs::File::create(dir.join("daemon-stderr.log")) {
+                Ok(file) => {
+                    cmd.stderr(Stdio::from(file));
+                }
+                Err(_) => {
+                    cmd.stderr(Stdio::null());
+                }
+            }
+        }
+        None => {
+            cmd.stderr(Stdio::null());
+        }
+    }
     let child = cmd
         .spawn()
         .map_err(|e| format!("could not spawn daemon via {node}: {e}"))?;
@@ -257,9 +415,23 @@ fn ensure_daemon(app: &tauri::AppHandle) -> Result<String, String> {
 /// returned (never panicked) so the UI can surface them.
 #[tauri::command]
 fn ensure_all_services(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let opencode = ensure_opencode(&app)?;
-    let daemon = ensure_daemon(&app)?;
-    Ok(vec![opencode, daemon])
+    if BRINGUP_INFLIGHT.swap(true, Ordering::SeqCst) {
+        log_line("ensure_all_services: already in flight — skipping duplicate");
+        return Ok(vec!["bring-up already in flight".to_string()]);
+    }
+    let result = (|| -> Result<Vec<String>, String> {
+        log_line("ensure_all_services: begin");
+        let opencode = ensure_opencode(&app)?;
+        log_line(&format!("opencode: {opencode}"));
+        let daemon = ensure_daemon(&app)?;
+        log_line(&format!("daemon: {daemon}"));
+        Ok(vec![opencode, daemon])
+    })();
+    if let Err(err) = &result {
+        log_line(&format!("ensure_all_services ERROR: {err}"));
+    }
+    BRINGUP_INFLIGHT.store(false, Ordering::SeqCst);
+    result
 }
 
 #[tauri::command]

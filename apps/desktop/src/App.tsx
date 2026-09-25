@@ -7,7 +7,6 @@ import { SessionChip } from './components/session/SessionChip.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
-import { AGENT_CHAIN } from './settings/chain.js';
 import { envToken, resolveIpcToken } from './settings/ipc-token.js';
 import { ensureServices } from './settings/services.js';
 import { openKeysWindow, openSettingsWindow } from './settings/open-settings.js';
@@ -28,7 +27,6 @@ export function App(): JSX.Element {
   const [userMuted, setUserMuted] = useState(false);
   const [botMuted, setBotMuted] = useState(false);
   const [announce, setAnnounce] = useState('');
-  const [lastEventAt, setLastEventAt] = useState<string | null>(null);
   const [sessionState, dispatchSession] = useReducer(sessionsReducer, initialSessionsState);
   const [agentModel, setAgentModel] = useState<{ agent: string | null; model: string | null }>({
     agent: null,
@@ -38,7 +36,7 @@ export function App(): JSX.Element {
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  useAutoSize(cardRef);
+  useAutoSize(cardRef, { paddingY: 16 });
   const lastFrameAt = useRef<number>(Date.now());
   const personaRef = useRef(persona);
   const cmdCounter = useRef(0);
@@ -72,7 +70,6 @@ export function App(): JSX.Element {
         onEvent: (event) => {
           const mapped = matrixForDaemonState(event.state, personaRef.current);
           if (mapped !== null) setMatrix(mapped);
-          setLastEventAt(new Date().toLocaleTimeString('ar'));
           lastFrameAt.current = Date.now();
         },
         onInventory: (sessions) =>
@@ -196,7 +193,6 @@ export function App(): JSX.Element {
 
   const live = matrix !== 0;
   const noSessions = sessionState.sessions.length === 0;
-  const hasAgents = agents.length > 0;
 
   return (
     <div
@@ -255,12 +251,8 @@ export function App(): JSX.Element {
             onSwitchAgent={handleSwitchAgent}
             onSelectAgent={handleSelectAgent}
             onSwitchModel={handleSwitchModel}
+            compact
           />
-          {!hasAgents && (
-            <p data-testid="empty-agents" className="text-xs text-[#71717a]" title="لم يُكتشف أي وكيل">
-              لم يُكتشف أي وكيل بعد — يتطلب جلسة نشطة.
-            </p>
-          )}
           <div role="radiogroup" aria-label="شخصية الصوت" className="flex items-center gap-2">
             <span className="text-xs text-[#71717a]">الصوت</span>
             {(['kareem', 'nour'] as const).map((p) => (
@@ -326,14 +318,23 @@ export function App(): JSX.Element {
           </p>
           <button
             data-testid="abort-button"
-            title="إيقاف التوليد فوراً"
+            title={live ? 'إيقاف التوليد فوراً' : 'بدء توليد جديد'}
             onClick={() => {
-              setMatrix(0);
-              send({ id: nextCmdId(), kind: 'abort' }, 'تم إيقاف التوليد', 'تعذّر إيقاف التوليد');
+              if (live) {
+                setMatrix(0);
+                send({ id: nextCmdId(), kind: 'abort' }, 'تم إيقاف التوليد', 'تعذّر إيقاف التوليد');
+              } else {
+                setMatrix(1);
+                send({ id: nextCmdId(), kind: 'arm' }, 'تمت إعادة التوليد', 'تعذّرت إعادة التوليد');
+              }
             }}
-            className="rounded-[6px] border border-[#26282e] px-3 py-1 text-xs text-[#a1a1aa] hover:border-[#f87171] hover:text-[#f87171]"
+            className={`rounded-[6px] border px-3 py-1 text-xs transition ${
+              live
+                ? 'border-[#f87171] text-[#f87171] hover:bg-[#f87171]/10'
+                : 'border-[#26282e] text-[#a1a1aa] hover:border-[#3b82f6] hover:text-[#f4f4f5]'
+            }`}
           >
-            إيقاف التوليد
+            {live ? 'إيقاف التوليد' : 'إعادة التوليد'}
           </button>
         </main>
 
@@ -356,23 +357,6 @@ export function App(): JSX.Element {
             مفاتيح الـ API
           </button>
         </div>
-
-        <dl className="grid grid-cols-3 divide-x divide-[#26282e] border-t border-[#26282e] text-center [direction:ltr]">
-          {AGENT_CHAIN.map((c) => (
-            <div key={c.id} className="px-2 py-2" title={`${c.name} — ${c.role}`}>
-              <dt className="font-mono text-[11px] text-[#f4f4f5]">{c.name}</dt>
-              <dd className="text-[11px] text-[#71717a]">{c.role}</dd>
-            </div>
-          ))}
-        </dl>
-
-        <p
-          data-testid="last-event"
-          title="آخر حدث من الخادم"
-          className="border-t border-[#26282e] px-4 py-1.5 text-center text-[11px] text-[#71717a]"
-        >
-          {lastEventAt !== null ? `آخر تحديث: ${lastEventAt}` : 'بانتظار أول حدث من الخادم'}
-        </p>
       </div>
     </div>
   );

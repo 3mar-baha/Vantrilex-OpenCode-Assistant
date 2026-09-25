@@ -48,3 +48,6 @@ __pycache__/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Bundled sidecar runtime payload (provisioned by scripts/provision-sidecar.mjs)
+apps/desktop/src-tauri/sidecar/

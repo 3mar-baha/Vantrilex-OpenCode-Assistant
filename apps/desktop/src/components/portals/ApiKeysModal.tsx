@@ -36,6 +36,9 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError, embed
     openrouter: useRef<HTMLInputElement>(null),
   };
   const [present, setPresent] = useState<Record<FieldId, boolean>>({ groq: false, fish: false, openrouter: false });
+  // Presence is only meaningful once the operator has touched a field; before
+  // that the badge stays neutral so a fresh window never reads as "missing".
+  const [touched, setTouched] = useState<Record<FieldId, boolean>>({ groq: false, fish: false, openrouter: false });
   const [revealed, setRevealed] = useState<Record<FieldId, boolean>>({ groq: false, fish: false, openrouter: false });
   const complete = present.groq && present.fish && present.openrouter;
 
@@ -61,7 +64,10 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError, embed
               defaultValue=""
               autoComplete="off"
               spellCheck={false}
-              onChange={(e) => setPresent((s) => ({ ...s, [f.id]: e.target.value.trim().length > 0 }))}
+              onChange={(e) => {
+                setPresent((s) => ({ ...s, [f.id]: e.target.value.trim().length > 0 }));
+                setTouched((s) => (s[f.id] ? s : { ...s, [f.id]: true }));
+              }}
               className="min-w-0 flex-1 bg-slate-800/80 border border-slate-700 text-slate-100 px-4 py-2.5 rounded-xl placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
             />
             <button
@@ -74,7 +80,7 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError, embed
               {revealed[f.id] ? 'إخفاء' : 'إظهار'}
             </button>
             <span data-testid={`badge-${f.id}`} aria-live="polite" className="shrink-0 text-sm text-slate-300">
-              {present[f.id] ? 'موجود' : 'مفقود'}
+              {touched[f.id] ? (present[f.id] ? 'موجود' : 'مفقود') : '—'}
             </span>
           </div>
         </div>

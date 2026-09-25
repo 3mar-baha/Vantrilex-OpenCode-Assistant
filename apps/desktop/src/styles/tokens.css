@@ -3,7 +3,7 @@
    No glassmorphism, no glow, no gradients. */
 :root {
   /* Surfaces */
-  --vx-canvas: #121316;
+  --vx-canvas: #090a0f;
   --vx-panel: #18191d;
   --vx-panel-hi: #1d1e23;
   --vx-inset: #0e0f12;
@@ -32,7 +32,9 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  background: var(--vx-canvas);
+  /* Explicit dark canvas on the webview itself: a white flash is impossible
+     even if React unmounts (Esc, crash, slow first paint). */
+  background: #090a0f !important;
   overflow: hidden;
   overscroll-behavior: none;
 }

@@ -34,7 +34,7 @@ test('agent/model switch round-trips with session scope', async ({ page }) => {
     )
     .toBe(true);
 
-  page.once('dialog', (dialog) => void dialog.accept('opus'));
+  await page.once('dialog', (dialog) => void dialog.accept('opus'));
   await page.getByTestId('badge-switch-model').click();
   await expect
     .poll(
@@ -44,8 +44,9 @@ test('agent/model switch round-trips with session scope', async ({ page }) => {
     )
     .toBe(true);
 
+  // HUD keeps friendly labels: the raw model id must NOT be rendered.
   await expect(page.getByTestId('badge-agent')).toContainText('build');
-  await expect(page.getByTestId('badge-model')).toContainText('opus');
+  await expect(page.getByTestId('badge-model')).toHaveCount(0);
 });
 
 test('discovered agents populate a live selector and drive setSessionAgent', async ({ page }) => {
