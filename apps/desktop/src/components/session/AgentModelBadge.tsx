@@ -26,16 +26,16 @@ export function AgentModelBadge({
 }: AgentModelBadgeProps): JSX.Element {
   const hasAgents = agents !== undefined && agents.length > 0;
   return (
-    <div data-testid="agent-model-badge" role="group" aria-label="Active agent and model">
+    <div data-testid="agent-model-badge" role="group" aria-label="الوكيل والنموذج النشطان">
       {hasAgents ? (
         <select
           data-testid="agent-select"
-          aria-label="Active agent"
+          aria-label="الوكيل النشط"
           value={agent ?? ''}
           onChange={(e) => onSelectAgent?.(e.target.value)}
         >
           <option value="" disabled>
-            agent: unassigned
+            الوكيل: غير معيّن
           </option>
           {agents.map((a) => (
             <option key={a.id} value={a.id}>
@@ -44,13 +44,13 @@ export function AgentModelBadge({
           ))}
         </select>
       ) : (
-        <span data-testid="badge-agent">agent: {agent ?? 'unassigned'}</span>
+        <span data-testid="badge-agent">الوكيل: {agent ?? 'غير معيّن'}</span>
       )}
-      <button data-testid="badge-switch-agent" aria-label="Switch agent" onClick={onSwitchAgent}>
+      <button data-testid="badge-switch-agent" aria-label="بدّل الوكيل" onClick={onSwitchAgent}>
         ⇄
       </button>
-      <span data-testid="badge-model">model: {model ?? 'unassigned'}</span>
-      <button data-testid="badge-switch-model" aria-label="Switch model" onClick={onSwitchModel}>
+      <span data-testid="badge-model">النموذج: {model ?? 'غير معيّن'}</span>
+      <button data-testid="badge-switch-model" aria-label="بدّل النموذج" onClick={onSwitchModel}>
         ⇄
       </button>
     </div>

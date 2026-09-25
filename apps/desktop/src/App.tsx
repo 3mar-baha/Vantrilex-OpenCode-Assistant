@@ -2,29 +2,32 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { VoxauraBridge } from './bridge/ws.js';
 import { ActionBar } from './components/actionbar/ActionBar.js';
 import { Crest } from './components/brand/Crest.js';
-import { PixelMatrix } from './matrix/PixelMatrix.js';
-import { matrixForDaemonState } from './matrix/matrix-state.js';
-import { SettingsPortal } from './components/portals/SettingsPortal.js';
-import { ApiKeysModal, type ApiKeyBundle } from './components/portals/ApiKeysModal.js';
+import { WaveformEmblem } from './components/brand/WaveformEmblem.js';
+import { SiriWaveVisualizer } from './components/audio/SiriWaveVisualizer.js';
+import { matrixForDaemonState, stateAccent } from './matrix/matrix-state.js';
+import type { MatrixState } from './matrix/matrix-state.js';
+import { SettingsDialog } from './components/portals/SettingsDialog.js';
+import { ApiKeysModal } from './components/portals/ApiKeysModal.js';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import type { ClusterAction } from './components/sidebar/IconCluster.js';
-import type { MatrixState } from './matrix/matrix-state.js';
+import type { ApiKeyBundle } from './components/portals/ApiKeysModal.js';
 import './index.css';
 
-// Voxaura shell — ambient status surface. The daemon owns all state; this tree
-// renders bridge status, the matrix/action-bar placeholders (G3 builds them),
-// and the floating portals (G2). No secrets, no model calls here.
+// Voxaura shell — ambient Arabic-first status surface. The daemon owns all
+// state; this tree renders bridge status, the Siri wave, action bar and the
+// tabbed settings dialog. Latin technical tokens stay verbatim; all chrome
+// copy is Arabic. No secrets, no model calls here.
 type BridgeState = 'connecting' | 'live' | 'degraded' | 'refused';
 
-const TABS = [
-  { id: 'identity', title: 'Persona (Kareem / Nour)' },
-  { id: 'audio', title: 'Audio & hardware' },
-  { id: 'bridge', title: 'OpenCode bridge' },
-  { id: 'keyring', title: 'Key pools' },
-  { id: 'system', title: 'System & telemetry' },
-];
+const ARABIC_FONT = "-apple-system, 'Segoe UI', Tahoma, Arial, sans-serif";
+
+const CHAIN = [
+  { id: 'dots3', name: 'Dots3', role: 'الاستقبال الحواري' },
+  { id: 'nemotron', name: 'Nemotron', role: 'المنسق الرئيسي' },
+  { id: 'inkling', name: 'Inkling', role: 'المنفذ داخل الجلسة' },
+] as const;
 
 export function App(): JSX.Element {
   const [bridge, setBridge] = useState<BridgeState>(() => {
@@ -35,7 +38,6 @@ export function App(): JSX.Element {
   const [keysOpen, setKeysOpen] = useState(false);
   const [keysSaving, setKeysSaving] = useState(false);
   const [keysError, setKeysError] = useState<string | undefined>(undefined);
-  const [activeTab, setActiveTab] = useState('identity');
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
   const [matrix, setMatrix] = useState<MatrixState>(0);
   // Sessions surface from the daemon inventory (Phase 2 follow-up); until
@@ -112,7 +114,7 @@ export function App(): JSX.Element {
   const handleSwitchAgent = (): void => {
     const active = sessionState.activeId;
     if (active === null) return;
-    const target = promptTarget('Switch agent to (id):');
+    const target = promptTarget('بدّل الوكيل (المعرف):');
     if (target === null) return;
     setAgentModel((s) => ({ ...s, agent: target }));
     void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: target });
@@ -121,7 +123,7 @@ export function App(): JSX.Element {
   const handleSwitchModel = (): void => {
     const active = sessionState.activeId;
     if (active === null) return;
-    const target = promptTarget('Switch model to (id):');
+    const target = promptTarget('بدّل النموذج (المعرف):');
     if (target === null) return;
     setAgentModel((s) => ({ ...s, model: target }));
     void bridgeRef.current?.sendCommand({ id: nextCmdId(), kind: 'setSessionModel', sessionId: active, model: target });
@@ -130,7 +132,7 @@ export function App(): JSX.Element {
   const handleSaveKeys = (keys: ApiKeyBundle): void => {
     const bridge = bridgeRef.current;
     if (bridge === null) {
-      setKeysError('Bridge offline — keys not sent');
+      setKeysError('الجسر غير متصل — لم تُرسل المفاتيح');
       return;
     }
     setKeysSaving(true);
@@ -148,7 +150,7 @@ export function App(): JSX.Element {
         if (ok) {
           setKeysOpen(false);
         } else {
-          setKeysError('Daemon rejected the keys — all 3 are required');
+          setKeysError('رفض الخادم المفاتيح — الثلاثة مطلوبة');
         }
       });
   };
@@ -169,11 +171,29 @@ export function App(): JSX.Element {
     void bridgeRef.current?.sendCommand({ id, kind: action });
   };
 
+  const statusPill =
+    bridge !== 'live'
+      ? '● غير متصل'
+      : matrix === 0
+        ? '● في وضع الاستعداد'
+        : matrix === 1
+          ? '● جاري الاستماع...'
+          : matrix === 2
+            ? '● جاري المعالجة...'
+            : '● جاري التحدث...';
+
   return (
-    <div className="min-h-full bg-obsidian text-stone-200" data-testid="voxaura-shell">
-      <header data-testid="bridge-status">
+    <div
+      className="min-h-full bg-obsidian text-stone-200"
+      data-testid="voxaura-shell"
+      dir="rtl"
+      style={{ fontFamily: ARABIC_FONT }}
+    >
+      <header>
         <Crest size={24} />
-        <span>bridge: {bridge}</span>
+        <WaveformEmblem />
+        <h1 data-testid="app-title">Voxaura</h1>
+        <span data-testid="bridge-status">{statusPill}</span>
         <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
         <AgentModelBadge
           agent={agentModel.agent}
@@ -185,14 +205,14 @@ export function App(): JSX.Element {
         />
       </header>
       <main>
-        <PixelMatrix state={matrix} energy={0} />
+        <SiriWaveVisualizer mode={matrix === 0 ? 'idle' : 'active'} color={stateAccent(matrix)} />
         <ActionBar onAction={handleAction} />
       </main>
       <button data-testid="open-settings" onClick={() => setSettingsOpen(true)}>
-        Settings
+        الإعدادات
       </button>
       <button data-testid="open-apikeys" onClick={() => setKeysOpen(true)}>
-        API keys
+        مفاتيح الـ API
       </button>
       {keysOpen && (
         <ApiKeysModal
@@ -203,16 +223,18 @@ export function App(): JSX.Element {
         />
       )}
       {settingsOpen && (
-        <SettingsPortal
-          tabs={TABS}
-          activeTab={activeTab}
-          persona={[
-            { id: 'kareem', label: 'Kareem (كريم)', selected: persona === 'kareem' },
-            { id: 'nour', label: 'Nour (نور)', selected: persona === 'nour' },
-          ]}
-          onSelectTab={setActiveTab}
-          onSelectPersona={handleSelectPersona}
+        <SettingsDialog
           onClose={() => setSettingsOpen(false)}
+          keysSaving={keysSaving}
+          keysError={keysError}
+          onSaveKeys={handleSaveKeys}
+          chain={[...CHAIN]}
+          activeModel={agentModel.model}
+          agents={agents}
+          onSelectAgent={handleSelectAgent}
+          persona={persona}
+          onSelectPersona={handleSelectPersona}
+          bridgeStatus={bridge}
         />
       )}
     </div>

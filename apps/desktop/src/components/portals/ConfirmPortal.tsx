@@ -18,20 +18,20 @@ export function ConfirmPortal({
   onCancel,
 }: ConfirmPortalProps): JSX.Element {
   return (
-    <PortalShell label="Confirm before acting" onClose={onCancel}>
+    <PortalShell label="تأكيد قبل التنفيذ" onClose={onCancel}>
       <h2 data-testid="confirm-title">{title}</h2>
       <p data-testid="confirm-detail">{detail}</p>
       {destructiveScore !== undefined && (
         <p data-testid="confirm-score">
-          Destructive score: {destructiveScore.toFixed(2)}
+          درجة الخطورة: {destructiveScore.toFixed(2)}
         </p>
       )}
       <div>
         <button data-testid="confirm-ok" onClick={onConfirm}>
-          Confirm
+          تأكيد
         </button>
         <button data-testid="confirm-cancel" onClick={onCancel}>
-          Cancel
+          إلغاء
         </button>
       </div>
     </PortalShell>

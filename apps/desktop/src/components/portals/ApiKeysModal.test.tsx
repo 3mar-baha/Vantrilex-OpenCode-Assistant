@@ -58,7 +58,7 @@ describe('ApiKeysModal (3-key mandatory intake)', () => {
     expect(document.body.querySelector('[data-testid="apikey-banner"]')?.textContent).toContain('All 3 API keys are required');
     expect(document.body.querySelector('[data-testid="apikey-banner"]')?.textContent).toContain('يرجى إدخال جميع المفاتيح الثلاثة');
     for (const id of ['badge-groq', 'badge-fish', 'badge-openrouter'] as const) {
-      expect(document.body.querySelector(`[data-testid="${id}"]`)?.textContent).toContain('missing');
+      expect(document.body.querySelector(`[data-testid="${id}"]`)?.textContent).toContain('مفقود');
     }
   });
 

@@ -18,7 +18,7 @@ async function commands(): Promise<Array<Record<string, unknown>>> {
 
 test('agent/model switch round-trips with session scope', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('bridge: live', { timeout: 10_000 });
+  await expect(page.getByTestId('bridge-status')).toContainText('في وضع الاستعداد', { timeout: 10_000 });
 
   await post('/inventory', { sessions: [{ sessionId: 'ses_a', state: 'running' }] });
   await page.getByTestId('session-ses_a').click();
@@ -50,7 +50,7 @@ test('agent/model switch round-trips with session scope', async ({ page }) => {
 
 test('discovered agents populate a live selector and drive setSessionAgent', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('bridge: live', { timeout: 10_000 });
+  await expect(page.getByTestId('bridge-status')).toContainText('في وضع الاستعداد', { timeout: 10_000 });
   await post('/inventory', { sessions: [{ sessionId: 'ses_a', state: 'running' }] });
   await page.getByTestId('session-ses_a').click();
 

@@ -14,9 +14,9 @@ export interface SessionChipProps {
 
 export function SessionChip({ sessions, activeId, onSelect }: SessionChipProps): JSX.Element {
   return (
-    <div data-testid="session-chip" role="group" aria-label="Active project session">
+    <div data-testid="session-chip" role="group" aria-label="جلسة المشروع النشطة">
       {sessions.length === 0 ? (
-        <span data-testid="session-active-only">{activeId ?? 'unassigned'}</span>
+        <span data-testid="session-active-only">{activeId ?? 'غير معيّنة'}</span>
       ) : (
         <ul data-testid="session-list">
           {sessions.map((s) => (

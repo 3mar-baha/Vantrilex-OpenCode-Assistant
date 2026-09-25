@@ -10,14 +10,15 @@ async function fire(state: string): Promise<unknown> {
   return res.json();
 }
 
-test('matrix follows daemon lifecycle: running→thinking, complete→kareem', async ({ page }) => {
+test('wave follows daemon lifecycle: running→active, abort→idle', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('bridge: live', { timeout: 10_000 });
-  const matrix = page.getByTestId('pixel-matrix');
+  await expect(page.getByTestId('bridge-status')).toContainText('في وضع الاستعداد', { timeout: 10_000 });
+  const wave = page.getByTestId('siri-wave');
+  await expect(wave).toHaveAttribute('data-mode', 'idle');
 
   await fire('running');
-  await expect(matrix).toHaveAttribute('data-state', '2', { timeout: 5_000 });
+  await expect(wave).toHaveAttribute('data-mode', 'active', { timeout: 5_000 });
 
   await fire('complete');
-  await expect(matrix).toHaveAttribute('data-state', '3', { timeout: 5_000 });
+  await expect(wave).toHaveAttribute('data-mode', 'active', { timeout: 5_000 });
 });

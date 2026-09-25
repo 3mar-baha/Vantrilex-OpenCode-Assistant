@@ -13,7 +13,7 @@ async function post(path: string, body: unknown): Promise<unknown> {
 
 test('inventory snapshot populates chip; switch executes and acks', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('bridge: live', { timeout: 10_000 });
+  await expect(page.getByTestId('bridge-status')).toContainText('في وضع الاستعداد', { timeout: 10_000 });
 
   await post('/inventory', {
     sessions: [

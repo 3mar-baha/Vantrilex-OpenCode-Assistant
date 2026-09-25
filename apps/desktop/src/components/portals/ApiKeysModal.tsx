@@ -20,9 +20,9 @@ export interface ApiKeysModalProps {
 }
 
 const FIELDS = [
-  { id: 'groq', label: 'Groq API Key', hint: 'Required for Whisper STT' },
-  { id: 'fish', label: 'Fish Audio API Key', hint: 'Required for Kareem & Nour TTS' },
-  { id: 'openrouter', label: 'OpenRouter API Key', hint: 'Required for Dots3, Nemotron, Inkling' },
+  { id: 'groq', label: 'مفتاح Groq', hint: 'مطلوب لـ Whisper STT' },
+  { id: 'fish', label: 'مفتاح Fish Audio', hint: 'مطلوب لـ Kareem و Nour TTS' },
+  { id: 'openrouter', label: 'مفتاح OpenRouter', hint: 'مطلوب لـ Dots3 و Nemotron و Inkling' },
 ] as const;
 
 type FieldId = (typeof FIELDS)[number]['id'];
@@ -40,7 +40,7 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError }: Api
   const read = (id: FieldId): string => refs[id].current?.value.trim() ?? '';
 
   return (
-    <PortalShell label="API keys" onClose={onClose}>
+    <PortalShell label="مفاتيح الـ API" onClose={onClose}>
       <p data-testid="apikey-banner" role="alert">
         يرجى إدخال جميع المفاتيح الثلاثة المطلوبة (Groq, Fish Audio, OpenRouter) لتفعيل النظام / All 3 API
         keys are required to activate Voxaura
@@ -62,14 +62,14 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError }: Api
           />
           <button
             data-testid={`toggle-${f.id}`}
-            aria-label={`Show or hide ${f.label}`}
+            aria-label={`إظهار أو إخفاء ${f.label}`}
             aria-pressed={revealed[f.id]}
             onClick={() => setRevealed((s) => ({ ...s, [f.id]: !s[f.id] }))}
           >
-            {revealed[f.id] ? 'Hide' : 'Show'}
+            {revealed[f.id] ? 'إخفاء' : 'إظهار'}
           </button>
           <span data-testid={`badge-${f.id}`} aria-live="polite">
-            {present[f.id] ? 'present' : 'missing'}
+            {present[f.id] ? 'موجود' : 'مفقود'}
           </span>
         </div>
       ))}
@@ -86,7 +86,7 @@ export function ApiKeysModal({ onSave, onClose, saving = false, saveError }: Api
           if (keys.groq.length > 0 && keys.fish.length > 0 && keys.openrouter.length > 0) onSave(keys);
         }}
       >
-        {saving ? 'Saving…' : 'Save & Activate'}
+        {saving ? 'جارٍ الحفظ…' : 'حفظ وتفعيل'}
       </button>
     </PortalShell>
   );

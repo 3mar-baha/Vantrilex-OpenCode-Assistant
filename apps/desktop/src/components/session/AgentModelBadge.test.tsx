@@ -53,7 +53,7 @@ describe('AgentModelBadge', () => {
     mount(
       <AgentModelBadge agent={null} model={null} onSwitchAgent={() => undefined} onSwitchModel={() => undefined} />,
     );
-    expect(document.body.querySelector('[data-testid="badge-agent"]')?.textContent).toContain('unassigned');
+    expect(document.body.querySelector('[data-testid="badge-agent"]')?.textContent).toContain('غير معيّن');
   });
 
   test('discovered agents render a live selector that emits the chosen id', () => {

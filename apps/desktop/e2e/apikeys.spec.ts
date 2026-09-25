@@ -9,7 +9,7 @@ async function commands(): Promise<Array<Record<string, unknown>>> {
 
 test('API key intake mandates all three keys, then dispatches saveApiKeys', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('bridge: live', { timeout: 10_000 });
+  await expect(page.getByTestId('bridge-status')).toContainText('في وضع الاستعداد', { timeout: 10_000 });
 
   await page.getByTestId('open-apikeys').click();
   await expect(page.getByTestId('apikey-banner')).toContainText('All 3 API keys are required');

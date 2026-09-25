@@ -11,18 +11,18 @@ export interface CredentialPortalProps {
 
 export function CredentialPortal({ groqKeys, fishKeys, openrouterKeys, onClose }: CredentialPortalProps): JSX.Element {
   return (
-    <PortalShell label="Key pools" onClose={onClose}>
+    <PortalShell label="مجموعات المفاتيح" onClose={onClose}>
       <dl data-testid="credential-counts">
-        <dt>Groq pool</dt>
+        <dt>مجموعة Groq</dt>
         <dd data-testid="groq-count">{groqKeys} keys</dd>
-        <dt>Fish Audio pool</dt>
+        <dt>مجموعة Fish Audio</dt>
         <dd data-testid="fish-count">{fishKeys} keys</dd>
-        <dt>OpenRouter pool</dt>
+        <dt>مجموعة OpenRouter</dt>
         <dd data-testid="openrouter-count">{openrouterKeys} keys</dd>
       </dl>
-      <p>Values are stored in the encrypted vault and are never shown here.</p>
+      <p>القيم محفوظة في الخزنة المشفرة ولا تظهر هنا أبداً.</p>
       <button data-testid="credentials-close" onClick={onClose}>
-        Close
+        إغلاق
       </button>
     </PortalShell>
   );

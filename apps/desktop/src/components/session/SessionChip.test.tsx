@@ -48,7 +48,7 @@ describe('SessionChip', () => {
 
   test('empty list renders the active id only — never fabricated sessions', () => {
     mount(<SessionChip sessions={[]} activeId={null} onSelect={() => undefined} />);
-    expect(document.body.querySelector('[data-testid="session-active-only"]')?.textContent).toBe('unassigned');
+    expect(document.body.querySelector('[data-testid="session-active-only"]')?.textContent).toBe('غير معيّنة');
     expect(document.body.querySelector('[data-testid="session-list"]')).toBeNull();
   });
 });

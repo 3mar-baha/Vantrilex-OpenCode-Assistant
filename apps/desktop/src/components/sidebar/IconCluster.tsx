@@ -12,27 +12,27 @@ export interface IconClusterProps {
 
 export function IconCluster({ muted, deafened, onAction }: IconClusterProps): JSX.Element {
   return (
-    <nav aria-label="Voxaura controls" data-testid="icon-cluster" className="voxaura-cluster">
+    <nav aria-label="أدوات Voxaura" data-testid="icon-cluster" className="voxaura-cluster">
       <button
         data-testid="action-mute"
-        aria-label={muted ? 'Unmute AI voice' : 'Mute AI voice'}
+        aria-label={muted ? 'إلغاء كتم صوت الذكاء' : 'كتم صوت الذكاء'}
         aria-pressed={muted}
         onClick={() => onAction('mute')}
       >
         {muted ? <VolumeX color="currentColor" size={22} /> : <Mic color="currentColor" size={22} />}
       </button>
-      <button data-testid="action-abort" aria-label="Stop generation" onClick={() => onAction('abort')}>
+      <button data-testid="action-abort" aria-label="إيقاف التوليد" onClick={() => onAction('abort')}>
         <Square color="currentColor" size={22} />
       </button>
       <button
         data-testid="action-deafen"
-        aria-label={deafened ? 'Undeafen microphone' : 'Deafen microphone'}
+        aria-label={deafened ? 'إلغاء صم الميكروفون' : 'صم الميكروفون'}
         aria-pressed={deafened}
         onClick={() => onAction('deafen')}
       >
         {deafened ? <MicOff color="currentColor" size={22} /> : <Mic color="currentColor" size={22} />}
       </button>
-      <button data-testid="action-settings" aria-label="Open settings" onClick={() => onAction('settings')}>
+      <button data-testid="action-settings" aria-label="الإعدادات" onClick={() => onAction('settings')}>
         <Settings color="currentColor" size={22} />
       </button>
     </nav>

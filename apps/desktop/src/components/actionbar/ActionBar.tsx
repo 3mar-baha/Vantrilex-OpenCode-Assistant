@@ -76,7 +76,7 @@ export function ActionBar({ onAction }: ActionBarProps): JSX.Element {
         }}
       />
       {pickerOpen && (
-        <div role="dialog" aria-label="Mute duration" data-testid="mute-picker">
+        <div role="dialog" aria-label="مدة الكتم" data-testid="mute-picker">
           {MUTE_PRESETS.map((m) => (
             <button key={m} data-testid={`mute-${m}m`} onClick={() => applyMute(m)}>
               {m}m
