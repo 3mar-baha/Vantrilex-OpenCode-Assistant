@@ -1,27 +1,36 @@
-/* Voxaura design tokens — the single source of glass/ink/accent truth.
-   Components reference these variables; no pixel literals in components. */
+/* Voxaura design tokens — restrained, human-engineered system.
+   Matte charcoal surfaces, 1px neutral borders, one engineering accent.
+   No glassmorphism, no glow, no gradients. */
 :root {
-  --voxaura-obsidian: #141413;
-  --voxaura-coal: #181715;
-  --voxaura-graphite: #2a2825;
-  --voxaura-graphite-hi: #383530;
-  --voxaura-glass: rgba(24, 23, 21, 0.75);
-  --voxaura-ink: #e7e5e4;
-  --voxaura-sky-lo: #0284c7;
-  --voxaura-sky: #38bdf8;
-  --voxaura-amber-lo: #f59e0b;
-  --voxaura-amber: #fbbf24;
-  --voxaura-emerald: #10b981;
-  --voxaura-emerald-hi: #34d399;
-  --voxaura-purple: #8b5cf6;
-  --voxaura-purple-hi: #a78bfa;
+  /* Surfaces */
+  --vx-canvas: #121316;
+  --vx-panel: #18191d;
+  --vx-panel-hi: #1d1e23;
+  --vx-inset: #0e0f12;
+  /* Borders */
+  --vx-line: #26282e;
+  --vx-line-soft: rgba(255, 255, 255, 0.08);
+  /* Type */
+  --vx-text: #f4f4f5;
+  --vx-text-dim: #a1a1aa;
+  --vx-text-faint: #71717a;
+  /* Accent (active/focus only) */
+  --vx-accent: #3b82f6;
+  --vx-accent-dim: rgba(59, 130, 246, 0.15);
+  /* Status */
+  --vx-ok: #4ade80;
+  --vx-warn: #fbbf24;
+  --vx-err: #f87171;
+
+  --vx-font: -apple-system, 'Segoe UI', Tahoma, Arial, sans-serif;
+  --vx-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --vx-radius: 6px;
 }
 
 .voxaura-portal {
-  background: var(--voxaura-glass);
-  backdrop-filter: blur(18px);
-  border: 1px solid var(--voxaura-graphite-hi);
-  border-radius: 14px;
+  background: var(--vx-panel);
+  border: 1px solid var(--vx-line);
+  border-radius: var(--vx-radius);
 }
 
 .voxaura-matrix {
@@ -32,7 +41,59 @@
 
 .voxaura-cluster,
 .voxaura-actionbar {
-  background: var(--voxaura-glass);
-  backdrop-filter: blur(18px);
-  border-radius: 999px;
+  background: var(--vx-panel);
+  border: 1px solid var(--vx-line);
+  border-radius: var(--vx-radius);
+}
+
+/* Keyboard hint pills — monospace, quiet. */
+.vx-kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--vx-line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--vx-inset);
+  color: var(--vx-text-dim);
+  font-family: var(--vx-mono);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* Vertical active indicator for settings tabs (a 2px bar, not a glow pill). */
+.vx-tab {
+  position: relative;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  color: var(--vx-text-dim);
+}
+.vx-tab[aria-selected='true'] {
+  color: var(--vx-text);
+  background: var(--vx-panel-hi);
+}
+.vx-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--vx-accent);
+}
+
+/* Crisp inputs — inset border, no glow ring. */
+.vx-input {
+  background: var(--vx-inset);
+  border: 1px solid var(--vx-line);
+  border-radius: var(--vx-radius);
+  color: var(--vx-text);
+  padding: 8px 12px;
+  outline: none;
+}
+.vx-input::placeholder {
+  color: var(--vx-text-faint);
+}
+.vx-input:focus {
+  border-color: var(--vx-accent);
 }

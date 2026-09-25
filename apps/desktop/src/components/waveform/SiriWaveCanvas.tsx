@@ -61,8 +61,7 @@ export function SiriWaveCanvas({ mode, color = '#38bdf8', reducedMotion = false 
       phase += speed * 0.28;
 
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
-      ctx.globalCompositeOperation = 'lighter';
-      const cx = WIDTH / 2;
+            const cx = WIDTH / 2;
       const cy = HEIGHT / 2;
       for (let c = 0; c < CURVES.length; c += 1) {
         const curve = CURVES[c]!;
@@ -81,13 +80,12 @@ export function SiriWaveCanvas({ mode, color = '#38bdf8', reducedMotion = false 
           if (x === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = c === CURVES.length - 1 ? '#2563eb' : color;
+        ctx.strokeStyle = color;
         ctx.globalAlpha = curve.opacity;
         ctx.lineWidth = curve.lineWidth;
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
     };
 
     if (reduce) {

@@ -1,7 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2/capabilities",
   "identifier": "default",
-  "description": "Voxaura default capability — window shell only, no filesystem beyond the app.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Voxaura default capability — window shell plus secondary settings window creation, no filesystem beyond the app.",
+  "windows": ["main", "settings"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-create",
+    "core:webview:allow-create",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible"
+  ]
 }
