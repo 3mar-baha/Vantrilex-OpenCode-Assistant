@@ -12,14 +12,15 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 Thumbs.db
 
-# Secrets — NEVER commit plaintext keys
+# Secrets — NEVER commit plaintext keys or key material
 .env
 .env.*
 !.env.example
 *.local
 *.pem
 *.key
-vault/
+vault/keyring.dat
+vault/machine.key
 credentials/
 *-credentials.json
 diag*.zip
