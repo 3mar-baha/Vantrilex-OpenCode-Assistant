@@ -343,4 +343,14 @@ P5 runtime agent orchestration remains deferred.
 | **Sentence-level TTS** | `splitSentences` + `TtsEngine.speakSentences` dispatch the first clause to Fish Audio immediately; daemon downlink broadcasts per sentence | serves the documented 800 ms TTFB budget (§11) |
 | **Platform scope lock** | Windows-only; macOS/Linux officially deferred until Windows is long-term stable | `00-PROJECT-GUIDE.md` §9 |
 
+## v0.4.1 release (voice interaction baked into the installer)
+
+| Item | Evidence |
+|---|---|
+| Version bump 0.4.0 → 0.4.1 | root + desktop `package.json`, desktop lock, `tauri.conf.json`, `Cargo.toml` (+ lock synced by build), sidecar manifest, `CHANGELOG.md` |
+| Live TTFB (sentence path, cold) | `node dist/cli.js live`: first-chunk 4029 / 1038 / 977 ms over 3 runs (Fish server variance); cache hits 0 ms; client paragraph buffering eliminated |
+| Barge-in E2E | `bargein.spec.ts`: voice-during-playback delivers `abort` over the real bridge; suite 15/15 |
+| Gates | root 220 + desktop 89 unit; E2E 15/15; tsc/eslint/oxlint 0; cargo check 0; preflight 14/15 (MSVC via VsDevCmd) |
+| Artifacts | `Voxaura_0.4.1_x64-setup.exe` 26,138,844 B sha256 `13FE231F…`; sidecar 100.5 MB re-provisioned |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
