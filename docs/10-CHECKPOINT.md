@@ -375,4 +375,16 @@ P5 runtime agent orchestration remains deferred.
 | Gates | root 220 + desktop 92 unit (+3 token-retry); E2E green; tsc/eslint/oxlint 0; cargo check 0 |
 | Artifacts | `Voxaura_0.4.3_x64-setup.exe` 26,118,951 B sha256 `1A21F86E…` |
 
+## v0.4.4 release (compact session dropdown, balanced HUD)
+
+| Item | Evidence |
+|---|---|
+| **Problem** | history rendered one row per `ses_…`; `useAutoSize` grew the window to fit, pushing the mic + visualizer off screen |
+| **Fix** | `SessionChip` is a single 48px-max row (active session only) with an absolutely-positioned dropdown (open on demand, close on select/outside/Escape); the list is never in the DOM when collapsed |
+| **Tests** | 3 new chip tests; new `session-compact.spec.ts` proves with 30 sessions the bar stays ≤48px, the mic + 5-bar stay visible, and opening the dropdown moves nothing |
+| **Icon** | `icons/icon.ico` 256px entry mean paint `37,99,235` = `#2563EB`; installed exe embedded icon matches; `ie4uinit.exe -show` cache refresh run |
+| **Live proof** | installed 0.4.4 cold launch (token deleted) → 4096 + 4097 + webview ESTABLISHED |
+| Gates | root 220 + desktop 95 unit; E2E 16/16; tsc/eslint/oxlint 0 |
+| Artifacts | `Voxaura_0.4.4_x64-setup.exe` 26,114,659 B sha256 `7CDA8C38…` |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

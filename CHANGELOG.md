@@ -1,5 +1,15 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.4.4 — Compact session dropdown + balanced HUD (2026-09-26)
+
+**Session UI.** The historical session list rendered as one row per `ses_…`,
+which grew the auto-sized window and pushed the mic and 5-bar visualizer off
+screen. `SessionChip` is now a single fixed-height row (`max-height: 48px`)
+showing only the active session, with the full history in a dropdown that
+opens on demand, closes on select / outside-click / Escape, and is absolutely
+positioned so it never affects the measured layout. With 30 sessions the HUD
+stays compact and the mic remains centered and visible.
+
 ## v0.4.3 — Fix cold-start daemon connection (2026-09-26)
 
 **Root cause.** The shell read its per-install IPC token (`ipc.token`) when the
