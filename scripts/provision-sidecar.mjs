@@ -44,7 +44,7 @@ console.log('[sidecar] dist/ copied');
 const manifest = {
   name: 'voxaura-sidecar',
   private: true,
-  version: '0.3.0',
+  version: '0.4.0',
   type: 'module',
   dependencies: {
     'groq-sdk': '^0.9.0',

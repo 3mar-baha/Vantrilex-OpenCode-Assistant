@@ -1,5 +1,25 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.4.0 — Voice capture loop + 3-agent orchestration (2026-09-26)
+
+**P4 voice capture (renderer mic → daemon pipeline)**
+- Binary PCM uplink (`UiServer.onAudio`, 64 KB cap), exact 5 s windowing
+  (`AudioIngest`), transcribe → think → dispatch-if-active pipeline.
+- Daemon wires keyring pools → Whisper/OpenRouter → active-session dispatch;
+  silence spends nothing, keyless daemons drop audio safely.
+- Renderer `AudioCapture` (AudioWorklet + fallback), 16 kHz mono Int16;
+  mic starts muted; `sendPcm` fire-and-forget. E2E with fake mic device.
+
+**P5 3-agent runtime orchestration**
+- `Coordinator`: Dots3 intake (`{reply_ar, task_en}`) → Nemotron plan →
+  Inkling `mission-handoff` dispatch with receipt. Fast TTS reply first.
+- Measured: Dots3 returns null-content on this route → automatic one-shot
+  failover to Nemotron intake (verified live, 9.8 s wall).
+- Destructive plans held for `approve:true`; no implicit raw dispatch, ever.
+
+**Housekeeping:** deleted 5 coral drafts + `vantrilex-registry/` staging;
+tree fully clean.
+
 ## v0.3.0 — Zero-click desktop release (2026-09-25)
 
 **Repairs (audit response)**

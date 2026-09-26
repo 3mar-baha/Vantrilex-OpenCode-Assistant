@@ -296,4 +296,15 @@ be gated to operator commands.
 **Still open:** spoken replies are not streamed back to the renderer (no audio downlink);
 the brain lane needs a valid OpenRouter key (stored credential returns 401).
 
+## v0.4.0 release (P4 + P5 + housekeeping)
+
+| Item | Evidence |
+|---| strategia |
+| Version bump 0.3.0 → 0.4.0 | package.json, desktop package+lock, tauri.conf, Cargo.toml, sidecar manifest |
+| P4 + P5 live | mission dry-run ok=true (failover served), 9.8 s wall |
+| Gates | root 207 + desktop 77 unit; E2E 12/12; cargo check exit 0 |
+| Artifacts | `voxaura.exe` 8,489,472 B sha256 `DC392D95…`; `Voxaura_0.4.0_x64-setup.exe` 26,132,331 B sha256 `05C070C2…`; sidecar (incl. coordinator/ingest/pipeline) verified inside NSIS |
+| Secret scan | 10 build artifacts, 0 leaks |
+| Housekeeping | coral drafts + registry removed; tree fully clean |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
