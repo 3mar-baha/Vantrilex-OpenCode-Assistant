@@ -384,7 +384,28 @@ fn resolve_vault_dir(entry: Option<&Path>) -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| runtime_dir())
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("Voxaura").join("vault")
+    let root = base.join("Voxaura").join("vault");
+    // Ensure the install vault directory exists so key intake has a home, and
+    // on first run seed it from a repo vault if one is found among the daemon
+    // entrypoint's ancestors (developer upgrade path). Never overwrites.
+    let _ = fs::create_dir_all(&root);
+    let keyring = root.join("keyring.dat");
+    if !keyring.exists() {
+        if let Some(entry) = entry {
+            let mut cursor = entry.parent().map(PathBuf::from);
+            while let Some(dir) = cursor {
+                let src = dir.join("vault").join("keyring.dat");
+                if src.exists() {
+                    if fs::copy(&src, &keyring).is_ok() {
+                        log_line(&format!("vault seeded from {}", src.display()));
+                    }
+                    break;
+                }
+                cursor = dir.parent().map(PathBuf::from);
+            }
+        }
+    }
+    root
 }
 
 /// Prefer the bundled Node runtime; fall back to PATH for development.

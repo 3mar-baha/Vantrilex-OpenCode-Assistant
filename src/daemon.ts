@@ -94,100 +94,132 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           fish: [keys.fish],
           openrouter: [keys.openrouter],
         });
-        return { ok: true };
+        // Activate the voice loop immediately — no restart required.
+        rebuildVoice();
+        return { ok: true, detail: audio === null ? 'keys-saved-voice-unavailable' : 'keys-saved-voice-active' };
       },
     },
   });
 
   // Voice capture pipeline (P4+P5): binary PCM → Whisper transcript →
-  // 3-agent chain (Dots3 intake with fast TTS reply → Nemotron plan →
-  // Inkling handoff dispatched to the active session). Built only when the
-  // vault holds keys; a keyless daemon keeps the control plane up and drops
-  // audio.
+  // 3-agent chain (Dots3 intake → Nemotron plan → Inkling handoff). Built from
+  // the vault; kept REBUILDABLE so keys saved from the UI activate the voice
+  // loop without a restart. A keyless daemon keeps the control plane up, drops
+  // audio, and tells the shell to show the first-run call to action.
   const keyMaterial = (key: AcquiredKey): string => Buffer.from(key.material).toString('utf8');
   let audio: AudioPipeline | null = null;
-  try {
-    const ring = Keyring.load(vault);
-    const cfg = loadConfig();
-    const fish = new FishHttpTransport(ring);
-    const tts = new TtsEngine(cfg.cache, fish, new FileAudioOut());
-    const chat: ChatFn = async (model, system, user, options) => {
-      const key = ring.acquire('openrouter');
-      try {
-        return await openRouterChat(keyMaterial(key), model, system, user, fetch, {
-          ...(options?.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
-          ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
-          ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-          ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-          ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
-        });
-      } finally {
-        ring.release(key, true);
-      }
-    };
-    const coordinator = new Coordinator({
-      chat,
-      speak: async (replyAr) => {
-        // Fast verbal response: sentence-streamed, never let TTS failure break dispatch.
-        await tts
-          .speakSentences(replyAr, activePersona === 'nour' ? 'female-toggle' : 'male-default')
-          .catch(() => undefined);
-      },
-      dispatch: async (text) => {
-        const session = activeSession as SessionId;
-        return client.promptSession(session, text, { origin: 'voice', actor: 'capture' });
-      },
-      activeSessionId: () => activeSession,
-    });
-    audio = new AudioPipeline({
-      transcribe: async (pcm) => {
-        const key = ring.acquire('groq');
+  let voicePhase = 'idle';
+
+  const setVoicePhase = (phase: 'idle' | 'listening' | 'thinking' | 'speaking', transcript?: string): void => {
+    if (phase === voicePhase && transcript === undefined) return;
+    voicePhase = phase;
+    ui.voice(phase, transcript);
+  };
+
+  const buildVoicePipeline = (): AudioPipeline | null => {
+    try {
+      const ring = Keyring.load(vault);
+      const cfg = loadConfig();
+      const fish = new FishHttpTransport(ring);
+      const tts = new TtsEngine(cfg.cache, fish, new FileAudioOut());
+      const chat: ChatFn = async (model, system, user, options) => {
+        const key = ring.acquire('openrouter');
         try {
-          return (await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)))).text;
+          return await openRouterChat(keyMaterial(key), model, system, user, fetch, {
+            ...(options?.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
+            ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+            ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+            ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+            ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
+          });
         } finally {
           ring.release(key, true);
         }
-      },
-      think: async (transcript) => {
-        const mission = await coordinator.run(transcript);
-        const reply = mission.replyAr ?? '';
-        return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
-      },
-      activeSessionId: () => activeSession,
-      onUtterance: (utterance) => {
-        // P4b downlink: synthesize the spoken reply and stream it to shells.
-        // Fire-and-forget by design — synthesis failure must never break the
-        // control plane or the already-recorded dispatch receipt.
-        void (async () => {
-          const text = utterance.reply.trim();
-          if (text.length === 0) return;
-          const voiceId = VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'];
-          const gen = speechGate.capture();
+      };
+      const coordinator = new Coordinator({
+        chat,
+        speak: async (replyAr) => {
+          await tts
+            .speakSentences(replyAr, activePersona === 'nour' ? 'female-toggle' : 'male-default')
+            .catch((err: unknown) => {
+              ui.notice('tts-failed', `تعذّر توليد الصوت: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
+            });
+        },
+        dispatch: async (text) => {
+          const session = activeSession as SessionId;
+          return client.promptSession(session, text, { origin: 'voice', actor: 'capture' });
+        },
+        activeSessionId: () => activeSession,
+      });
+      return new AudioPipeline({
+        transcribe: async (pcm) => {
+          setVoicePhase('thinking');
+          const key = ring.acquire('groq');
           try {
-            // Sentence-level downlink: the first clause broadcasts as soon as
-            // its audio lands (sub-800ms TTFB path); a barge-in abort drops
-            // the remaining sentences mid-reply.
-            for (const sentence of splitSentences(text)) {
-              if (!speechGate.isCurrent(gen)) return;
-              const mp3 = await fish.synthesize(sentence, voiceId);
-              if (!speechGate.isCurrent(gen)) return;
-              ui.broadcastAudio(mp3);
-            }
-          } catch {
-            // Swallowed deliberately (see above).
+            return (await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)))).text;
+          } catch (err) {
+            ui.notice('stt-failed', `تعذّر تحويل الكلام إلى نص: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
+            throw err;
+          } finally {
+            ring.release(key, true);
           }
-        })();
-      },
-    });
-  } catch {
-    audio = null;
-  }
-  if (audio !== null) {
+        },
+        think: async (transcript) => {
+          setVoicePhase('thinking', transcript);
+          try {
+            const mission = await coordinator.run(transcript);
+            const reply = mission.replyAr ?? '';
+            return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
+          } catch (err) {
+            ui.notice('brain-failed', `تعذّر توليد الرد: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
+            throw err;
+          }
+        },
+        activeSessionId: () => activeSession,
+        onUtterance: (utterance) => {
+          void (async () => {
+            const text = utterance.reply.trim();
+            if (text.length === 0) {
+              setVoicePhase('idle');
+              return;
+            }
+            setVoicePhase('speaking', utterance.reply);
+            const voiceId = VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'];
+            const gen = speechGate.capture();
+            try {
+              for (const sentence of splitSentences(text)) {
+                if (!speechGate.isCurrent(gen)) return;
+                const mp3 = await fish.synthesize(sentence, voiceId);
+                if (!speechGate.isCurrent(gen)) return;
+                ui.broadcastAudio(mp3);
+              }
+            } catch (err) {
+              ui.notice('tts-failed', `تعذّر توليد الصوت: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
+            } finally {
+              setVoicePhase('idle');
+            }
+          })();
+        },
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const rebuildVoice = (): void => {
+    audio = buildVoicePipeline();
+    if (audio === null) {
+      ui.onAudio = null;
+      ui.notice('voice-disabled-no-keys', 'الصوت معطّل — لم تُهيّأ المفاتيح بعد. أدخل المفاتيح لتفعيل الحلقة الصوتية.', 'warn');
+      return;
+    }
     const pipeline = audio;
     ui.onAudio = (pcm) => {
+      setVoicePhase('listening');
       void pipeline.pushChunk(pcm).catch(() => undefined);
     };
-  }
+  };
+  rebuildVoice();
 
   const inventory = new SessionInventory(client, {
     ...(options.inventoryIntervalMs !== undefined ? { intervalMs: options.inventoryIntervalMs } : {}),

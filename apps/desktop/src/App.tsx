@@ -4,6 +4,7 @@ import { WaveformEmblem } from './components/brand/WaveformEmblem.js';
 import { SiriWaveCanvas } from './components/waveform/SiriWaveCanvas.js';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
+import { ConfirmPortal } from './components/portals/ConfirmPortal.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import { AudioCapture } from './audio/capture.js';
 import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
@@ -20,6 +21,13 @@ import './index.css';
 // Every interactive element carries an Arabic tooltip; the status pill is
 // driven entirely by live daemon state, never local guesswork.
 type BridgeState = 'connecting' | 'live' | 'degraded' | 'refused';
+type VoicePhase = 'idle' | 'listening' | 'thinking' | 'speaking';
+
+interface Notice {
+  readonly code: string;
+  readonly detail: string;
+  readonly level: 'info' | 'warn' | 'error';
+}
 
 const FONT = 'var(--vx-font)';
 
@@ -30,6 +38,11 @@ export function App(): JSX.Element {
   const [userMuted, setUserMuted] = useState(true);
   const [botMuted, setBotMuted] = useState(false);
   const [announce, setAnnounce] = useState('');
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>('idle');
+  const [lastTranscript, setLastTranscript] = useState('');
+  const [micEnergy, setMicEnergy] = useState(0);
+  const [pendingConfirm, setPendingConfirm] = useState<{ id: string; detail: string } | null>(null);
   const [sessionState, dispatchSession] = useReducer(sessionsReducer, initialSessionsState);
   const [agentModel, setAgentModel] = useState<{ agent: string | null; model: string | null }>({
     agent: null,
@@ -48,6 +61,7 @@ export function App(): JSX.Element {
     speakingRef.current = value;
     setSpeaking(value);
   };
+  const lastEnergyAt = useRef(0);
   const cardRef = useRef<HTMLDivElement>(null);
   useAutoSize(cardRef, { paddingY: 16 });
   const lastFrameAt = useRef<number>(Date.now());
@@ -79,7 +93,19 @@ export function App(): JSX.Element {
       const b = new VoxauraBridge({
         token,
         contractVersion: '3.1.0',
+        // Any inbound frame proves the socket is alive: promote to live and
+        // stamp liveness. This is the recovery path the old watchdog lacked.
+        onFrame: () => {
+          lastFrameAt.current = Date.now();
+          setBridge((s) => (s === 'refused' ? s : 'live'));
+        },
         onHello: () => setBridge('live'),
+        onNotice: (n) => setNotice({ code: n.code, detail: n.detail, level: n.level }),
+        onVoice: (v) => {
+          setVoicePhase(v.phase);
+          if (v.transcript !== undefined && v.transcript.length > 0) setLastTranscript(v.transcript);
+        },
+        onErrorFrame: (detail) => setNotice({ code: 'transport', detail, level: 'error' }),
         onEvent: (event) => {
           const mapped = matrixForDaemonState(event.state, personaRef.current);
           if (mapped !== null) setMatrix(mapped);
@@ -118,11 +144,15 @@ export function App(): JSX.Element {
     };
   }, []);
 
-  // Staleness watchdog: a silent socket must not keep showing "متصل".
+  // Transport-truth watchdog. The pill is driven by the socket's own state:
+  // an idle-but-OPEN socket must never read as disconnected (the previous
+  // time-only latch caused exactly that). Only a genuinely closed socket
+  // demotes; any inbound frame promotes back to live via `onFrame`.
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (bridgeRef.current === null) return;
-      if (Date.now() - lastFrameAt.current > 45_000) setBridge((s) => (s === 'live' ? 'degraded' : s));
+      const client = bridgeRef.current;
+      if (client === null) return;
+      if (!client.live) setBridge((s) => (s === 'refused' ? s : 'degraded'));
     }, 5_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -147,7 +177,27 @@ export function App(): JSX.Element {
       setAnnounce('الخادم غير متصل');
       return;
     }
-    void bridgeClient.sendCommand(cmd).then((accepted) => setAnnounce(accepted ? ok : fail));
+    void bridgeClient.sendCommandDetailed(cmd).then((outcome) => {
+      // FR-12: a parked destructive action opens the confirmation portal.
+      if (outcome.detail === 'confirmation-required') {
+        setPendingConfirm({
+          id: cmd.id,
+          detail: typeof cmd.command === 'string' && cmd.command.length > 0 ? cmd.command : 'إجراء قد يكون مدمّراً',
+        });
+        return;
+      }
+      setAnnounce(outcome.ok ? ok : fail);
+    });
+  };
+
+  const resolveConfirm = (approve: boolean): void => {
+    const parked = pendingConfirm;
+    if (parked === null) return;
+    setPendingConfirm(null);
+    const client = bridgeRef.current;
+    if (client !== null) {
+      void client.sendCommand({ id: nextCmdId(), kind: 'confirm', confirmId: parked.id, approve });
+    }
   };
 
   const handleSelectPersona = (id: 'kareem' | 'nour'): void => {
@@ -210,6 +260,14 @@ export function App(): JSX.Element {
       } else {
         void capture
           .start({
+            onEnergy: (energy) => {
+              // Throttle: the worklet posts every few ms; 80 ms is plenty.
+              const now = Date.now();
+              if (now - lastEnergyAt.current > 80) {
+                lastEnergyAt.current = now;
+                setMicEnergy(energy);
+              }
+            },
             onFrame: (bytes) => {
               // Echo suppression + barge-in: while the assistant talks, quiet
               // frames (room tone / speaker echo) are ducked locally and never
@@ -242,13 +300,17 @@ export function App(): JSX.Element {
   const statusPill =
     bridge !== 'live'
       ? { text: '● غير متصل', state: 'offline' }
-      : matrix === 0
-        ? { text: '● متصل وبانتظار الأوامر', state: 'ready' }
-        : matrix === 1
-          ? { text: '● جاري الاستماع...', state: 'listening' }
-          : matrix === 2
-            ? { text: '● جاري المعالجة...', state: 'processing' }
-            : { text: '● جاري التحدث...', state: 'speaking' };
+      : speaking || voicePhase === 'speaking'
+        ? { text: '● يتحدث الآن…', state: 'speaking' }
+        : voicePhase === 'thinking'
+          ? { text: '● جارٍ التفكير…', state: 'processing' }
+          : !userMuted || voicePhase === 'listening'
+            ? { text: '● جارٍ الاستماع…', state: 'listening' }
+            : matrix === 0
+              ? { text: '● متصل وبانتظار الأوامر', state: 'ready' }
+              : matrix === 2
+                ? { text: '● جاري المعالجة...', state: 'processing' }
+                : { text: '● متصل وبانتظار الأوامر', state: 'ready' };
 
   const live = matrix !== 0;
   const noSessions = sessionState.sessions.length === 0;
@@ -296,6 +358,37 @@ export function App(): JSX.Element {
           </p>
         )}
 
+        {notice !== null && (
+          <p
+            data-testid="notice-banner"
+            data-level={notice.level}
+            role="alert"
+            title={notice.detail}
+            className="flex items-center gap-2 border-b border-[#26282e] bg-[#0e0f12] px-4 py-2 text-xs text-[#fbbf24]"
+          >
+            <span className="min-w-0 flex-1 truncate">{notice.detail}</span>
+            {notice.code === 'voice-disabled-no-keys' && (
+              <button
+                data-testid="notice-open-keys"
+                title="افتح نافذة مفاتيح الـ API"
+                onClick={() => void openKeysWindow()}
+                className="shrink-0 rounded-[6px] border border-[#2563eb] px-2 py-1 text-[#f4f4f5] hover:bg-[#2563eb]/10"
+              >
+                أدخل المفاتيح
+              </button>
+            )}
+            <button
+              data-testid="notice-dismiss"
+              aria-label="إغلاق التنبيه"
+              title="إغلاق"
+              onClick={() => setNotice(null)}
+              className="shrink-0 px-1 text-[#71717a] hover:text-[#f4f4f5]"
+            >
+              ✕
+            </button>
+          </p>
+        )}
+
         <div className="flex flex-col gap-3 border-b border-[#26282e] px-4 py-3">
           <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
           {noSessions && (
@@ -335,7 +428,7 @@ export function App(): JSX.Element {
         </div>
 
         <main className="flex flex-col items-center gap-4 px-4 py-5">
-          <SiriWaveCanvas mode={live ? 'active' : 'idle'} color="#2563eb" />
+          <SiriWaveCanvas mode={live ? 'active' : 'idle'} color="#2563eb" energy={userMuted ? 0 : micEnergy} />
           <div className="flex items-center gap-3" data-testid="control-row">
             <button
               data-testid="mic-toggle"
@@ -375,6 +468,11 @@ export function App(): JSX.Element {
           >
             {announce}
           </p>
+          {lastTranscript.length > 0 && (
+            <p data-testid="last-transcript" title="آخر ما سُمع" className="max-w-full truncate text-xs text-[#a1a1aa]">
+              «{lastTranscript}»
+            </p>
+          )}
           {speaking && (
             <p data-testid="speaking-indicator" title="المساعد يتحدث الآن" className="text-xs text-[#34d399]">
               ● يتحدث الآن…
@@ -422,6 +520,15 @@ export function App(): JSX.Element {
           </button>
         </div>
       </div>
+
+      {pendingConfirm !== null && (
+        <ConfirmPortal
+          title="تأكيد قبل التنفيذ"
+          detail={pendingConfirm.detail}
+          onConfirm={() => resolveConfirm(true)}
+          onCancel={() => resolveConfirm(false)}
+        />
+      )}
     </div>
   );
 }

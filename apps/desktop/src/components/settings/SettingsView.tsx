@@ -97,7 +97,7 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
       `chain: ${chain.map((c) => c.name).join(' -> ')}`,
       `mcp: ${MCP_SERVERS.join(', ')}`,
       `skills: ${BRIDGE_SKILLS.join(', ')}`,
-      `version: 0.2.0`,
+      `version: 0.5.0`,
     ].join('\n');
     void navigator.clipboard?.writeText(report).then(() => {
       setCopied(true);
@@ -284,7 +284,7 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
                 ['الخزنة', 'vault/keyring.dat (AES-256-GCM)'],
                 ['الذاكرة', 'vault/projects/voxaura · Obsidian MCP'],
                 ['الجسر', 'WS-4097 · /v1/ui'],
-                ['الإصدار', 'v0.2.0'],
+                ['الإصدار', 'v0.5.0'],
               ].map(([k, v]) => (
                 <li key={k} title={`${k}: ${v}`} className="flex items-center justify-between border-b border-[#26282e] pb-2">
                   <span className="text-[#a1a1aa]">{k}</span>

@@ -55,6 +55,8 @@ registerProcessor('voxaura-capture', VoxauraCapture);
 export interface CaptureEvents {
   onFrame(bytes: Uint8Array): void;
   onError?(err: Error): void;
+  /** Live input energy (0..1) of the most recent block — drives the visualizer. */
+  onEnergy?(energy: number): void;
 }
 
 interface AudioGraph {
@@ -90,6 +92,14 @@ export class AudioCapture {
     const source = context.createMediaStreamSource(stream);
     const emit = (input: Float32Array, inputRate: number): void => {
       try {
+        // Live input energy (RMS, scaled) so the HUD can show the mic is hot.
+        let sum = 0;
+        for (let i = 0; i < input.length; i += 1) {
+          const v = input[i] as number;
+          sum += v * v;
+        }
+        const rms = input.length > 0 ? Math.sqrt(sum / input.length) : 0;
+        events.onEnergy?.(Math.min(1, rms * 4));
         const resampled = downsample(input, inputRate);
         const joined = new Float32Array(this.pending.length + resampled.length);
         joined.set(this.pending, 0);

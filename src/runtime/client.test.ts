@@ -71,7 +71,7 @@ describe('ServeClient vs mock serve', () => {
     const list = await client.listSessions();
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ sessionId: 'ses_mock1', agent: 'explore', model: 'muse-spark' });
-    expect(list[0]!.state).toBe('unknown'); // live shape has no state field — graceful fallback
+    expect(list[0]!.state).toBe('idle'); // list row omits state → derived 'idle'
     expect(await client.probeContract()).toBe('2.9.9-mock');
   });
 
@@ -92,7 +92,7 @@ describe('ServeClient vs mock serve', () => {
         data: [
           { id: 'a', agent: 'build', model: { id: 'm1' } },
           { nope: true }, // malformed → dropped
-          { id: 'c' }, // minimal → state falls back to 'unknown'
+          { id: 'c' }, // minimal → state falls back to 'idle' (never 'unknown')
         ],
       });
     });
@@ -102,9 +102,9 @@ describe('ServeClient vs mock serve', () => {
     try {
       const client = new ServeClient(`http://127.0.0.1:${addr.port}`, 'test-password');
       const list = await client.listSessions();
-      expect(list.map((s) => s.sessionId).sort()).toEqual(['a', 'c']);
+        expect(list.map((s) => s.sessionId).sort()).toEqual(['a', 'c']);
       expect(list.find((s) => s.sessionId === 'a')).toMatchObject({ agent: 'build', model: 'm1' });
-      expect(list.find((s) => s.sessionId === 'c')?.state).toBe('unknown');
+      expect(list.find((s) => s.sessionId === 'c')?.state).toBe('idle');
     } finally {
       await new Promise<void>((resolve) => probe.close(() => resolve()));
     }

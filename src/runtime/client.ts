@@ -31,6 +31,20 @@ function unwrapData(payload: unknown): unknown {
   return payload;
 }
 
+/**
+ * Derive a truthful session state. The live `/api/session` list row carries no
+ * `state` field — it carries `outcome` (verified live: "succeeded") plus
+ * `time`. Reporting a literal "unknown" made every chip meaningless; prefer the
+ * real fields and fall back to "idle", never "unknown".
+ */
+function sessionState(row: Record<string, unknown>): string {
+  const state = row['state'];
+  if (typeof state === 'string' && state.length > 0) return state;
+  const outcome = row['outcome'];
+  if (typeof outcome === 'string' && outcome.length > 0) return outcome;
+  return 'idle';
+}
+
 function normalizeSessionRow(row: unknown): SessionInfo | null {
   if (typeof row !== 'object' || row === null) return null;
   const r = row as Record<string, unknown>;
@@ -44,7 +58,7 @@ function normalizeSessionRow(row: unknown): SessionInfo | null {
       : typeof modelRaw === 'string'
         ? modelRaw
         : undefined;
-  const state = typeof r['state'] === 'string' && r['state'].length > 0 ? r['state'] : 'unknown';
+  const state = sessionState(r);
   return {
     sessionId: id,
     state,
@@ -222,7 +236,7 @@ export class ServeClient {
     const updated = typeof time['updated'] === 'number' ? new Date(time['updated']).toISOString() : nowIso();
     return {
       sessionId: typeof r['id'] === 'string' ? r['id'] : sessionId,
-      state: typeof r['state'] === 'string' ? r['state'] : 'unknown',
+      state: sessionState(r),
       outcome: typeof r['outcome'] === 'string' ? r['outcome'] : 'unknown',
       updatedAt: updated,
       ...(typeof r['lastEventId'] === 'string' ? { lastEventId: r['lastEventId'] } : {}),

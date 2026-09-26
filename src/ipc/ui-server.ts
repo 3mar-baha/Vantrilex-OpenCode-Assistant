@@ -13,6 +13,7 @@ import {
   IPC_TOKEN_ENV,
   MAX_AUDIO_BYTES,
   MISSED_PINGS_LIMIT,
+  NoticeFrameSchema,
   Opcode,
   parseSeq,
   PING_INTERVAL_MS,
@@ -21,12 +22,16 @@ import {
   UiCommandSchema,
   UI_SUBPROTOCOL,
   UI_WS_PATH,
+  VoiceFrameSchema,
   WsProtocolError,
   type AgentFrame,
   type HelloFrame,
   type InventoryFrame,
+  type NoticeFrame,
   type UiCommand,
   type UiEvent,
+  type VoiceFrame,
+  type VoicePhase,
 } from './protocol.js';
 import { encodeAudioChunk, splitAudio } from './audio.js';
 
@@ -172,6 +177,27 @@ export class UiServer {
       safeWrite(conn, this.conns, wire);
     }
     return frame;
+  }
+
+  /** Broadcast a notice/voice frame to every shell (additive UX signals). */
+  broadcastFrame(frame: NoticeFrame | VoiceFrame): number {
+    this.seq += 1;
+    const wire = encodeTextFrame(JSON.stringify({ ...frame, seq: this.seq }));
+    let sent = 0;
+    for (const conn of this.conns) {
+      if (safeWrite(conn, this.conns, wire)) sent += 1;
+    }
+    return sent;
+  }
+
+  notice(code: string, detail: string, level: 'info' | 'warn' | 'error' = 'warn'): number {
+    return this.broadcastFrame(NoticeFrameSchema.parse({ type: 'notice', seq: 0, code, detail, level }));
+  }
+
+  voice(phase: VoicePhase, transcript?: string): number {
+    return this.broadcastFrame(
+      VoiceFrameSchema.parse({ type: 'voice', seq: 0, phase, ...(transcript !== undefined ? { transcript } : {}) }),
+    );
   }
 
   /**

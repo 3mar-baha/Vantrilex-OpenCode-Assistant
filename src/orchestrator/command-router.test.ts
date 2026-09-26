@@ -137,8 +137,7 @@ describe('createCommandHandler', () => {
     expect(await h.handler(cmd({ kind: 'setPersona', persona: 'nour' }))).toMatchObject({ ok: true });
   });
 
-  test('abort trips the speech gate; silence when no gate is wired', async () => {
-    const aborted: string[] = [];
+  test('abort trips the speech gate; silence when no gate is wired', async () => {    const aborted: string[] = [];
     const withGate = createCommandHandler({
       client: {
         setSessionAgent: async () => undefined,
@@ -154,5 +153,29 @@ describe('createCommandHandler', () => {
     expect(aborted).toEqual(['abort']);
     const bare = harness();
     expect(await bare.handler(cmd({ kind: 'abort' }))).toEqual({ ok: true });
+  });
+
+  test('unsafe shell metacharacters are rejected before parking', async () => {
+    const h = harness();
+    expect(await h.handler(cmd({ kind: 'execSessionShell', command: 'a; rm -rf /' }))).toEqual({
+      ok: false,
+      detail: 'command rejected (unsafe metacharacters)',
+    });
+    expect(await h.handler(cmd({ kind: 'execSessionShell', command: 'echo $(whoami)' }))).toEqual({
+      ok: false,
+      detail: 'command rejected (unsafe metacharacters)',
+    });
+    // A plain command (no metacharacters) still parks for FR-12 confirmation.
+    expect(await h.handler(cmd({ kind: 'execSessionShell', command: 'rm -rf build' }))).toEqual({
+      ok: true,
+      detail: 'confirmation-required',
+    });
+  });
+
+  test('malformed session ids are refused (no path injection)', async () => {
+    const h = harness();
+    expect(
+      await h.handler(cmd({ kind: 'setSessionAgent', sessionId: '../../etc', agent: 'x' })),
+    ).toEqual({ ok: false, detail: 'no active session' });
   });
 });

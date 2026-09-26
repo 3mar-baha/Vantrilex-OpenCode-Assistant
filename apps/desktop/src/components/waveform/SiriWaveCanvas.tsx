@@ -11,6 +11,8 @@ export interface SiriWaveCanvasProps {
   readonly mode: SiriWaveMode;
   readonly color?: string;
   readonly reducedMotion?: boolean;
+  /** Live input energy 0..1 (mic RMS). Bars breathe with real speech. */
+  readonly energy?: number;
 }
 
 const WIDTH = 320;
@@ -35,12 +37,16 @@ const BAR_W = 22;
 const BAR_GAP = 12;
 const BAR_MAX_H = 64;
 
-export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = false }: SiriWaveCanvasProps): JSX.Element {
+export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = false, energy = 0 }: SiriWaveCanvasProps): JSX.Element {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const modeRef = useRef<SiriWaveMode>(mode);
+  const energyRef = useRef<number>(energy);
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+  useEffect(() => {
+    energyRef.current = Math.max(0, Math.min(1, energy));
+  }, [energy]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -93,13 +99,15 @@ export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = fals
         ctx.lineWidth = curve.lineWidth;
         ctx.stroke();
       }
-      // Emblem bars over the flow: heights breathe with the lerped amplitude.
+      // Emblem bars over the flow: heights follow live input energy so the
+      // user can see the mic is picking up sound.
       ctx.globalAlpha = 0.92;
       ctx.fillStyle = EMBLEM_BLUE;
+      const drive = Math.max(amplitude, energyRef.current);
       const span = BAR_FRACS.length * BAR_W + (BAR_FRACS.length - 1) * BAR_GAP;
       let bx = cx - span / 2;
       for (const frac of BAR_FRACS) {
-        const h = Math.max(6, frac * BAR_MAX_H * (0.35 + 0.65 * amplitude));
+        const h = Math.max(6, frac * BAR_MAX_H * (0.35 + 0.65 * drive));
         const by = cy - h / 2;
         if (typeof ctx.roundRect === 'function') {
           ctx.beginPath();

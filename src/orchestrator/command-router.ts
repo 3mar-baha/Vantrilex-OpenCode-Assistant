@@ -44,6 +44,23 @@ export interface CommandRouterDeps {
 export const DESTRUCTIVE_KINDS: ReadonlySet<UiCommand['kind']> = new Set(['execSessionShell']);
 export const CONFIRMATION_TTL_MS = 60_000;
 
+/** Session ids are opaque `ses_…` tokens — never paths or free text. */
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+/** Shell metacharacters that enable injection/chaining — refused outright. */
+const UNSAFE_SHELL_RE = /[;&|`$<>\n\r]/;
+
+/**
+ * Defense-in-depth for `execSessionShell`. The FR-12 confirm gate is the real
+ * control (now reachable from the HUD); this rejects payloads that could chain
+ * or redirect commands before they are ever parked.
+ */
+export function shellCommandError(command: string): string | null {
+  if (command.trim().length === 0) return 'command required';
+  if (command.length > 512) return 'command too long';
+  if (UNSAFE_SHELL_RE.test(command)) return 'command rejected (unsafe metacharacters)';
+  return null;
+}
+
 /** `provider/id` → ModelRef; a bare id defaults to the `opencode` provider. */
 export function parseModelRef(model: string): { id: string; providerID: string } {
   const slash = model.indexOf('/');
@@ -64,7 +81,8 @@ export function createCommandHandler(
 
   const resolveSession = (cmd: UiCommand): SessionId | null => {
     const id = cmd.sessionId ?? deps.activeSessionId();
-    return id === undefined || id === '' ? null : (id as SessionId);
+    if (id === undefined || id === '' || !SESSION_ID_RE.test(id)) return null;
+    return id as SessionId;
   };
 
   const execute = async (cmd: UiCommand): Promise<CommandOutcome> => {
@@ -99,6 +117,8 @@ export function createCommandHandler(
         const session = resolveSession(cmd);
         if (session === null) return { ok: false, detail: 'no active session' };
         if (cmd.command === undefined) return { ok: false, detail: 'command required' };
+        const unsafe = shellCommandError(cmd.command);
+        if (unsafe !== null) return { ok: false, detail: unsafe };
         await deps.client.execSessionShell(session, cmd.command);
         return { ok: true };
       }
@@ -144,6 +164,8 @@ export function createCommandHandler(
         if (cmd.kind === 'execSessionShell') {
           if (resolveSession(cmd) === null) return { ok: false, detail: 'no active session' };
           if (cmd.command === undefined) return { ok: false, detail: 'command required' };
+          const unsafe = shellCommandError(cmd.command);
+          if (unsafe !== null) return { ok: false, detail: unsafe };
         }
         // FR-12: park the payload; nothing happens until an explicit confirm.
         pending.set(cmd.id, { at: now(), cmd });

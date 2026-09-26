@@ -391,3 +391,29 @@ export type AgentEntry = z.infer<typeof AgentEntrySchema>;
 export function buildAgentFrame(seq: number, agents: ReadonlyArray<{ id: string; name: string }>): AgentFrame {
   return AgentFrameSchema.parse({ type: 'agents', seq, agents: [...agents] });
 }
+
+// --- Notice stream: recoverable problems + first-run guidance. Additive; old
+// shells ignore unknown frame types, so this never breaks the contract.
+export const NoticeFrameSchema = z.object({
+  type: z.literal('notice'),
+  seq: z.number().int().nonnegative(),
+  /** Machine-readable code (e.g. 'voice-disabled-no-keys', 'stt-failed'). */
+  code: z.string().min(1),
+  /** Arabic, human-readable. Never key material. */
+  detail: z.string().min(1),
+  level: z.enum(['info', 'warn', 'error']),
+});
+export type NoticeFrame = z.infer<typeof NoticeFrameSchema>;
+
+// --- Voice phase stream: drives the listening/thinking/speaking HUD states.
+export const VoicePhaseSchema = z.enum(['idle', 'listening', 'thinking', 'speaking']);
+export type VoicePhase = z.infer<typeof VoicePhaseSchema>;
+
+export const VoiceFrameSchema = z.object({
+  type: z.literal('voice'),
+  seq: z.number().int().nonnegative(),
+  phase: VoicePhaseSchema,
+  /** Last transcript/reply (display only; never a control path). */
+  transcript: z.string().optional(),
+});
+export type VoiceFrame = z.infer<typeof VoiceFrameSchema>;

@@ -25,6 +25,21 @@ export interface EventMsg {
   readonly state: string;
 }
 
+export interface NoticeMsg {
+  readonly type: 'notice';
+  readonly seq: number;
+  readonly code: string;
+  readonly detail: string;
+  readonly level: 'info' | 'warn' | 'error';
+}
+
+export interface VoiceMsg {
+  readonly type: 'voice';
+  readonly seq: number;
+  readonly phase: 'idle' | 'listening' | 'thinking' | 'speaking';
+  readonly transcript?: string;
+}
+
 export type CommandKind =
   | 'abort'
   | 'mute'
@@ -57,10 +72,17 @@ export interface CommandMsg {
   readonly approve?: boolean;
 }
 
+export interface CommandOutcome {
+  readonly ok: boolean;
+  readonly detail?: string;
+}
+
 export interface SocketLike {
   send(data: string): void;
   sendBinary(data: Uint8Array): void;
   close(): void;
+  /** True when the underlying socket is OPEN. Optional for test fakes. */
+  isOpen?(): boolean;
   onopen: ((this: unknown, ev: unknown) => void) | null;
   onmessage: ((this: unknown, ev: { data: unknown }) => void) | null;
   onclose: ((this: unknown, ev: unknown) => void) | null;
@@ -139,7 +161,13 @@ export interface BridgeOptions {
   readonly token: string;
   readonly contractVersion: string;
   readonly createSocket?: (url: string, protocols: string[]) => SocketLike;
+  /** Fired on ANY inbound frame — transport liveness, independent of payload. */
+  readonly onFrame?: () => void;
   readonly onHello?: (hello: HelloMsg) => void;
+  /** Recoverable notices + first-run guidance (additive). */
+  readonly onNotice?: (notice: NoticeMsg) => void;
+  /** Voice phase (listening/thinking/speaking) for the HUD. */
+  readonly onVoice?: (voice: VoiceMsg) => void;
   readonly onEvent?: (event: EventMsg) => void;
   readonly onInventory?: (sessions: InventorySession[]) => void;
   readonly onAgents?: (agents: AgentEntry[]) => void;
@@ -161,6 +189,7 @@ function adaptWebSocket(ws: WebSocket): SocketLike {
     send: (data: string) => ws.send(data),
     sendBinary: (data: Uint8Array) => ws.send(data),
     close: () => ws.close(),
+    isOpen: () => ws.readyState === WebSocket.OPEN,
     onopen: null,
     onmessage: null,
     onclose: null,
@@ -181,7 +210,7 @@ export class VoxauraBridge {
   private attempt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSeq = -1;
-  private readonly pending = new Map<string, { resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pending = new Map<string, { resolve: (o: CommandOutcome) => void; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(opts: BridgeOptions) {
     this.opts = opts;
@@ -189,6 +218,13 @@ export class VoxauraBridge {
 
   get connectionAttempt(): number {
     return this.attempt;
+  }
+
+  /** True when the socket is OPEN. Drives the HUD pill (never a stale timer). */
+  get live(): boolean {
+    const socket = this.socket;
+    if (socket === null) return false;
+    return socket.isOpen?.() ?? true;
   }
 
   connect(): void {
@@ -217,12 +253,17 @@ export class VoxauraBridge {
   }
 
   sendCommand(cmd: CommandMsg): Promise<boolean> {
+    return this.sendCommandDetailed(cmd).then((outcome) => outcome.ok);
+  }
+
+  /** Like sendCommand but surfaces the ack `detail` (e.g. confirmation-required). */
+  sendCommandDetailed(cmd: CommandMsg): Promise<CommandOutcome> {
     const socket = this.socket;
-    if (socket === null) return Promise.resolve(false);
-    return new Promise<boolean>((resolve) => {
+    if (socket === null) return Promise.resolve({ ok: false });
+    return new Promise<CommandOutcome>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(cmd.id);
-        resolve(false);
+        resolve({ ok: false });
       }, ACK_TIMEOUT_MS);
       this.pending.set(cmd.id, { resolve, timer });
       try {
@@ -230,7 +271,7 @@ export class VoxauraBridge {
       } catch {
         clearTimeout(timer);
         this.pending.delete(cmd.id);
-        resolve(false);
+        resolve({ ok: false });
       }
     });
   }
@@ -259,7 +300,7 @@ export class VoxauraBridge {
     }
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
-      p.resolve(false);
+      p.resolve({ ok: false });
     }
     this.pending.clear();
     try {
@@ -271,6 +312,9 @@ export class VoxauraBridge {
   }
 
   private onMessage(data: unknown): void {
+    // Transport liveness: any inbound byte proves the socket is alive. The HUD
+    // promotes to "live" on this signal regardless of payload type.
+    this.opts.onFrame?.();
     // Speech downlink (P4b): binary frames carry a 1-byte type + u16be seq +
     // MP3 payload (see src/ipc/audio.ts). Anything else binary is ignored.
     if (data instanceof ArrayBuffer) {
@@ -357,15 +401,43 @@ export class VoxauraBridge {
       this.opts.onAgents?.(agents);
       return;
     }
+    if (msg['type'] === 'notice') {
+      const detail = msg['detail'];
+      const level = msg['level'];
+      const code = msg['code'];
+      if (typeof detail === 'string' && typeof code === 'string') {
+        this.opts.onNotice?.({
+          type: 'notice',
+          seq: typeof msg['seq'] === 'number' ? (msg['seq'] as number) : 0,
+          code,
+          detail,
+          level: level === 'info' || level === 'error' ? level : 'warn',
+        });
+      }
+      return;
+    }
+    if (msg['type'] === 'voice') {
+      const phase = msg['phase'];
+      if (phase === 'idle' || phase === 'listening' || phase === 'thinking' || phase === 'speaking') {
+        this.opts.onVoice?.({
+          type: 'voice',
+          seq: typeof msg['seq'] === 'number' ? (msg['seq'] as number) : 0,
+          phase,
+          ...(typeof msg['transcript'] === 'string' ? { transcript: msg['transcript'] as string } : {}),
+        });
+      }
+      return;
+    }
     if (msg['type'] === 'ack') {
       const id = (msg as { id?: unknown })['id'];
       const ok = (msg as { ok?: unknown })['ok'];
+      const detail = (msg as { detail?: unknown })['detail'];
       if (typeof id === 'string') {
         const entry = this.pending.get(id);
         if (entry !== undefined) {
           this.pending.delete(id);
           clearTimeout(entry.timer);
-          entry.resolve(ok !== false);
+          entry.resolve({ ok: ok !== false, ...(typeof detail === 'string' ? { detail } : {}) });
         }
       }
       return;

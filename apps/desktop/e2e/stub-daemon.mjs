@@ -89,6 +89,28 @@ const control = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url === '/notice') {
+    let raw = '';
+    req.on('data', (c) => {
+      raw += c;
+    });
+    req.on('end', () => {
+      const { code, detail, level } = JSON.parse(raw);
+      send(200, { sent: server.notice(code, detail, level) });
+    });
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/voice') {
+    let raw = '';
+    req.on('data', (c) => {
+      raw += c;
+    });
+    req.on('end', () => {
+      const { phase, transcript } = JSON.parse(raw);
+      send(200, { sent: server.voice(phase, transcript) });
+    });
+    return;
+  }
   if (req.method === 'POST' && req.url === '/inventory') {
     let raw = '';
     req.on('data', (c) => {
