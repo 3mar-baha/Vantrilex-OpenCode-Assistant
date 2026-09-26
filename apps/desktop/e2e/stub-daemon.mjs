@@ -3,24 +3,48 @@
 // commands ← action bar, socket death → degraded.
 import http from 'node:http';
 import { UiServer } from '../../../dist/ipc/ui-server.js';
+import { createCommandHandler } from '../../../dist/orchestrator/command-router.js';
 
 const token = process.env['VOICE_RUNTIME_IPC_TOKEN'] ?? 'e2e-token';
 let server = new UiServer({ token, contractVersion: '3.1.0' });
 const received = [];
 const audioFrames = [];
-server.onCommand = (cmd) => {
-  received.push(cmd);
-};
-server.onAudio = (pcm) => {
-  audioFrames.push(pcm.byteLength);
-};
+const executedShells = [];
+// Real FR-12 router with a recording fake ServeClient: destructive commands
+// park until confirmed, exactly like production. Recording is preserved so
+// existing specs keep passing.
+const router = createCommandHandler({
+  client: {
+    setSessionAgent: async () => ({}),
+    setSessionModel: async () => ({}),
+    toggleSessionSkill: async () => ({}),
+    execSessionShell: async (session, command) => {
+      executedShells.push({ session, command });
+      return {};
+    },
+  },
+  switchSession: () => {},
+  activeSessionId: () => 'ses_e2e',
+  saveKeys: { saveKeys: async () => ({}) },
+});
+function wireServer(srv) {
+  srv.onCommand = (cmd) => {
+    received.push(cmd);
+    return router(cmd);
+  };
+  srv.onAudio = (pcm) => {
+    audioFrames.push(pcm.byteLength);
+  };
+}
+wireServer(server);
 
 const CONTROL_PORT = 4197;
 let seq = 0;
 
 const control = http.createServer((req, res) => {
   const send = (code, body) => {
-    res.writeHead(code, { 'Content-Type': 'application/json' });
+    // In-page fetches from the vite origin need CORS; the stub is test-only.
+    res.writeHead(code, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify(body));
   };
   if (req.method === 'POST' && req.url === '/fire') {
@@ -37,6 +61,10 @@ const control = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && req.url === '/commands') {
     send(200, received);
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/shells') {
+    send(200, executedShells);
     return;
   }
   if (req.method === 'GET' && req.url === '/audio') {
@@ -89,12 +117,7 @@ const control = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && req.url === '/revive') {
     server = new UiServer({ token, contractVersion: '3.1.0' });
-    server.onCommand = (cmd) => {
-      received.push(cmd);
-    };
-    server.onAudio = (pcm) => {
-      audioFrames.push(pcm.byteLength);
-    };
+    wireServer(server);
     server.start(4097).then(
       () => send(200, { revived: true }),
       (err) => send(500, { error: String(err) }),
