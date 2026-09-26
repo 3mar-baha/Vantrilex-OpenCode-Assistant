@@ -106,6 +106,20 @@ key is missing instead of guessing.
   credentials → stop everything. The system never improvises past an error.
 - **Backups:** the shared database is backed up before any mutation.
 
+Closed audit items (ledger: `docs/10-CHECKPOINT.md` → Security remediation):
+
+| Item | State |
+|---|---|
+| H1 unconfirmed destructive exec | closed — FR-12 parks shell acts until explicit `confirm` (proven E2E) |
+| H2 no production daemon | closed — `src/daemon.ts` composition root + `serve` CLI |
+| H3 keys could not persist | closed — `saveApiKeys` → encrypted vault pools |
+| H4 token baked into bundle | closed — per-install IPC token (0600), runtime-fetched |
+| M2 broad `core:default` | accepted with rationale, then closed — enumerated least-privilege caps |
+| M3 thin CSP | closed — hardened directives incl. `object-src 'none'` |
+| M4 unbounded inbound frame | closed — 1 MiB cap before allocation |
+| M6 persona no-op / stale pill | closed — truthful state + 45 s staleness watchdog |
+| Job Object teardown | closed — `KILL_ON_JOB_CLOSE`, zero orphans on force-kill |
+
 ## 7. Memory: the Obsidian vault
 
 The daemon remembers across restarts using plain Markdown notes
@@ -119,8 +133,8 @@ are never overwritten. Secrets are banned from notes by rule.
 
 | Gate | Command | Current score |
 |---|---|---|
-| Unit + type + lint | `npm run test:vantrilex` | **214 pass** (160 root + 54 desktop), 0 warnings |
-| Shell E2E | `npm run test:e2e` (Playwright) | **8/8** |
+| Unit + type + lint | `npm run test:vantrilex` | **309 pass** (220 root + 89 desktop), 0 warnings |
+| Shell E2E | `npm run test:e2e` (Playwright) | **15/15** |
 | Pre-flight | `node dist/cli.js doctor` | environment + serve health |
 | Live console | `node scripts/live_console_test.ts` | real serve, TTS, STT, VAD |
 | Packaging | `node scripts/packaging-preflight.mjs` | 14/15 (only MSVC linker missing) |

@@ -6,10 +6,10 @@
 </p>
 
 <p align="center">
-  <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-284%20pass-brightgreen" alt="Tests" /></a>
-  <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-12%2F12-brightgreen" alt="E2E" /></a>
+  <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-309%20pass-brightgreen" alt="Tests" /></a>
+  <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-15%2F15-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.3.0-blueviolet" alt="Version" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.4.1-blueviolet" alt="Version" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/tauri-v2%20%7C%20rust-stable-orange" alt="Tauri" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22-339933" alt="Node" /></a>
   <a href="docs/RAG-ORCHESTRATOR-INTEGRATION.md"><img src="https://img.shields.io/badge/opencode-v2%20native-7c3aed" alt="OpenCode" /></a>
@@ -57,9 +57,13 @@ vault whose contents are never printed. New sessions inherit project agents,
 provider models, and memory notes instead of starting cold.
 
 **Agent hierarchy.** Dots3 (`dots-studio/dots-3-note-preview:free`) takes
-Arabic intake and emits English missions. Nemotron
+Arabic intake and emits English missions — with reasoning suppressed
+(`effort: none`, 200 tokens) it answers in ~1.5 s as the fast primary, with a
+one-shot Nemotron intake failover if it ever returns unparseable output.
+Nemotron
 (`nvidia/nemotron-3-ultra-550b-a55b:free`, the coordinator default) decomposes
-missions into dependency-ordered task DAGs and dispatches them. Inkling
+missions into dependency-ordered task DAGs under strict JSON-schema
+enforcement (plus one bounded retry) and dispatches them. Inkling
 (`thinkingmachines/inkling:free`, `mode: subagent`) drives work strictly
 inside OpenCode session boundaries and reports concise English summaries with
 receipts. A.R.E.E.B. (أَرِيب) is the Type-1 foundation model behind the
@@ -232,6 +236,29 @@ the bridge. The shell is a display and intent surface; the daemon is the only
 writer. OS integration (tray icon, global hotkey, window controls) stays in
 Rust; everything else is web technology behind the sandbox.
 
+**Full-duplex voice loop.** The mic path is `AudioCapture` (AudioWorklet, 16
+kHz mono Int16, 100 ms frames, muted by default) → binary PCM uplink →
+Whisper → 3-agent chain. The speech path is Fish TTS → per-sentence MP3
+broadcast → strict-FIFO `AudioPlayer` with a speaking indicator. **Barge-in:**
+while TTS plays, quiet frames are ducked locally (RMS energy gate) and a
+voice burst stops playback, sends a silent `abort`, and trips a daemon speech
+gate — the user can always interrupt. **Sentence streaming:** the first clause
+synthesizes and broadcasts immediately; live cold-synthesis TTFB measures
+977–4029 ms across runs (Fish server variance) against the 800 ms budget,
+0 ms on cache hits. The HUD visualizer renders the 5-bar emblem voiceprint
+(`assets/icon.svg`) breathing with live playback energy.
+
+**Process supervisor.** The Tauri backend owns window/tray/hotkey plus a
+three-tier bring-up (serve → daemon adoption, never double-spawn) and a
+Win32 Job Object with `KILL_ON_JOB_CLOSE`: force-killing the app reaps every
+child, zero orphaned processes.
+
+**Self-contained installer.** The NSIS setup
+([v0.4.1 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.4.1))
+bundles `node.exe` plus the pruned runtime sidecar — end users need no
+Node, npm, or repo checkout. Windows is the only supported target;
+macOS/Linux are deferred until Windows is long-term stable.
+
 ---
 
 ## 5. Security, key vault & zero-secret architecture
@@ -262,6 +289,13 @@ git-ignored while the Obsidian memory notes remain committable. A forensic
 audit across 350 tracked files confirmed zero plaintext keys and zero tracked
 backup/journal artifacts, and `.gitignore` additionally covers `*.bak`,
 `*-wal`, and `*-shm`.
+
+Closed audit items: per-install IPC token (`0600`, fetched at runtime via the
+`ipc_token` command — nothing baked into the bundle), 1 MiB inbound WS frame
+cap, hardened Tauri CSP, least-privilege capabilities (no blanket
+`core:default`), truthful persona state with a 45 s bridge staleness
+watchdog, and FR-12 park-until-confirm for destructive shell acts (proven
+end to end in `fr12.spec.ts`). Full ledger in `docs/10-CHECKPOINT.md`.
 
 ### Vault file layout
 
@@ -301,15 +335,19 @@ backup/journal artifacts, and `.gitignore` additionally covers `*.bak`,
   controls, prompt receipts (`msg_…`), Fish TTS first-chunk TTFB against the
   800 ms budget, VAD energy, and a real Whisper STT call.
 - **Observed single-run figures** (checkpoint-ledgered with commit SHAs):
-  serve boot 447 ms, bridge hello 16 ms, Fish TTS TTFB 644 ms (budget 800 ms),
-  29 sessions enumerated, 17 project agents discovered, Nemotron smoke at
-  HTTP 200 with identity reply.
+  serve boot 447 ms, bridge hello 16 ms, 29 sessions enumerated, 17 project
+  agents discovered, Nemotron smoke at HTTP 200 with identity reply.
+- **Fish TTS first-chunk TTFB** (sentence-streamed, cold synthesis): 977 /
+  1038 / 4029 ms across three v0.4.1 live runs (Fish server variance) against
+  the 800 ms budget; 0 ms on cache hits. Client-side paragraph buffering is
+  eliminated — first-chunk time is one short clause's synthesis, never the
+  full reply.
 - **Latency percentiles** (p50/p90/p99) are produced by repeating the live
   harness and aggregating its timing lines; the table above reports the
   head-to-head TTFT comparison, and contributors should paste fresh percentile
   runs into `docs/10-CHECKPOINT.md` before citing them.
 - **Quality gates** (`npm run test:vantrilex` + `test:e2e`): tsc, eslint,
-  oxlint, 211 unit tests, 8 Playwright E2E — all green, exit 0.
+  oxlint, 309 unit tests (220 root + 89 desktop), 15 Playwright E2E — all green, exit 0.
 - Engine-vs-baseline deltas are project-reported from these harnesses;
   reproduce with the quick-start commands and compare against the checkpoint
   ledger before citing.
@@ -374,8 +412,8 @@ Environment variables: `OPENCODE_SERVER_PASSWORD` (serve auth),
   <img src="assets/e2e-test-harness.svg" alt="doctor to test suites to checkpoint ledger pipeline" width="100%" />
 </p>
 
-Verification pipeline: `doctor` → `test:vantrilex` (211 green) → `test:e2e`
-(8/8 green) → checkpoint ledger row. Any red refuses the commit. Error
+Verification pipeline: `doctor` → `test:vantrilex` (309 green) → `test:e2e`
+(15/15 green) → checkpoint ledger row. Any red refuses the commit. Error
 recovery: `VAULT_CORRUPT` or empty vault → re-run `vault bootstrap`; serve
 unreachable → check password + `probeHealth`; 409 storms → backoff requeue is
 automatic; 401 → halt and rotate credentials, never retry blind.
@@ -386,8 +424,8 @@ automatic; 401 → halt and rotate credentials, never retry blind.
 |---|---|---|
 | Types | `tsc --noEmit` (via `test:vantrilex`) | strict contracts hold |
 | Lint | eslint + oxlint, zero warnings | style + Alicia rules |
-| Unit | vitest root (157) + desktop (54) | behavior at seams |
-| E2E | Playwright 8/8 | shell boots, bridge live, commands round-trip |
+| Unit | vitest root (220) + desktop (89) | behavior at seams |
+| E2E | Playwright 15/15 | shell boots, bridge live, commands round-trip, barge-in aborts |
 | Live | `live_console_test.ts` | real serve, real APIs, measured budgets |
 | Packaging | `packaging-preflight.mjs` | 14/15 (MSVC linker pending) |
 
@@ -405,10 +443,15 @@ with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.
 
 ### Packaging & release
 
-`scripts/packaging-preflight.mjs` scores 14/15: NSIS (`makensis`) installed
-via winget, `tauri.conf.json` valid, icons (ICO + ICNS) present, `Cargo.lock`
-pinned, renderer deps and `dist/` built. The single gap is the MSVC linker
-required by the `msvc` Rust toolchain to link the Windows binary.
+`scripts/packaging-preflight.mjs` scores 14/15 (MSVC linker supplied via the
+VsDevCmd environment for the bundle build). `scripts/provision-sidecar.mjs`
+assembles `node.exe` + compiled `dist/` + pruned runtime deps (~100 MB) as
+Tauri bundle resources, and the NSIS installer ships it all: v0.4.0 and
+v0.4.1 setups published with SHA-256 checksums on the
+[releases page](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases).
+Current: `Voxaura_0.4.1_x64-setup.exe`, 26,138,844 B, sha256
+`13FE231F83C18B852D0817CF28DAC7269D8E1F06645C33E2CB4F000959DF6143` —
+verify with `Get-FileHash -Algorithm SHA256`.
 
 ## 9. Footer & governance
 
