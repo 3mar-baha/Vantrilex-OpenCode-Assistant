@@ -3,17 +3,20 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { OrchestratorError } from './common/errors.js';
+import { loadConfig } from './common/config.js';
 import type { SessionId } from './common/brands.js';
 import { UiServer } from './ipc/index.js';
 import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
+import { Coordinator, type ChatFn } from './orchestrator/coordinator.js';
+import { FileAudioOut, FishHttpTransport, TtsEngine } from './voice/tts.js';
+import { openRouterChat } from './voice/brain.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, type AcquiredKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
-import { OpenRouterBrainClient } from './voice/brain.js';
 import { writeKeyPools } from './voice/key-store.js';
 
 // Production daemon — the missing composition root. It adopts an already-running
@@ -91,13 +94,37 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     },
   });
 
-  // Voice capture pipeline (P4): binary PCM from the shell → Whisper →
-  // brain → active-session dispatch. Built only when the vault holds keys;
-  // a keyless daemon keeps the control plane up and drops audio.
+  // Voice capture pipeline (P4+P5): binary PCM → Whisper transcript →
+  // 3-agent chain (Dots3 intake with fast TTS reply → Nemotron plan →
+  // Inkling handoff dispatched to the active session). Built only when the
+  // vault holds keys; a keyless daemon keeps the control plane up and drops
+  // audio.
   const keyMaterial = (key: AcquiredKey): string => Buffer.from(key.material).toString('utf8');
   let audio: AudioPipeline | null = null;
   try {
     const ring = Keyring.load(vault);
+    const cfg = loadConfig();
+    const tts = new TtsEngine(cfg.cache, new FishHttpTransport(ring), new FileAudioOut());
+    const chat: ChatFn = async (model, system, user) => {
+      const key = ring.acquire('openrouter');
+      try {
+        return await openRouterChat(keyMaterial(key), model, system, user);
+      } finally {
+        ring.release(key, true);
+      }
+    };
+    const coordinator = new Coordinator({
+      chat,
+      speak: async (replyAr) => {
+        // Fast verbal response: synthesize, never let TTS failure break dispatch.
+        await tts.speak(replyAr, activePersona === 'nour' ? 'female-toggle' : 'male-default').catch(() => undefined);
+      },
+      dispatch: async (text) => {
+        const session = activeSession as SessionId;
+        return client.promptSession(session, text, { origin: 'voice', actor: 'capture' });
+      },
+      activeSessionId: () => activeSession,
+    });
     audio = new AudioPipeline({
       transcribe: async (pcm) => {
         const key = ring.acquire('groq');
@@ -108,20 +135,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
       },
       think: async (transcript) => {
-        const key = ring.acquire('openrouter');
-        try {
-          const { output } = await new OpenRouterBrainClient(keyMaterial(key)).respond(
-            transcript,
-            'voice capture session',
-          );
-          return { reply: output.reply };
-        } finally {
-          ring.release(key, true);
-        }
-      },
-      dispatch: async (text) => {
-        const session = activeSession as SessionId;
-        return client.promptSession(session, text, { origin: 'voice', actor: 'capture' });
+        const mission = await coordinator.run(transcript);
+        const reply = mission.replyAr ?? '';
+        return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
       },
       activeSessionId: () => activeSession,
     });

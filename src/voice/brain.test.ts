@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { OpenRouterBrainClient, BRAIN_OPENROUTER_MODEL } from './brain.js';
+import { OpenRouterBrainClient, BRAIN_OPENROUTER_MODEL, openRouterChat } from './brain.js';
 
 // OpenRouter brain routing TDD — Bearer endpoint, project-default slug,
 // strict JSON contract, retry semantics identical to the Groq path.
@@ -70,5 +70,30 @@ describe('OpenRouterBrainClient', () => {
       mockFetch([{ status: 401, body: { error: { message: 'bad key' } } }]),
     );
     await expect(denied.respond('hi', 'ctx')).rejects.toMatchObject({ retryable: false });
+  });
+});
+
+describe('openRouterChat (shared P5 transport)', () => {
+  test('posts model/system/user with json_object format and returns content', async () => {
+    let seen = null;
+    const fetchImpl = (async (url, init) => {
+      seen = { url, init };
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"a":1}' } }] }), { status: 200 });
+    });
+    const content = await openRouterChat('k', 'm/slug', 'sys', 'hi', fetchImpl);
+    expect(content).toBe('{"a":1}');
+    expect(seen.url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    const body = JSON.parse(seen.init.body);
+    expect(body).toMatchObject({ model: 'm/slug', response_format: { type: 'json_object' } });
+    expect(seen.init.headers['Authorization']).toBe('Bearer k');
+  });
+
+  test('401 rejects non-retryable; empty content rejects retryable', async () => {
+    const denied = async () =>
+      openRouterChat('k', 'm', 's', 'u', mockFetch([{ status: 401, body: { error: { message: 'bad' } } }]));
+    await expect(denied()).rejects.toMatchObject({ retryable: false });
+    const empty = async () =>
+      openRouterChat('k', 'm', 's', 'u', mockFetch([{ status: 200, body: { choices: [{ message: { content: ' ' } }] } }]));
+    await expect(empty()).rejects.toMatchObject({ retryable: true });
   });
 });

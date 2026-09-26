@@ -15,8 +15,9 @@ export interface Utterance {
 export interface AudioPipelineDeps {
   readonly ingest?: AudioIngest;
   transcribe(pcm: Uint8Array): Promise<string>;
-  think(transcript: string): Promise<{ reply: string }>;
-  dispatch(text: string): Promise<{ receipt: string }>;
+  think(transcript: string): Promise<{ reply: string; receipt?: string | null }>;
+  /** Optional raw-text fallback. When absent, nothing is ever dispatched implicitly. */
+  dispatch?(text: string): Promise<{ receipt: string }>;
   activeSessionId(): SessionId | undefined;
   onUtterance?(utterance: Utterance): void;
 }
@@ -46,10 +47,15 @@ export class AudioPipeline {
     for (const window of this.ingest.push(chunk)) {
       const transcript = (await this.deps.transcribe(window)).trim();
       if (transcript.length === 0) continue;
-      const { reply } = await this.deps.think(transcript);
-      const session = this.deps.activeSessionId();
-      const receipt = session === undefined ? null : (await this.deps.dispatch(transcript)).receipt;
-      this.deps.onUtterance?.({ transcript, reply, receipt });
+      const thought = await this.deps.think(transcript);
+      // A think-provided receipt means the think stage already dispatched
+      // (e.g. the coordinator chain). Raw text is only dispatched when an
+      // explicit fallback exists — never implicitly.
+      let receipt: string | null = thought.receipt ?? null;
+      if (receipt === null && this.deps.dispatch !== undefined && this.deps.activeSessionId() !== undefined) {
+        receipt = (await this.deps.dispatch(transcript)).receipt;
+      }
+      this.deps.onUtterance?.({ transcript, reply: thought.reply, receipt });
     }
   }
 }

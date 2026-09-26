@@ -108,4 +108,32 @@ describe('AudioPipeline', () => {
     await expect(pipeline.pushChunk(windowOf(1))).rejects.toThrow('brain down');
     expect(pipeline.bufferedBytes).toBe(0);
   });
+
+  test('think-provided receipt is used as-is; no implicit raw dispatch', async () => {
+    const utterances: unknown[] = [];
+    const pipeline = new AudioPipeline({
+      ingest: new AudioIngest(),
+      transcribe: async () => 'hello',
+      think: async () => ({ reply: 'hi', receipt: 'msg_chain' }),
+      activeSessionId: () => 'ses_a' as never,
+      onUtterance: (u) => void utterances.push(u),
+    });
+    await pipeline.pushChunk(windowOf(2));
+    // The utterances equality below is the proof: a stray dispatch would
+    // have produced receipt 'x' instead of the chain receipt.
+    expect(utterances).toEqual([{ transcript: 'hello', reply: 'hi', receipt: 'msg_chain' }]);
+  });
+
+  test('without a dispatch fallback nothing is ever sent implicitly', async () => {
+    const utterances: unknown[] = [];
+    const pipeline = new AudioPipeline({
+      ingest: new AudioIngest(),
+      transcribe: async () => 'hello',
+      think: async () => ({ reply: 'hi' }),
+      activeSessionId: () => 'ses_a' as never,
+      onUtterance: (u) => void utterances.push(u),
+    });
+    await pipeline.pushChunk(windowOf(2));
+    expect(utterances).toEqual([{ transcript: 'hello', reply: 'hi', receipt: null }]);
+  });
 });
