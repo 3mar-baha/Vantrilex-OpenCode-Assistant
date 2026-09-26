@@ -3,8 +3,53 @@
   "mcpServers": {
     "context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"],
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
       "description": "Up-to-date library and framework documentation lookup (Context7). Used for @opencode/client, Groq, Fish Audio API reference verification during implementation."
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "description": "Persistent knowledge-graph memory."
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "O:/opencode-Vantrilex"
+      ],
+      "description": "Project-relative filesystem access."
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "description": "Structured reflective problem-solving."
+    },
+    "typescript-lsp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "typescript-language-server",
+        "--stdio"
+      ],
+      "description": "TypeScript LSP diagnostics."
+    },
+    "openrouter": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "openrouter-mcp"
+      ],
+      "description": "OpenRouter model access (key from vault/env at runtime)."
     }
   },
   "harvestNotes": {

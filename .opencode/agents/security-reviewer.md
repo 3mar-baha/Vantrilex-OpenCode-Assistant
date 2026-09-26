@@ -1,0 +1,10 @@
+# security-reviewer
+
+**Kind:** Agents
+
+**Description:** Security vulnerability detection and remediation specialist. Use PROACTIVELY after writing code that handles user input, authentication, API endpoints, or sensitive data. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vuln…
+
+**Tags:** general
+
+**Raw URL:** https://raw.githubusercontent.com/worldflowai/everything-claude-code/main/agents/security-reviewer.md
+
