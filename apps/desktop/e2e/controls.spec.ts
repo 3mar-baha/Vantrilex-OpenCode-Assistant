@@ -21,6 +21,7 @@ test('agent/model switch round-trips with session scope', async ({ page }) => {
   await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
 
   await post('/inventory', { sessions: [{ sessionId: 'ses_a', state: 'running' }] });
+  await page.getByTestId('session-chip-trigger').click();
   await page.getByTestId('session-ses_a').click();
   await expect(page.getByTestId('agent-model-badge')).toBeVisible();
 
@@ -53,6 +54,7 @@ test('discovered agents populate a live selector and drive setSessionAgent', asy
   await page.goto('/');
   await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
   await post('/inventory', { sessions: [{ sessionId: 'ses_a', state: 'running' }] });
+  await page.getByTestId('session-chip-trigger').click();
   await page.getByTestId('session-ses_a').click();
 
   await post('/agents', {

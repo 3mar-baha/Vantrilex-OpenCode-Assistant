@@ -21,6 +21,9 @@ test('inventory snapshot populates chip; switch executes and acks', async ({ pag
       { sessionId: 'ses_b', state: 'idle' },
     ],
   });
+  // Compact chip: history lives in a dropdown, so open it first.
+  await expect(page.getByTestId('session-chip-trigger')).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId('session-chip-trigger').click();
   await expect(page.getByTestId('session-ses_a')).toBeVisible({ timeout: 5_000 });
   await expect(page.getByTestId('session-ses_b')).toBeVisible({ timeout: 5_000 });
 
