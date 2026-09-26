@@ -58,6 +58,26 @@ export function encodeTextFrame(text: string): Buffer {
   return Buffer.concat([header, payload]);
 }
 
+/** Server-side binary frame (unmasked, FIN set). Payloads stay small by contract. */
+export function encodeBinaryFrame(payload: Uint8Array): Buffer {
+  const len = payload.byteLength;
+  let header: Buffer;
+  if (len <= 125) {
+    header = Buffer.from([0x82, len]);
+  } else if (len <= 0xffff) {
+    header = Buffer.alloc(4);
+    header[0] = 0x82;
+    header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x82;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+  return Buffer.concat([header, Buffer.from(payload)]);
+}
+
 /** Test helper — build a masked client frame (browsers always mask, §5.3). */
 export function maskFrame(opcode: Opcode, payload: Buffer, mask: Buffer, fin = true): Buffer {
   if (mask.byteLength < 4) throw new Error('mask must be at least 4 bytes');

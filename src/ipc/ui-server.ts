@@ -5,6 +5,7 @@ import {
   ACK_KIND,
   buildAgentFrame,
   buildInventoryFrame,
+  encodeBinaryFrame,
   encodeTextFrame,
   ERROR_KIND,
   FrameReassembler,
@@ -27,6 +28,7 @@ import {
   type UiCommand,
   type UiEvent,
 } from './protocol.js';
+import { encodeAudioChunk, splitAudio } from './audio.js';
 
 // Voxaura UI bridge — ADR-010. Zero-dependency RFC 6455 server on
 // 127.0.0.1:4097. Fail-closed: no token → the server refuses to start;
@@ -90,6 +92,7 @@ export class UiServer {
   private server: Server | null = null;
   private readonly conns = new Set<Conn>();
   private seq = 0;
+  private audioSeq = 0;
   private readonly resume: UiEvent[] = [];
   private lastInventory: InventoryFrame | null = null;
   private lastAgents: AgentFrame | null = null;
@@ -169,6 +172,24 @@ export class UiServer {
       safeWrite(conn, this.conns, wire);
     }
     return frame;
+  }
+
+  /**
+   * Broadcast synthesized speech (P4b downlink). MP3 bytes are split into
+   * sequenced binary chunks and fanned out to every connected shell — the
+   * companion is single-user, so audio needs no per-session routing while
+   * control stays per-session. Returns the chunk count sent.
+   */
+  broadcastAudio(mp3: Uint8Array): number {
+    const chunks = splitAudio(mp3, this.audioSeq);
+    for (const { seq, chunk } of chunks) {
+      this.audioSeq = (seq + 1) % 65_536;
+      const wire = encodeBinaryFrame(encodeAudioChunk(seq, chunk));
+      for (const conn of this.conns) {
+        safeWrite(conn, this.conns, wire);
+      }
+    }
+    return chunks.length;
   }
 
   async close(): Promise<void> {

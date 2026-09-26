@@ -143,6 +143,8 @@ export interface BridgeOptions {
   readonly onEvent?: (event: EventMsg) => void;
   readonly onInventory?: (sessions: InventorySession[]) => void;
   readonly onAgents?: (agents: AgentEntry[]) => void;
+  /** Speech downlink chunks (MP3 payload, header already stripped). */
+  readonly onAudio?: (audio: Uint8Array) => void;
   readonly onRefusal?: (info: { expected: string; got: string }) => void;
   readonly onErrorFrame?: (detail: string) => void;
   /** Fired when a hello arrives with a lower seq — the daemon restarted. */
@@ -152,6 +154,9 @@ export interface BridgeOptions {
 
 /** Adapt a native browser WebSocket to the SocketLike surface (binary included). */
 function adaptWebSocket(ws: WebSocket): SocketLike {
+  // Binary frames must arrive as ArrayBuffer, not Blob (the browser default),
+  // or the speech-downlink branch in onMessage never fires.
+  ws.binaryType = 'arraybuffer';
   const adapter: SocketLike = {
     send: (data: string) => ws.send(data),
     sendBinary: (data: Uint8Array) => ws.send(data),
@@ -266,6 +271,20 @@ export class VoxauraBridge {
   }
 
   private onMessage(data: unknown): void {
+    // Speech downlink (P4b): binary frames carry a 1-byte type + u16be seq +
+    // MP3 payload (see src/ipc/audio.ts). Anything else binary is ignored.
+    if (data instanceof ArrayBuffer) {
+      const bytes = new Uint8Array(data);
+      if (bytes.byteLength >= 4 && bytes[0] === 0x01) {
+        this.opts.onAudio?.(bytes.subarray(3));
+      }
+      return;
+    }
+    // Defensive: a socket that still delivers Blobs (binaryType unset).
+    if (typeof Blob !== 'undefined' && data instanceof Blob) {
+      void data.arrayBuffer().then((buffer) => this.onMessage(buffer)).catch(() => undefined);
+      return;
+    }
     if (typeof data !== 'string') return;
     let parsed: unknown;
     try {

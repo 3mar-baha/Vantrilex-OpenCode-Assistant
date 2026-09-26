@@ -36,6 +36,9 @@ class FakeSocket implements SocketLike {
   peerText(text: string): void {
     this.onmessage?.({ data: text });
   }
+  peerBinary(buf: ArrayBuffer): void {
+    this.onmessage?.({ data: buf });
+  }
 }
 
 const hello = (seq = 0, version = '3.1.0'): HelloMsg => ({
@@ -376,6 +379,57 @@ describe('sendPcm (P4 binary voice uplink)', () => {
     });
     bridge.connect();
     expect(bridge.sendPcm(new Uint8Array([1]))).toBe(false);
+    bridge.dispose();
+  });
+});
+
+describe('onAudio (P4b speech downlink)', () => {
+  function audioBridge(onAudio: (audio: Uint8Array) => void): { bridge: VoxauraBridge; getSocket: () => FakeSocket } {
+    let socket: FakeSocket | null = null;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onAudio,
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    const getSocket = () => {
+      if (socket === null) throw new Error('socket not created');
+      return socket;
+    };
+    return { bridge, getSocket };
+  }
+
+  function speechFrame(payload: Uint8Array): ArrayBuffer {
+    const out = new Uint8Array(3 + payload.length);
+    out[0] = 0x01;
+    out[1] = 0;
+    out[2] = 9;
+    out.set(payload, 3);
+    return out.buffer;
+  }
+
+  test('binary speech frames reach onAudio with the MP3 payload', () => {
+    const received: Uint8Array[] = [];
+    const { bridge, getSocket } = audioBridge((audio) => void received.push(audio));
+    getSocket().peerBinary(speechFrame(new Uint8Array([0xff, 0xfb, 0x90])));
+    expect(received).toHaveLength(1);
+    expect(Array.from(received[0] as Uint8Array)).toEqual([0xff, 0xfb, 0x90]);
+    bridge.dispose();
+  });
+
+  test('wrong type byte and short buffers are ignored', () => {
+    const received: Uint8Array[] = [];
+    const { bridge, getSocket } = audioBridge((audio) => void received.push(audio));
+    const sock = getSocket();
+    const wrong = new Uint8Array([0x02, 0, 9, 1, 2, 3]);
+    sock.peerBinary(wrong.buffer);
+    sock.peerBinary(new Uint8Array([0x01, 0]).buffer);
+    sock.peerText('{"type":"nonsense"}');
+    expect(received).toHaveLength(0);
     bridge.dispose();
   });
 });

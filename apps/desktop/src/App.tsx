@@ -6,6 +6,7 @@ import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import { AudioCapture } from './audio/capture.js';
+import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { envToken, resolveIpcToken } from './settings/ipc-token.js';
@@ -38,6 +39,8 @@ export function App(): JSX.Element {
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const captureRef = useRef<AudioCapture | null>(null);
   if (captureRef.current === null) captureRef.current = new AudioCapture();
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const [speaking, setSpeaking] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   useAutoSize(cardRef, { paddingY: 16 });
   const lastFrameAt = useRef<number>(Date.now());
@@ -78,6 +81,22 @@ export function App(): JSX.Element {
         onInventory: (sessions) =>
           dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) }),
         onAgents: (list) => setAgents(list.map((a) => ({ id: a.id, name: a.name }))),
+        onAudio: (bytes) => {
+          if (playerRef.current === null) {
+            try {
+              playerRef.current = createDefaultPlayer({
+                onStart: () => setSpeaking(true),
+                // Latch briefly so a fast queue doesn't flicker the indicator.
+                onEnd: () => {
+                  window.setTimeout(() => setSpeaking(false), 1500);
+                },
+              });
+            } catch {
+              return;
+            }
+          }
+          playerRef.current.enqueue(bytes);
+        },
         onClose: () => setBridge((s) => (s === 'live' ? 'degraded' : s)),
         onRefusal: () => setBridge('refused'),
       });
@@ -337,6 +356,11 @@ export function App(): JSX.Element {
           >
             {announce}
           </p>
+          {speaking && (
+            <p data-testid="speaking-indicator" title="المساعد يتحدث الآن" className="text-xs text-[#34d399]">
+              ● يتحدث الآن…
+            </p>
+          )}
           <button
             data-testid="abort-button"
             title={live ? 'إيقاف التوليد فوراً' : 'بدء توليد جديد'}

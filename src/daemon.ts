@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { OrchestratorError } from './common/errors.js';
 import { loadConfig } from './common/config.js';
 import type { SessionId } from './common/brands.js';
+import { VOICE_IDS } from './common/brands.js';
 import { UiServer } from './ipc/index.js';
 import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
@@ -104,7 +105,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   try {
     const ring = Keyring.load(vault);
     const cfg = loadConfig();
-    const tts = new TtsEngine(cfg.cache, new FishHttpTransport(ring), new FileAudioOut());
+    const fish = new FishHttpTransport(ring);
+    const tts = new TtsEngine(cfg.cache, fish, new FileAudioOut());
     const chat: ChatFn = async (model, system, user) => {
       const key = ring.acquire('openrouter');
       try {
@@ -140,6 +142,23 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
       },
       activeSessionId: () => activeSession,
+      onUtterance: (utterance) => {
+        // P4b downlink: synthesize the spoken reply and stream it to shells.
+        // Fire-and-forget by design — synthesis failure must never break the
+        // control plane or the already-recorded dispatch receipt.
+        void (async () => {
+          if (utterance.reply.trim().length === 0) return;
+          try {
+            const mp3 = await fish.synthesize(
+              utterance.reply,
+              VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'],
+            );
+            ui.broadcastAudio(mp3);
+          } catch {
+            // Swallowed deliberately (see above).
+          }
+        })();
+      },
     });
   } catch {
     audio = null;

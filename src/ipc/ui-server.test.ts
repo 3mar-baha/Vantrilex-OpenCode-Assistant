@@ -345,3 +345,57 @@ describe('UiServer binary audio ingest (P4 voice capture)', () => {
     sock.end();
   });
 });
+
+describe('UiServer audio broadcast (P4b downlink)', () => {
+  test('broadcastAudio fans sequenced binary chunks to every shell', async () => {
+    const { decodeFrames: decode, Opcode: Op } = await import('./protocol.js');
+    const { decodeAudioChunk } = await import('./audio.js');
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const mp3 = Buffer.alloc(70 * 1024, 0xab);
+    const received: Array<{ seq: number; bytes: number }> = [];
+    await new Promise<void>((resolve, reject) => {
+      const sock = createConnection({ host: '127.0.0.1', port }, () => {
+        sock.write(handshake('t'));
+      });
+      let acc = Buffer.alloc(0);
+      let helloSeen = false;
+      let broadcast = false;
+      const timer = setTimeout(() => reject(new Error('audio broadcast timeout')), 5000);
+      sock.on('data', (chunk: Buffer) => {
+        acc = Buffer.concat([acc, chunk]);
+        if (!helloSeen) {
+          const idx = acc.indexOf('\r\n\r\n');
+          if (idx === -1) return;
+          acc = acc.subarray(idx + 4);
+          helloSeen = true;
+        }
+        const { frames, remaining } = decode(acc);
+        acc = Buffer.from(remaining);
+        for (const f of frames) {
+          if (f.opcode === Op.Text && !broadcast) {
+            broadcast = true;
+            server.broadcastAudio(mp3);
+          } else if (f.opcode === Op.Binary) {
+            const decoded = decodeAudioChunk(new Uint8Array(f.payload));
+            if (decoded !== null) received.push({ seq: decoded.seq, bytes: decoded.audio.byteLength });
+            if (received.length === 3) {
+              clearTimeout(timer);
+              sock.end();
+              resolve();
+            }
+          }
+        }
+      });
+      sock.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    // 70 KiB over 32 KiB chunks → 3 chunks, ascending seq, lossless bytes.
+    expect(received).toHaveLength(3);
+    expect(received.map((r) => r.seq)).toEqual([0, 1, 2]);
+    expect(received.reduce((a, r) => a + r.bytes, 0)).toBe(mp3.byteLength);
+  });
+});

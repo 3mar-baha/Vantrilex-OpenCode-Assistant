@@ -24,5 +24,13 @@ export {
   UiEventSchema,
 } from './protocol.js';
 export type { AgentEntry, AgentFrame, HelloFrame, InventoryFrame, UiCommand, UiEvent, WsFrame } from './protocol.js';
+export {
+  AUDIO_DOWNLINK_TYPE,
+  MAX_AUDIO_CHUNK,
+  decodeAudioChunk,
+  encodeAudioChunk,
+  splitAudio,
+} from './audio.js';
+export type { DecodedAudioChunk } from './audio.js';
 export { UiServer } from './ui-server.js';
 export type { UiServerOptions, CommandOutcome } from './ui-server.js';

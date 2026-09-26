@@ -48,6 +48,18 @@ const control = http.createServer((req, res) => {
     send(200, { reset: true });
     return;
   }
+  if (req.method === 'POST' && req.url === '/audio-down') {
+    let raw = '';
+    req.on('data', (c) => {
+      raw += c;
+    });
+    req.on('end', () => {
+      const { bytes } = JSON.parse(raw);
+      const chunks = server.broadcastAudio(Buffer.from(bytes));
+      send(200, { chunks });
+    });
+    return;
+  }
 
   if (req.method === 'POST' && req.url === '/inventory') {
     let raw = '';
