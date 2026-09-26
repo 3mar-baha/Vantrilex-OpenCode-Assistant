@@ -1,5 +1,38 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.5.0 — UX/security overhaul, registry provisioning, live-hardened (2026-09-27)
+
+**Connection truthfulness (UX-1).** The status pill is now driven by the
+WebSocket's own `readyState`, not a 45 s timer. Any inbound frame promotes the
+HUD back to `متصل`; an idle-but-open socket never reads as disconnected. The
+permanent one-way latch is gone.
+
+**Voice feedback (UX-2, UX-3, UX-4).** Live mic RMS flows from the capture
+worklet into the 5-bar visualizer, so the bars breathe with real speech. The
+pill now shows real phases — `جارٍ الاستماع…`, `جارٍ التفكير…`, `يتحدث الآن…` —
+driven by a new additive `voice` frame from the daemon. The last transcript is
+shown in the HUD.
+
+**Error transparency (UX-5).** STT/brain/TTS failures and first-run keyless
+state broadcast an additive `notice` frame rendered as a dismissible Arabic
+banner; the keyless banner carries an "أدخل المفاتيح" call to action (UX-6).
+
+**Keys activate without restart (UX-8).** `buildVoicePipeline()` is extracted
+and re-invoked on `saveApiKeys`, so newly saved keys enable the voice loop
+immediately. The install vault root is created and seeded on first run.
+
+**FR-12 confirm surface (SEC-1).** `ConfirmPortal` is mounted in the HUD: a
+`confirmation-required` ack opens the modal with the parked action and emits
+`{kind:'confirm', confirmId, approve}`. Shell commands with injection
+metacharacters are rejected before parking, and session ids are validated as
+opaque `ses_…` tokens (SEC-2).
+
+**Session state (UX-7).** `/api/session` carries no `state`; the client now
+derives it from real fields (`outcome` → label) instead of rendering `unknown`.
+
+**Registry toolkit.** 7 default skills, 3 agents, 4 hooks and 5 MCP servers
+provisioned from the Vantrilex registry.
+
 ## v0.4.4 — Compact session dropdown + balanced HUD (2026-09-26)
 
 **Session UI.** The historical session list rendered as one row per `ses_…`,

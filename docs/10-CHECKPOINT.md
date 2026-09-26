@@ -387,4 +387,20 @@ P5 runtime agent orchestration remains deferred.
 | Gates | root 220 + desktop 95 unit; E2E 16/16; tsc/eslint/oxlint 0 |
 | Artifacts | `Voxaura_0.4.4_x64-setup.exe` 26,114,659 B sha256 `7CDA8C38…` |
 
+## v0.5.0 release (UX/security overhaul + registry provisioning)
+
+| Item | Evidence |
+|---|---|
+| **UX-1 connection truth** | pill driven by socket `readyState`; any frame promotes to live; no time-only latch (`bridge/ws.ts` `live`+`onFrame`, `App.tsx`) |
+| **UX-2 RMS visualizer** | `capture.ts` `onEnergy` → `SiriWaveCanvas` `energy` → 5 bars track real speech |
+| **UX-3/4 voice states + transcript** | additive `voice` frame; pill listening/thinking/speaking; `last-transcript` in HUD; E2E `ux.spec.ts` |
+| **UX-5/6 notices + CTA** | additive `notice` frame; dismissible Arabic banner; keyless CTA opens keys window; E2E asserts |
+| **UX-8 keys without restart** | `buildVoicePipeline()` re-invoked on `saveApiKeys`; vault root created/seeded (`main.rs`) |
+| **SEC-1/2 confirm + injection guard** | `ConfirmPortal` mounted + wired to `confirmation-required`; metacharacter guard; `ses_` id validation |
+| **Session state** | `client.ts` derives from `outcome` — no more `unknown` |
+| **Registry** | 7 skills + 3 agents + 4 hooks + 5 MCP provisioned from the Vantrilex registry |
+| Gates | root 222 + desktop 95 unit; E2E 18/18; tsc/eslint/oxlint 0; cargo check 0 |
+| Live | TTS ✅ 2161 ms (first-chunk 1105 ms); STT ✅ 299 ms; OpenRouter ⚠️ account 429 (upstream) |
+| Artifacts | `Voxaura_0.5.0_x64-setup.exe` (SHA recorded in README) |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

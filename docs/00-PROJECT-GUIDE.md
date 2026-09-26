@@ -14,7 +14,7 @@ agents. You talk to it (in Arabic, with two voice personas), and it operates
 **OpenCode v2** — an AI agent runtime — on your behalf: running coding
 sessions, switching models, executing commands, and speaking results back.
 
-**Package name:** `opencode-voice-runtime` · **Version:** 0.4.4 · **License:** MIT
+**Package name:** `opencode-voice-runtime` · **Version:** 0.5.0 · **License:** MIT
 
 Think of it as three layers:
 
@@ -159,7 +159,7 @@ Environment: `OPENCODE_SERVER_PASSWORD`, `GROQ_API_KEYS`, `FISH_AUDIO_KEYS`,
 `OPENROUTER_API_KEY`, `VOXAURA_VAULT_DIR` (optional vault location).
 
 **Platform scope (locked):** Windows is the only supported target. The NSIS
-installer (`Voxaura_0.4.4_x64-setup.exe`) bundles node.exe plus the pruned
+installer (`Voxaura_0.5.0_x64-setup.exe`) bundles node.exe plus the pruned
 runtime sidecar; the Job Object teardown, tray/hotkey supervisor, and all E2E
 proof run on Windows. macOS and Linux builds are **officially deferred** until
 the Windows target reaches complete long-term stability — no bundle-ID rename,
