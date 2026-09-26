@@ -279,4 +279,21 @@ prefix rejected by Node (`lstat 'O:'` EISDIR) — stripped via `plain_path()`.
 the CLI scaffolds `vault/` notes for every subcommand (stray dir seen under src-tauri) and should
 be gated to operator commands.
 
+## P4 voice capture loop (renderer mic → daemon pipeline)
+
+| Item | Change | Commit | Evidence |
+|---|---|---|---|
+| **Binary ingest** | `UiServer.onAudio` accepts binary PCM frames (64 KB cap → error frame, socket survives) | 52a844c | 2 loopback tests: exact bytes, oversize rejected |
+| **Windowing** | `AudioIngest` accumulates 100 ms Int16 chunks into exact 5 s windows; remainder kept; overflow shed whole (6-window cap, counted) | 52a844c | 5 tests incl. boundary math |
+| **Pipeline** | transcribe → think → dispatch-if-active; silence spends nothing; no session means no dispatch | 52a844c | 5 stub tests |
+| **Daemon wiring** | keyring pools → Whisper/OpenRouter clients; prompts go to the active session as `voice/capture`; ingest resets on session switch; keyless daemons keep control plane, drop audio | 52a844c | daemon tests green |
+| **Renderer capture** | `AudioCapture` (AudioWorklet + ScriptProcessor fallback), 16 kHz mono Int16, 100 ms frames; mic starts muted (privacy default); tracks released on stop/unmount | 52a844c | 7 DSP tests; E2E below |
+| **Bridge uplink** | `sendPcm` fire-and-forget binary (no ack ledger); native-socket adapter | 52a844c | 2 bridge tests |
+| **E2E proof** | fake mic device → toggle → PCM frames land on the daemon → toggle stops | 52a844c | `capture.spec.ts` green in the 12/12 suite |
+
+**Gates:** root 194 + desktop 77 unit; E2E 12/12; tsc clean.
+
+**Still open:** spoken replies are not streamed back to the renderer (no audio downlink);
+the brain lane needs a valid OpenRouter key (stored credential returns 401).
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
