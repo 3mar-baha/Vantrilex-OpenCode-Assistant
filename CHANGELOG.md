@@ -1,5 +1,18 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.4.1 — Barge-in, sentence-streamed TTS, Dots3 fast primary (2026-09-26)
+
+**Voice interaction (new in the installer)**
+- Barge-in & echo suppression: renderer ducks quiet mic frames while TTS
+  plays (RMS energy gate); voice bursts stop playback and send a silent
+  `abort`; daemon trips a speech gate so stale sentences never synthesize.
+  E2E `bargein.spec.ts` proves abort delivery over the real bridge.
+- Sentence-level TTS: first clause synthesizes and broadcasts immediately.
+  Live cold-synthesis TTFB 977–4029 ms across 3 runs (Fish server variance);
+  cache hits start at 0 ms. Client-side paragraph buffering eliminated.
+- Dots3 fast primary: reasoning-suppressed intake answers in ~1.5 s with no
+  failover; Nemotron plans under strict JSON schema + one bounded retry.
+
 ## v0.4.0 — Voice capture loop + 3-agent orchestration (2026-09-26)
 
 **P4 voice capture (renderer mic → daemon pipeline)**

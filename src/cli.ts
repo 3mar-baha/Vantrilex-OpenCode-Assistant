@@ -86,10 +86,13 @@ async function liveLoop(): Promise<number> {
       const out = new FileAudioOut();
       const engine = new TtsEngine(cfg.cache, transport, out);
       const ttsStart = Date.now();
-      const first = await engine.speak('أمورك تمام، هذا اختبار الصوت', cfg.voice.default);
+      // Production speech path: sentence-streamed (first clause out ASAP).
+      // Two-sentence probe so the report proves per-sentence dispatch live.
+      const first = await engine.speakSentences('أمورك تمام. هذا اختبار الصوت!', cfg.voice.default);
       report['tts_ms'] = Date.now() - ttsStart;
       report['tts_first_chunk_ms'] = first.firstChunkMs ?? 'n/a-buffered';
       report['tts_cache_hit'] = first.cacheHit ? 'yes' : 'no';
+      report['tts_sentences'] = first.sentences;
 
       // 2. Whisper STT round-trip on a generated 1s silent PCM (latency probe).
       const whisper = new GroqWhisperClient(groqApiKey);
@@ -119,7 +122,7 @@ async function liveLoop(): Promise<number> {
 
       // 4. Speak the brain reply (real TTS + file handoff for speaker playback).
       const replyStart = Date.now();
-      await engine.speak(output.reply.slice(0, 200), cfg.voice.default);
+      await engine.speakSentences(output.reply.slice(0, 200), cfg.voice.default);
       report['reply_tts_ms'] = Date.now() - replyStart;
     } finally {
       ring.destroy();
