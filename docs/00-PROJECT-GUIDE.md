@@ -144,6 +144,13 @@ cd apps/desktop && npm run dev     # desktop shell (needs your screen)
 Environment: `OPENCODE_SERVER_PASSWORD`, `GROQ_API_KEYS`, `FISH_AUDIO_KEYS`,
 `OPENROUTER_API_KEY`, `VOXAURA_VAULT_DIR` (optional vault location).
 
+**Platform scope (locked):** Windows is the only supported target. The NSIS
+installer (`Voxaura_0.4.0_x64-setup.exe`) bundles node.exe plus the pruned
+runtime sidecar; the Job Object teardown, tray/hotkey supervisor, and all E2E
+proof run on Windows. macOS and Linux builds are **officially deferred** until
+the Windows target reaches complete long-term stability — no bundle-ID rename,
+no AppImage work until then.
+
 ## 10. Key files map
 
 | Path | What lives there |
