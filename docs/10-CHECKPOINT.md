@@ -353,4 +353,15 @@ P5 runtime agent orchestration remains deferred.
 | Gates | root 220 + desktop 89 unit; E2E 15/15; tsc/eslint/oxlint 0; cargo check 0; preflight 14/15 (MSVC via VsDevCmd) |
 | Artifacts | `Voxaura_0.4.1_x64-setup.exe` 26,138,844 B sha256 `13FE231F…`; sidecar 100.5 MB re-provisioned |
 
+## v0.4.2 release (production rebuild: emblem icon + sketch HUD baked in)
+
+| Item | Evidence |
+|---|---|
+| Version bump 0.4.1 → 0.4.2 | root + desktop `package.json`, desktop lock, `tauri.conf.json`, `Cargo.toml` (+ lock synced by build), sidecar manifest, `CHANGELOG.md` |
+| Icon regeneration | `npx tauri icon assets/icon.svg` → pixel-verified `#2563EB` mean paint in `voxaura.exe` embedded ICO; all PNG/ICNS/Store sets refreshed |
+| Sketch HUD + emblem visualizer | 5-bar reactive voiceprint (`SiriWaveCanvas`), organic sketch-card, mono technical metrics; all 89 desktop unit tests green |
+| Cold-launch smoke | `voxaura.exe` 0.4.2 → 4096 + 4097 listening within 35 s; force-kill reaps both ports (Job Object `KILL_ON_JOB_CLOSE`), zero orphans |
+| Gates | root 220 + desktop 89 unit; E2E 15/15; tsc/eslint/oxlint 0; cargo check 0; preflight 14/15 (MSVC via VsDevCmd) |
+| Artifacts | `Voxaura_0.4.2_x64-setup.exe` 26,111,687 B sha256 `EA0B698D…`; sidecar 100.5 MB re-provisioned |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

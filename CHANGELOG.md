@@ -1,5 +1,13 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.4.2 — Production rebuild: emblem icon + sketch HUD in the installer (2026-09-26)
+
+**Why a rebuild:** the v0.4.1 installer predates the icon regeneration, so it
+embedded stale orange rasters and the pre-bars HUD. v0.4.2 bakes the current
+tree into a fresh NSIS setup: regenerated blue-emblem `icon.ico` (6-image,
+pixel-verified `#2563EB`), the 5-bar reactive voiceprint visualizer, and the
+whiteboard sketch HUD — no IPC, vault, or orchestration changes.
+
 ## v0.4.1 — Barge-in, sentence-streamed TTS, Dots3 fast primary (2026-09-26)
 
 **Voice interaction (new in the installer)**
