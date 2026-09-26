@@ -10,7 +10,7 @@ import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
 import { bargePolicy } from './audio/vad.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
-import { envToken, resolveIpcToken } from './settings/ipc-token.js';
+import { envToken, resolveIpcTokenWithRetry } from './settings/ipc-token.js';
 import { ensureServices } from './settings/services.js';
 import { openKeysWindow, openSettingsWindow } from './settings/open-settings.js';
 import { useAutoSize } from './window/useAutoSize.js';
@@ -71,7 +71,7 @@ export function App(): JSX.Element {
     void ensureServices().then((result) => {
       if (!disposed && result !== null && !result.ok) setAnnounce(`تعذّر بدء الخدمات: ${result.detail}`);
     });
-    void resolveIpcToken().then((token) => {
+    void resolveIpcTokenWithRetry().then((token) => {
       if (disposed || token === undefined) {
         if (!disposed && token === undefined) setBridge('degraded');
         return;

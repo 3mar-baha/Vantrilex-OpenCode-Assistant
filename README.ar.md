@@ -10,11 +10,11 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-309%20pass-brightgreen" alt="الاختبارات" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-15%2F15-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="الرخصة" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.4.1-blueviolet" alt="الإصدار" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.4.3-blueviolet" alt="الإصدار" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.4.1"><img src="https://img.shields.io/badge/download-Voxaura_0.4.1_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
+  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.4.3"><img src="https://img.shields.io/badge/download-Voxaura_0.4.3_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
 </p>
 
 ## ما هو Voxaura؟
@@ -70,7 +70,7 @@ OpenCode v2. يستقبل الأوامر صوتياً بالعربية عبر ك
   الطبقات وكائن Job في Windows (`KILL_ON_JOB_CLOSE`) — قتل التطبيق قسراً
   يجمع كل العمليات الفرعية، صفر عمليات يتيمة.
 - **المثبت المستقل**: حزمة NSIS (الإصدار
-  [v0.4.1](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.4.1))
+  [v0.4.3](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.4.3))
   تحمل `node.exe` والجانب التشغيلي — لا يحتاج المستخدم النهائي Node أو npm.
   Windows فقط؛ macOS/Linux مؤجلة حتى استقرار Windows الكامل.
 - **الخزينة**: AES-256-GCM محلي (`vault/keyring.dat`)، صفر أسرار في السجلات

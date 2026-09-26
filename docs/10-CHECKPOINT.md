@@ -364,4 +364,15 @@ P5 runtime agent orchestration remains deferred.
 | Gates | root 220 + desktop 89 unit; E2E 15/15; tsc/eslint/oxlint 0; cargo check 0; preflight 14/15 (MSVC via VsDevCmd) |
 | Artifacts | `Voxaura_0.4.2_x64-setup.exe` 26,111,687 B sha256 `EA0B698D…`; sidecar 100.5 MB re-provisioned |
 
+## v0.4.3 release (cold-start daemon connection fixed)
+
+| Item | Evidence |
+|---|---|
+| **Root cause** | shell read `ipc.token` on mount but the daemon wrote it only after serve bring-up → cold installs latched a permanent "غير متصل" with no retry (reproduced: token deleted → no ESTABLISHED on 4097 while the daemon listened) |
+| **Fix (Rust)** | `main.rs` writes the token synchronously in `setup()` before the webview loads, and passes it to the daemon via `VOICE_RUNTIME_IPC_TOKEN` |
+| **Fix (renderer)** | `resolveIpcTokenWithRetry` polls a bounded number of times instead of giving up on the first miss |
+| **Live proof** | token deleted → cold launch → 4096 + 4097 listening + webview ESTABLISHED on 4097, both for the dev binary and the installed 0.4.3 |
+| Gates | root 220 + desktop 92 unit (+3 token-retry); E2E green; tsc/eslint/oxlint 0; cargo check 0 |
+| Artifacts | `Voxaura_0.4.3_x64-setup.exe` 26,118,951 B sha256 `1A21F86E…` |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

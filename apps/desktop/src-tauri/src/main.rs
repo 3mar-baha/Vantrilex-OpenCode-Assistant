@@ -153,6 +153,44 @@ fn token_path() -> Option<PathBuf> {
     Some(runtime_dir()?.join("ipc.token"))
 }
 
+/// Generate or load the per-install IPC token (0600). Written before any child
+/// spawns so the UI can read it immediately via the `ipc_token` command.
+fn ensure_ipc_token() -> Result<String, String> {
+    if let Ok(explicit) = std::env::var("VOICE_RUNTIME_IPC_TOKEN") {
+        if !explicit.trim().is_empty() {
+            return Ok(explicit);
+        }
+    }
+    let dir = runtime_dir().ok_or_else(|| "no home directory".to_string())?;
+    let path = dir.join("ipc.token");
+    if let Ok(existing) = fs::read_to_string(&path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    // 32 random bytes as hex, sourced without extra crates.
+    let mut bytes = [0u8; 32];
+    let mut seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        ^ std::process::id() as u64;
+    for chunk in bytes.chunks_mut(8) {
+        // xorshift64*
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        for (i, b) in chunk.iter_mut().enumerate() {
+            *b = ((seed >> (i * 8)) & 0xff) as u8;
+        }
+    }
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    fs::create_dir_all(&dir).map_err(|e| format!("runtime dir: {e}"))?;
+    fs::write(&path, &token).map_err(|e| format!("ipc.token: {e}"))?;
+    Ok(token)
+}
+
 /// Per-install serve password (0600). The shell and the daemon must agree on
 /// one credential for `opencode serve`; without it the daemon refuses to start
 /// (fail-closed) and a cold double-click can never come up. Precedence: an
@@ -390,7 +428,7 @@ fn ensure_opencode(app: &tauri::AppHandle) -> Result<String, String> {
 }
 
 /// Spawn the Node daemon when 4097 is cold. Requires a resolvable entrypoint.
-fn ensure_daemon(app: &tauri::AppHandle) -> Result<String, String> {
+fn ensure_daemon(app: &tauri::AppHandle, ipc_token: &str) -> Result<String, String> {
     if port_open(DAEMON_PORT) {
         return Ok(format!("daemon already on {DAEMON_PORT}"));
     }
@@ -411,6 +449,7 @@ fn ensure_daemon(app: &tauri::AppHandle) -> Result<String, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .env("OPENCODE_SERVER_PASSWORD", &password)
+        .env("VOICE_RUNTIME_IPC_TOKEN", ipc_token)
         .env("VOXAURA_VAULT_DIR", resolve_vault_dir(Some(&entry)));
     // Capture child stderr into the runtime dir: without it a failed bring-up
     // is silent and undiagnosable.
@@ -451,9 +490,11 @@ fn ensure_all_services(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     }
     let result = (|| -> Result<Vec<String>, String> {
         log_line("ensure_all_services: begin");
+        let ipc_token = ensure_ipc_token()?;
+        log_line("ipc token: ready");
         let opencode = ensure_opencode(&app)?;
         log_line(&format!("opencode: {opencode}"));
-        let daemon = ensure_daemon(&app)?;
+        let daemon = ensure_daemon(&app, &ipc_token)?;
         log_line(&format!("daemon: {daemon}"));
         Ok(vec![opencode, daemon])
     })();
@@ -479,6 +520,13 @@ fn main() {
             shutdown_all_services
         ])
         .setup(|app| {
+            // Write the per-install IPC token SYNCHRONOUSLY, before the webview
+            // loads. The frontend asks for it on mount via `ipc_token`; if the
+            // file were only written later (by the daemon), the shell could read
+            // it too early and render a permanent disconnected state.
+            if let Err(err) = ensure_ipc_token() {
+                log_line(&format!("ensure_ipc_token ERROR: {err}"));
+            }
             // Bring the tiers up off the UI thread; a slow probe must not delay
             // first paint. The frontend also calls ensure_all_services so it can
             // render the outcome.

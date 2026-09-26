@@ -1,5 +1,25 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.4.3 — Fix cold-start daemon connection (2026-09-26)
+
+**Root cause.** The shell read its per-install IPC token (`ipc.token`) when the
+webview mounted, but the token was first written by the daemon *after* serve
+bring-up. On a cold install the read raced the write, returned undefined, and
+the HUD latched a permanent "غير متصل" with no retry — even though the daemon
+came up seconds later on 4097.
+
+**Fix.**
+- The Rust supervisor now writes the IPC token synchronously in `setup()`,
+  before the webview loads, and passes it to the daemon via
+  `VOICE_RUNTIME_IPC_TOKEN`.
+- The renderer resolves the token with a bounded retry
+  (`resolveIpcTokenWithRetry`), so a slow bring-up converges instead of
+  giving up.
+
+**Verified live:** cold launch with the token file deleted → 4096 + 4097
+listening and an ESTABLISHED webview connection within seconds; HUD shows
+"● متصل وبانتظار الأوامر".
+
 ## v0.4.2 — Production rebuild: emblem icon + sketch HUD in the installer (2026-09-26)
 
 **Why a rebuild:** the v0.4.1 installer predates the icon regeneration, so it
