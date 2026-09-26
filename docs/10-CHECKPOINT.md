@@ -322,4 +322,15 @@ the brain lane needs a valid OpenRouter key (stored credential returns 401).
 **Still open:** spoken replies need a valid OpenRouter key upstream (stored credential returns 401);
 P5 runtime agent orchestration remains deferred.
 
+## FR-12 proven end-to-end (audit item closed)
+
+| Item | Evidence |
+|---|---|
+| Park | `execSessionShell` ack is `{ok: true, detail: "confirmation-required"}` with zero executions |
+| Confirm | `confirm` ack `{ok: true}`; exactly one execution recorded with session scope |
+| Replay | second `confirm` is `{ok: false, detail: "no pending action"}` |
+| Harness | `e2e/fr12.spec.ts` drives the real socket (hello → park → confirm → replay) against the stub wired with the production router |
+
+**Gates:** root 212 + desktop 84 unit; E2E 14/14; tsc clean.
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
