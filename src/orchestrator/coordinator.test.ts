@@ -70,6 +70,34 @@ describe('coordinator chain', () => {
     expect(spoken).toBe(0);
   });
 
+  test('dots3 serves intake directly with reasoning suppression when healthy', async () => {
+    const calls: Array<{ model: string; options: unknown }> = [];
+    const coordinator = new Coordinator({
+      chat: async (model: string, _s: string, _u: string, options?: unknown) => {
+        calls.push({ model, options });
+        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+      },
+      dispatch: async () => ({ receipt: 'msg_d' }),
+      activeSessionId: () => 'ses_a' as never,
+    });
+    const result = await coordinator.run('hi', { taskId: 'm3' });
+    expect(result.ok).toBe(true);
+    expect(result.intakeModel).toBe(INTAKE_MODEL);
+    expect(result.receipt).toBe('msg_d');
+    expect(calls[0]).toEqual({
+      model: INTAKE_MODEL,
+      options: { reasoning: { effort: 'none' }, maxTokens: 200, temperature: 0.2, timeoutMs: 10_000 },
+    });
+    // Coordinator stage runs with strict schema enforcement and a planning ceiling.
+    expect(calls[1]).toMatchObject({
+      model: COORDINATOR_MODEL,
+      options: { timeoutMs: 25_000, temperature: 0.2, maxTokens: 300 },
+    });
+    expect((calls[1] as { options: { responseFormat: { type: string } } }).options.responseFormat.type).toBe(
+      'json_schema',
+    );
+  });
+
   test('a dead primary fails over to the fallback intake model', async () => {
     const seen: string[] = [];
     const script: Array<{ model: string; reply: string } | { model: string; error: string }> = [
@@ -93,6 +121,27 @@ describe('coordinator chain', () => {
     expect(result.intakeModel).toBe(COORDINATOR_MODEL);
     expect(result.receipt).toBe('msg_f');
     expect(seen).toEqual([INTAKE_MODEL, COORDINATOR_MODEL, COORDINATOR_MODEL]);
+  });
+
+  test('prose plan triggers exactly one sterner retry, then succeeds', async () => {
+    const systems: string[] = [];
+    let plans = 0;
+    const coordinator = new Coordinator({
+      chat: async (model: string, system: string) => {
+        systems.push(system);
+        if (model === INTAKE_MODEL) return INTAKE_OK;
+        plans += 1;
+        return plans === 1 ? 'just some prose, no json here' : PLAN_OK;
+      },
+      dispatch: async () => ({ receipt: 'msg_r' }),
+      activeSessionId: () => 'ses_a' as never,
+    });
+    const result = await coordinator.run('hi');
+    expect(result.ok).toBe(true);
+    expect(result.receipt).toBe('msg_r');
+    expect(result.plan?.steps).toHaveLength(2);
+    expect(plans).toBe(2);
+    expect(systems[systems.length - 1]).toContain('CRITICAL');
   });
 
   test('invalid plan JSON still speaks, but never dispatches', async () => {

@@ -7,6 +7,7 @@ import { SessionChip } from './components/session/SessionChip.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import { AudioCapture } from './audio/capture.js';
 import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
+import { bargePolicy } from './audio/vad.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { envToken, resolveIpcToken } from './settings/ipc-token.js';
@@ -41,6 +42,12 @@ export function App(): JSX.Element {
   if (captureRef.current === null) captureRef.current = new AudioCapture();
   const playerRef = useRef<AudioPlayer | null>(null);
   const [speaking, setSpeaking] = useState(false);
+  // Ref mirror of `speaking` for the mic-frame hot path (state is stale inside callbacks).
+  const speakingRef = useRef(false);
+  const setSpeakingState = (value: boolean): void => {
+    speakingRef.current = value;
+    setSpeaking(value);
+  };
   const cardRef = useRef<HTMLDivElement>(null);
   useAutoSize(cardRef, { paddingY: 16 });
   const lastFrameAt = useRef<number>(Date.now());
@@ -85,10 +92,10 @@ export function App(): JSX.Element {
           if (playerRef.current === null) {
             try {
               playerRef.current = createDefaultPlayer({
-                onStart: () => setSpeaking(true),
+                onStart: () => setSpeakingState(true),
                 // Latch briefly so a fast queue doesn't flicker the indicator.
                 onEnd: () => {
-                  window.setTimeout(() => setSpeaking(false), 1500);
+                  window.setTimeout(() => setSpeakingState(false), 1500);
                 },
               });
             } catch {
@@ -204,6 +211,18 @@ export function App(): JSX.Element {
         void capture
           .start({
             onFrame: (bytes) => {
+              // Echo suppression + barge-in: while the assistant talks, quiet
+              // frames (room tone / speaker echo) are ducked locally and never
+              // reach STT; a voice burst stops playback, aborts the daemon
+              // reply, and goes up immediately. Silent abort — no announce spam.
+              const decision = bargePolicy(speakingRef.current, bytes);
+              if (decision === 'duck') return;
+              if (decision === 'barge') {
+                playerRef.current?.stop();
+                setSpeakingState(false);
+                const live = bridgeRef.current;
+                if (live !== null) void live.sendCommand({ id: nextCmdId(), kind: 'abort' });
+              }
               bridgeRef.current?.sendPcm(bytes);
             },
             onError: () => setAnnounce('تعذّر الوصول إلى الميكروفون'),

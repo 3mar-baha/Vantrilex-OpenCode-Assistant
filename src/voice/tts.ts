@@ -12,11 +12,67 @@ import type { Keyring } from './keyring.js';
 // (no focus APIs); device streaming binds later without changing this path.
 export const TTS_MODEL = 's2.1-pro-free';
 export const TTS_FIRST_CHUNK_BUDGET_MS = 800;
+/** Longest single synthesis request: run-ons hard-split on word boundaries. */
+export const MAX_SENTENCE_CHARS = 400;
 
 export interface AudioOut {
   play(audio: Uint8Array, voice: VoiceId): Promise<{ startedMs: number }>;
   /** Progressive sink: receives chunks as they synthesize; default callers may omit. */
   playStream?(chunks: AsyncIterable<Uint8Array>, voice: VoiceId): Promise<{ startedMs: number }>;
+}
+
+/**
+ * Sentence splitter for streaming TTS (directive 5): Arabic and Latin
+ * terminators plus newlines bound sentences; the mark stays attached so
+ * prosody survives; punctuation-less run-ons hard-split on word boundaries
+ * so no single synthesis request grows without bound.
+ */
+export function splitSentences(text: string): string[] {
+  const out: string[] = [];
+  for (const chunk of text.split(/\n+/)) {
+    const parts = chunk.match(/[^.!?؟!…]+[.!?؟!…]+|[^.!?؟!…]+$/g) ?? [];
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (trimmed.length === 0) continue;
+      if (trimmed.length <= MAX_SENTENCE_CHARS) {
+        out.push(trimmed);
+        continue;
+      }
+      let cur = '';
+      for (const word of trimmed.split(/\s+/)) {
+        const next = cur.length === 0 ? word : `${cur} ${word}`;
+        if (next.length > MAX_SENTENCE_CHARS && cur.length > 0) {
+          out.push(cur);
+          cur = word;
+        } else {
+          cur = next;
+        }
+      }
+      if (cur.length > 0) out.push(cur);
+    }
+  }
+  return out;
+}
+
+/**
+ * Barge-in generation gate (directive 4): the daemon captures a generation
+ * before speaking a reply sentence-by-sentence; an `abort` command bumps the
+ * generation so stale sentences never synthesize or broadcast afterwards.
+ */
+export class SpeechGate {
+  private generation = 0;
+
+  capture(): number {
+    return this.generation;
+  }
+
+  isCurrent(gen: number): boolean {
+    return gen === this.generation;
+  }
+
+  abort(): void {
+    this.generation += 1;
+  }
 }
 
 export class FileAudioOut implements AudioOut {
@@ -175,5 +231,44 @@ export class TtsEngine {
   cacheStats(): { size: number; hits: number; misses: number } {
     const stats = this.cache.stats();
     return { size: stats.size, hits: stats.hits, misses: stats.misses };
+  }
+
+  /**
+   * Sentence-level streaming (directive 5): the first sentence is dispatched
+   * to Fish Audio immediately — first-chunk TTFB tracks one short clause,
+   * never the full paragraph — and each sentence plays as its audio lands.
+   * The full-text cache is preserved: hits play whole, misses cache whole.
+   */
+  async speakSentences(
+    text: string,
+    voice: VoiceId,
+  ): Promise<{ cacheHit: boolean; startedMs: number; firstChunkMs?: number; sentences: number }> {
+    const started = Date.now();
+    const sentences = splitSentences(text);
+    const cached = await this.cache.get(text, voice);
+    if (cached !== null) {
+      const { startedMs } = await this.out.play(new Uint8Array(cached), voice);
+      return { cacheHit: true, startedMs, firstChunkMs: 0, sentences: sentences.length };
+    }
+    if (sentences.length === 0) {
+      return { cacheHit: false, startedMs: Date.now() - started, sentences: 0 };
+    }
+    const collected: Uint8Array[] = [];
+    let firstChunkMs = -1;
+    for (const sentence of sentences) {
+      const audio = await this.transport.synthesize(sentence, VOICE_IDS[voice]);
+      if (firstChunkMs < 0) firstChunkMs = Date.now() - started;
+      collected.push(audio);
+      await this.out.play(audio, voice);
+    }
+    const total = collected.reduce((n, p) => n + p.byteLength, 0);
+    const combined = new Uint8Array(total);
+    let offset = 0;
+    for (const part of collected) {
+      combined.set(part, offset);
+      offset += part.byteLength;
+    }
+    await this.cache.set(text, voice, combined);
+    return { cacheHit: false, startedMs: Date.now() - started, firstChunkMs, sentences: sentences.length };
   }
 }

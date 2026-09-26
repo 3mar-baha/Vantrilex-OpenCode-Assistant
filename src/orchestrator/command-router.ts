@@ -32,6 +32,12 @@ export interface CommandRouterDeps {
   readonly saveKeys?: KeySaver;
   /** Persist the active voice persona server-side (real state, not cosmetic). */
   readonly setPersona?: (persona: 'kareem' | 'nour') => void;
+  /**
+   * Barge-in hook: an `abort` command trips the TTS speech gate so stale
+   * reply sentences never synthesize or broadcast afterwards. Absent by
+   * default (keyless daemons have no speech to stop).
+   */
+  readonly onAbort?: () => void;
 }
 
 /** Kinds that may destroy work or touch the host — these require FR-12. */
@@ -110,6 +116,8 @@ export function createCommandHandler(
         return { ok: true, detail: 'persona-set' };
       }
       case 'abort':
+        deps.onAbort?.();
+        return { ok: true };
       case 'mute':
       case 'deafen':
       case 'arm':

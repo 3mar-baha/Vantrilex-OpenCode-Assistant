@@ -81,4 +81,22 @@ describe('AudioPlayer', () => {
     h.player.enqueue(new Uint8Array([1]));
     expect(h.player.queued).toBeGreaterThanOrEqual(0);
   });
+
+  test('stop() clears the backlog and ends playback state', async () => {
+    const ended: string[] = [];
+    const player = new AudioPlayer({
+      decode: async () => 'never' as unknown as AudioBuffer,
+      sink: { play: () => undefined },
+      onEnd: () => void ended.push('end'),
+    });
+    player.enqueue(new Uint8Array([1]));
+    player.stop();
+    expect(player.queued).toBe(0);
+    expect(player.playing).toBe(false);
+    expect(ended).toEqual(['end']);
+    await flush();
+    // The stale drain resolves after the stop: nothing new plays, no second end.
+    expect(ended).toEqual(['end']);
+    expect(player.playing).toBe(false);
+  });
 });

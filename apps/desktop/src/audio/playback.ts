@@ -21,11 +21,14 @@ export class AudioPlayer {
   private readonly queue: Uint8Array[] = [];
   private draining = false;
   private started = false;
+  private generation = 0;
 
   constructor(private readonly options: AudioPlayerOptions) {}
 
   get playing(): boolean {
-    return this.queue.length > 0 || this.draining;
+    // Visible playback state, not the internal drain flag: after stop() a
+    // stale in-flight decode must not read as still playing.
+    return this.started;
   }
 
   get queued(): number {
@@ -42,15 +45,32 @@ export class AudioPlayer {
     void this.drain();
   }
 
+  /**
+   * Barge-in: drop everything queued and mark stopped. A chunk already inside
+   * the sink finishes (hundreds of ms at most); the generation guard prevents
+   * anything decoded after the stop from starting.
+   */
+  stop(): void {
+    this.generation += 1;
+    this.queue.length = 0;
+    if (this.started) {
+      this.started = false;
+      this.options.onEnd?.();
+    }
+  }
+
   private async drain(): Promise<void> {
     if (this.draining) return;
     this.draining = true;
+    const gen = this.generation;
     try {
       for (;;) {
+        if (gen !== this.generation) break;
         const next = this.queue.shift();
         if (next === undefined) break;
         try {
           const buffer = await this.options.decode(next);
+          if (gen !== this.generation) break;
           this.options.sink.play(buffer);
         } catch {
           // Corrupt chunk: skip it, keep the queue flowing.
@@ -58,10 +78,10 @@ export class AudioPlayer {
       }
     } finally {
       this.draining = false;
-      if (this.queue.length === 0) {
+      if (this.queue.length === 0 && this.started) {
         this.started = false;
         this.options.onEnd?.();
-      } else {
+      } else if (this.queue.length > 0) {
         void this.drain();
       }
     }

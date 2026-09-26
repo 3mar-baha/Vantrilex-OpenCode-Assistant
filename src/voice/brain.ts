@@ -96,9 +96,10 @@ export async function openRouterChat(
   system: string,
   user: string,
   fetchImpl: typeof fetch = fetch,
+  options: { reasoning?: unknown; maxTokens?: number; temperature?: number; timeoutMs?: number; responseFormat?: unknown } = {},
 ): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), BRAIN_CEILING_MS);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? BRAIN_CEILING_MS);
   try {
     const res = await fetchImpl(OPENROUTER_CHAT_URL, {
       method: 'POST',
@@ -113,10 +114,11 @@ export async function openRouterChat(
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        temperature: 0.4,
-        max_tokens: 300,
+        temperature: options.temperature ?? 0.4,
+        max_tokens: options.maxTokens ?? 300,
         stream: false,
-        response_format: { type: 'json_object' },
+        response_format: options.responseFormat ?? { type: 'json_object' },
+        ...(options.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
       }),
       signal: controller.signal,
     });

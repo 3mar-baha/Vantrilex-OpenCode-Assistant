@@ -11,7 +11,7 @@ import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, type ChatFn } from './orchestrator/coordinator.js';
-import { FileAudioOut, FishHttpTransport, TtsEngine } from './voice/tts.js';
+import { FileAudioOut, FishHttpTransport, SpeechGate, splitSentences, TtsEngine } from './voice/tts.js';
 import { openRouterChat } from './voice/brain.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { probeHealth } from './launcher/index.js';
@@ -72,6 +72,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   let activeSession: SessionId | undefined;
   let activePersona: 'kareem' | 'nour' = 'kareem';
   const vault = new FileVault(options.vaultPath);
+  // Barge-in generation gate: trips on `abort` so stale reply sentences never
+  // synthesize or broadcast afterwards. Plain state — safe before key setup.
+  const speechGate = new SpeechGate();
 
   ui.onCommand = createCommandHandler({
     client,
@@ -83,6 +86,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     setPersona: (persona) => {
       activePersona = persona;
     },
+    onAbort: () => speechGate.abort(),
     saveKeys: {
       saveKeys: async (keys) => {
         writeKeyPools(vault, {
@@ -107,10 +111,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     const cfg = loadConfig();
     const fish = new FishHttpTransport(ring);
     const tts = new TtsEngine(cfg.cache, fish, new FileAudioOut());
-    const chat: ChatFn = async (model, system, user) => {
+    const chat: ChatFn = async (model, system, user, options) => {
       const key = ring.acquire('openrouter');
       try {
-        return await openRouterChat(keyMaterial(key), model, system, user);
+        return await openRouterChat(keyMaterial(key), model, system, user, fetch, {
+          ...(options?.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
+          ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+          ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+          ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+          ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
+        });
       } finally {
         ring.release(key, true);
       }
@@ -118,8 +128,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     const coordinator = new Coordinator({
       chat,
       speak: async (replyAr) => {
-        // Fast verbal response: synthesize, never let TTS failure break dispatch.
-        await tts.speak(replyAr, activePersona === 'nour' ? 'female-toggle' : 'male-default').catch(() => undefined);
+        // Fast verbal response: sentence-streamed, never let TTS failure break dispatch.
+        await tts
+          .speakSentences(replyAr, activePersona === 'nour' ? 'female-toggle' : 'male-default')
+          .catch(() => undefined);
       },
       dispatch: async (text) => {
         const session = activeSession as SessionId;
@@ -147,13 +159,20 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         // Fire-and-forget by design — synthesis failure must never break the
         // control plane or the already-recorded dispatch receipt.
         void (async () => {
-          if (utterance.reply.trim().length === 0) return;
+          const text = utterance.reply.trim();
+          if (text.length === 0) return;
+          const voiceId = VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'];
+          const gen = speechGate.capture();
           try {
-            const mp3 = await fish.synthesize(
-              utterance.reply,
-              VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'],
-            );
-            ui.broadcastAudio(mp3);
+            // Sentence-level downlink: the first clause broadcasts as soon as
+            // its audio lands (sub-800ms TTFB path); a barge-in abort drops
+            // the remaining sentences mid-reply.
+            for (const sentence of splitSentences(text)) {
+              if (!speechGate.isCurrent(gen)) return;
+              const mp3 = await fish.synthesize(sentence, voiceId);
+              if (!speechGate.isCurrent(gen)) return;
+              ui.broadcastAudio(mp3);
+            }
           } catch {
             // Swallowed deliberately (see above).
           }

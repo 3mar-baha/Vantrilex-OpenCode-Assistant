@@ -32,17 +32,57 @@ export type Plan = z.infer<typeof PlanSchema>;
 
 const INTAKE_SYSTEM = [
   'You take Arabic voice transcripts and split them into two fields.',
-  'Reply ONLY with this exact JSON, no prose outside it:',
-  '{"reply_ar": "<short natural Ammani Arabic acknowledgement>", "task_en": "<precise English task specification>"}',
+  'Reply ONLY with this exact JSON, no prose outside it, no preamble:',
+  '{"reply_ar": "<short natural Ammani Arabic acknowledgement, max 20 words>", "task_en": "<precise English task specification>"}',
 ].join('\n');
 
 const COORDINATOR_SYSTEM = [
-  'You decompose an English task into an executable step plan.',
-  'Reply ONLY with this exact JSON, no prose outside it:',
-  '{"steps": [{"id": "s1", "kind": "<prompt|control|shell|skill>", "detail": "<concrete action>"}], "tools": ["..."], "skills": ["..."]}',
+  'You are the planner for Voxaura, an agent runtime that executes your steps:',
+  'it can prompt sessions, toggle skills, switch models/agents, and run shell commands.',
+  'Decompose the task into concrete executable steps using kinds: prompt, control, shell, skill.',
 ].join('\n');
 
-export type ChatFn = (model: string, system: string, user: string) => Promise<string>;
+/** Strict schema enforcement: json_object mode lets the model drift into prose. */
+const PLAN_RESPONSE_FORMAT = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'task_plan',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              kind: { type: 'string' },
+              detail: { type: 'string' },
+            },
+            required: ['id', 'kind', 'detail'],
+            additionalProperties: false,
+          },
+        },
+        tools: { type: 'array', items: { type: 'string' } },
+        skills: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['steps'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export type ChatFn = (model: string, system: string, user: string, options?: ChatOptions) => Promise<string>;
+
+/** Per-call decoding controls. The Dots3 intake uses reasoning suppression. */
+export interface ChatOptions {
+  readonly reasoning?: unknown;
+  readonly maxTokens?: number;
+  readonly temperature?: number;
+  readonly timeoutMs?: number;
+  readonly responseFormat?: unknown;
+}
 
 export interface CoordinatorDeps {
   readonly chat: ChatFn;
@@ -101,13 +141,24 @@ export class Coordinator {
     const coordinatorModel = this.deps.coordinatorModel ?? COORDINATOR_MODEL;
 
     // Intake with failover: a dead or garbled primary falls back once.
+    // Dots3 runs with reasoning suppressed (effort:none) so it answers
+    // immediately instead of burning tokens on hidden chain-of-thought.
+    // Measured 1.2–1.9 s over 3 runs; the 10 s budget covers worst case
+    // with margin while a hard failure still fails over fast.
     let intake: Intake | null = null;
     let servedBy = intakeModel;
     let intakeTransportFailed = false;
     for (const model of [intakeModel, fallbackModel]) {
       let raw: string;
       try {
-        raw = await this.deps.chat(model, INTAKE_SYSTEM, transcript);
+        raw = await this.deps.chat(
+          model,
+          INTAKE_SYSTEM,
+          transcript,
+          model === intakeModel
+            ? { reasoning: { effort: 'none' }, maxTokens: 200, temperature: 0.2, timeoutMs: 10_000 }
+            : undefined,
+        );
       } catch {
         intakeTransportFailed = true;
         continue;
@@ -127,13 +178,35 @@ export class Coordinator {
     // Fast verbal response first — the user hears back before planning lands.
     await this.deps.speak?.(intake.reply_ar);
 
-    let planRaw: string;
+    let planRaw: string | null = null;
     try {
-      planRaw = await this.deps.chat(coordinatorModel, COORDINATOR_SYSTEM, intake.task_en);
+      // Planning is background work: generous ceiling so a slow model still
+      // delivers (intake keeps the tight budget for fast failover instead).
+      // Strict schema mode — plain json_object lets the model drift into prose.
+      planRaw = await this.deps.chat(coordinatorModel, COORDINATOR_SYSTEM, intake.task_en, {
+        timeoutMs: 25_000,
+        temperature: 0.2,
+        maxTokens: 300,
+        responseFormat: PLAN_RESPONSE_FORMAT,
+      });
     } catch {
-      return { ok: false, replyAr: intake.reply_ar, taskEn: intake.task_en, receipt: null, detail: 'plan-failed' };
+      planRaw = null;
     }
-    const plan = parseSchema(PlanSchema, planRaw);
+    let plan = planRaw === null ? null : parseSchema(PlanSchema, planRaw);
+    if (plan === null) {
+      // One bounded retry with a sterner format reminder. No unbounded loops.
+      try {
+        const retry = await this.deps.chat(
+          coordinatorModel,
+          `${COORDINATOR_SYSTEM}\nCRITICAL: output ONLY the JSON object. Any prose invalidates the entire response.`,
+          intake.task_en,
+          { timeoutMs: 25_000, temperature: 0.2, maxTokens: 300, responseFormat: PLAN_RESPONSE_FORMAT },
+        );
+        plan = parseSchema(PlanSchema, retry);
+      } catch {
+        plan = null;
+      }
+    }
     if (plan === null) {
       return { ok: false, replyAr: intake.reply_ar, taskEn: intake.task_en, receipt: null, detail: 'plan-invalid' };
     }

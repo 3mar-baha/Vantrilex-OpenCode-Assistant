@@ -136,4 +136,23 @@ describe('createCommandHandler', () => {
     }
     expect(await h.handler(cmd({ kind: 'setPersona', persona: 'nour' }))).toMatchObject({ ok: true });
   });
+
+  test('abort trips the speech gate; silence when no gate is wired', async () => {
+    const aborted: string[] = [];
+    const withGate = createCommandHandler({
+      client: {
+        setSessionAgent: async () => undefined,
+        setSessionModel: async () => undefined,
+        toggleSessionSkill: async () => undefined,
+        execSessionShell: async () => undefined,
+      },
+      switchSession: () => undefined,
+      activeSessionId: () => undefined,
+      onAbort: () => void aborted.push('abort'),
+    });
+    expect(await withGate(cmd({ kind: 'abort' }))).toEqual({ ok: true });
+    expect(aborted).toEqual(['abort']);
+    const bare = harness();
+    expect(await bare.handler(cmd({ kind: 'abort' }))).toEqual({ ok: true });
+  });
 });
