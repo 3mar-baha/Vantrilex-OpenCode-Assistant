@@ -134,3 +134,38 @@ body,
 .vx-input:focus {
   border-color: var(--vx-accent);
 }
+
+/* Whiteboard sketch dialect (repo SVG diagrams: hero-banner, desktop-portal,
+   architecture-flow). Signature inks on the dark HUD: blueprint blue for
+   structure, amber for attention, muted green for healthy states. Borders stay
+   1px and flat — the hand feel comes from organic corner radii, never glow. */
+:root {
+  --vx-blue: #2563eb;
+  --vx-blue-soft: rgba(37, 99, 235, 0.35);
+  --vx-amber: #d97706;
+  --vx-amber-soft: rgba(217, 119, 6, 0.35);
+  --vx-green: #16a34a;
+  --vx-green-soft: rgba(22, 163, 74, 0.32);
+}
+
+/* Sketch card: asymmetric corners read hand-drawn at HUD scale. Unlayered, so
+   it wins over Tailwind's rounded-* utilities without touching layout
+   (auto-size safe: radius only, no outline offset, no extra box). */
+.vx-sketch-card {
+  border-radius: 10px 13px 9px 12px;
+}
+
+/* Sketch rule: a 3px hand-underline accent for section breaks. */
+.vx-sketch-rule {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--vx-amber);
+  transform: rotate(-0.3deg);
+}
+
+/* Technical metrics: status pills, session IDs, badges, latency readouts. */
+.vx-mono-metric {
+  font-family: var(--vx-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}

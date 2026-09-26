@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
 
-// SiriWaveCanvas — kopiro/siriwave iOS-classic replication: 5 sine curves with
-// the upstream attenuation/lineWidth/opacity table, `lighter` compositing for
-// the cyan/blue glow, and lerped speed/amplitude (lerpSpeed) easing toward
-// per-mode targets. idle breathes; active speaks. Reduced motion (or missing
-// 2D context) renders one static frame.
+// SiriWaveCanvas — sine-flow backdrop plus the 5-bar emblem voiceprint.
+// The curves breathe (lerped speed/amplitude per mode: idle breathes, active
+// speaks); the solid blueprint bars echo assets/icon.svg and scale with the
+// same lerped amplitude, so the mark itself reacts to live audio. Reduced
+// motion (or missing 2D context) renders one static frame.
 export type SiriWaveMode = 'idle' | 'active';
 
 export interface SiriWaveCanvasProps {
@@ -27,7 +27,15 @@ const CURVES = [
 
 const LERP_SPEED = 0.06;
 
-export function SiriWaveCanvas({ mode, color = '#38bdf8', reducedMotion = false }: SiriWaveCanvasProps): JSX.Element {
+// Emblem voiceprint: short, medium, tall center, medium, short — relative
+// heights from WaveformEmblem (assets/icon.svg), drawn solid in emblem blue.
+const EMBLEM_BLUE = '#2563eb';
+const BAR_FRACS = [0.43, 0.64, 1, 0.57, 0.36] as const;
+const BAR_W = 22;
+const BAR_GAP = 12;
+const BAR_MAX_H = 64;
+
+export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = false }: SiriWaveCanvasProps): JSX.Element {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const modeRef = useRef<SiriWaveMode>(mode);
   useEffect(() => {
@@ -81,9 +89,26 @@ export function SiriWaveCanvas({ mode, color = '#38bdf8', reducedMotion = false 
           else ctx.lineTo(x, y);
         }
         ctx.strokeStyle = color;
-        ctx.globalAlpha = curve.opacity;
+        ctx.globalAlpha = curve.opacity * 0.45;
         ctx.lineWidth = curve.lineWidth;
         ctx.stroke();
+      }
+      // Emblem bars over the flow: heights breathe with the lerped amplitude.
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = EMBLEM_BLUE;
+      const span = BAR_FRACS.length * BAR_W + (BAR_FRACS.length - 1) * BAR_GAP;
+      let bx = cx - span / 2;
+      for (const frac of BAR_FRACS) {
+        const h = Math.max(6, frac * BAR_MAX_H * (0.35 + 0.65 * amplitude));
+        const by = cy - h / 2;
+        if (typeof ctx.roundRect === 'function') {
+          ctx.beginPath();
+          ctx.roundRect(bx, by, BAR_W, h, BAR_W / 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(bx, by, BAR_W, h);
+        }
+        bx += BAR_W + BAR_GAP;
       }
       ctx.globalAlpha = 1;
     };

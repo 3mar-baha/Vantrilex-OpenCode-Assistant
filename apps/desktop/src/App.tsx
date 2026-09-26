@@ -264,7 +264,7 @@ export function App(): JSX.Element {
       <div
         ref={cardRef}
         data-tauri-drag-region
-        className="flex w-[440px] flex-col overflow-hidden rounded-lg border border-[#26282e] bg-[#18191d]"
+        className="flex w-[440px] flex-col overflow-hidden rounded-lg border border-[#26282e] bg-[#18191d] vx-sketch-card"
       >
         <header data-tauri-drag-region className="flex items-center gap-3 border-b border-[#26282e] px-4 py-3">
           <WaveformEmblem />
@@ -280,7 +280,7 @@ export function App(): JSX.Element {
             role="status"
             aria-live="polite"
             title={`حالة الاتصال: ${statusPill.text.replace('● ', '')}`}
-            className="ms-auto text-sm text-[#a1a1aa]"
+            className="ms-auto text-sm text-[#a1a1aa] vx-mono-metric"
           >
             {statusPill.text}
           </span>
@@ -324,7 +324,7 @@ export function App(): JSX.Element {
                 onClick={() => handleSelectPersona(p)}
                 className={`rounded-[6px] border px-3 py-1 text-xs ${
                   persona === p
-                    ? 'border-[#3b82f6] text-[#f4f4f5]'
+                    ? 'border-[#2563eb] text-[#f4f4f5]'
                     : 'border-[#26282e] text-[#a1a1aa] hover:text-[#f4f4f5]'
                 }`}
               >
@@ -335,7 +335,7 @@ export function App(): JSX.Element {
         </div>
 
         <main className="flex flex-col items-center gap-4 px-4 py-5">
-          <SiriWaveCanvas mode={live ? 'active' : 'idle'} color="#3b82f6" />
+          <SiriWaveCanvas mode={live ? 'active' : 'idle'} color="#2563eb" />
           <div className="flex items-center gap-3" data-testid="control-row">
             <button
               data-testid="mic-toggle"
@@ -346,7 +346,7 @@ export function App(): JSX.Element {
               className={`flex h-14 w-14 items-center justify-center rounded-full border transition ${
                 userMuted
                   ? 'border-[#f87171] text-[#f87171]'
-                  : 'border-[#26282e] bg-[#0e0f12] text-[#a1a1aa] hover:border-[#3b82f6] hover:text-[#f4f4f5]'
+                  : 'border-[#26282e] bg-[#0e0f12] text-[#a1a1aa] hover:border-[#2563eb] hover:text-[#f4f4f5]'
               }`}
             >
               {userMuted ? <MicOffGlyph /> : <MicGlyph />}
@@ -360,7 +360,7 @@ export function App(): JSX.Element {
               className={`flex h-14 w-14 items-center justify-center rounded-full border transition ${
                 botMuted
                   ? 'border-[#f87171] text-[#f87171]'
-                  : 'border-[#26282e] bg-[#0e0f12] text-[#a1a1aa] hover:border-[#3b82f6] hover:text-[#f4f4f5]'
+                  : 'border-[#26282e] bg-[#0e0f12] text-[#a1a1aa] hover:border-[#2563eb] hover:text-[#f4f4f5]'
               }`}
             >
               {botMuted ? <BotOffGlyph /> : <BotGlyph />}

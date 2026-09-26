@@ -11,7 +11,7 @@ function mount(mode: SiriWaveMode): void {
   document.body.appendChild(host);
   root = createRoot(host);
   act(() => {
-    root!.render(<SiriWaveCanvas mode={mode} color="#38bdf8" />);
+    root!.render(<SiriWaveCanvas mode={mode} color="#2563eb" />);
   });
 }
 
@@ -27,7 +27,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('SiriWaveCanvas (kopiro multi-curve wave)', () => {
+describe('SiriWaveCanvas (sine flow + emblem voiceprint)', () => {
   test('renders a labelled canvas in both modes without crashing', () => {
     mount('idle');
     const canvas = document.body.querySelector('[data-testid="siri-wave"]');
