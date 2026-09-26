@@ -7,9 +7,13 @@ import type { SessionId } from './common/brands.js';
 import { UiServer } from './ipc/index.js';
 import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
+import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
+import { Keyring, type AcquiredKey } from './voice/keyring.js';
+import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
+import { OpenRouterBrainClient } from './voice/brain.js';
 import { writeKeyPools } from './voice/key-store.js';
 
 // Production daemon — the missing composition root. It adopts an already-running
@@ -69,6 +73,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     client,
     switchSession: (id) => {
       activeSession = id;
+      audio?.reset();
     },
     activeSessionId: () => activeSession,
     setPersona: (persona) => {
@@ -85,6 +90,50 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       },
     },
   });
+
+  // Voice capture pipeline (P4): binary PCM from the shell → Whisper →
+  // brain → active-session dispatch. Built only when the vault holds keys;
+  // a keyless daemon keeps the control plane up and drops audio.
+  const keyMaterial = (key: AcquiredKey): string => Buffer.from(key.material).toString('utf8');
+  let audio: AudioPipeline | null = null;
+  try {
+    const ring = Keyring.load(vault);
+    audio = new AudioPipeline({
+      transcribe: async (pcm) => {
+        const key = ring.acquire('groq');
+        try {
+          return (await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)))).text;
+        } finally {
+          ring.release(key, true);
+        }
+      },
+      think: async (transcript) => {
+        const key = ring.acquire('openrouter');
+        try {
+          const { output } = await new OpenRouterBrainClient(keyMaterial(key)).respond(
+            transcript,
+            'voice capture session',
+          );
+          return { reply: output.reply };
+        } finally {
+          ring.release(key, true);
+        }
+      },
+      dispatch: async (text) => {
+        const session = activeSession as SessionId;
+        return client.promptSession(session, text, { origin: 'voice', actor: 'capture' });
+      },
+      activeSessionId: () => activeSession,
+    });
+  } catch {
+    audio = null;
+  }
+  if (audio !== null) {
+    const pipeline = audio;
+    ui.onAudio = (pcm) => {
+      void pipeline.pushChunk(pcm).catch(() => undefined);
+    };
+  }
 
   const inventory = new SessionInventory(client, {
     ...(options.inventoryIntervalMs !== undefined ? { intervalMs: options.inventoryIntervalMs } : {}),

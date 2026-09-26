@@ -10,6 +10,7 @@ import {
   FrameReassembler,
   HelloFrameSchema,
   IPC_TOKEN_ENV,
+  MAX_AUDIO_BYTES,
   MISSED_PINGS_LIMIT,
   Opcode,
   parseSeq,
@@ -81,6 +82,8 @@ export interface CommandOutcome {
 
 export class UiServer {
   onCommand: ((cmd: UiCommand) => CommandOutcome | Promise<CommandOutcome> | void) | null = null;
+  /** Raw PCM ingest (P4 voice capture). Binary frames only; never parsed as commands. */
+  onAudio: ((pcm: Buffer) => void) | null = null;
   private readonly token: string;
   private readonly contractVersion: string;
   private readonly pingIntervalMs: number;
@@ -324,7 +327,19 @@ export class UiServer {
         conn.missedPongs = 0;
         continue;
       }
-      if (frame.opcode !== Opcode.Text) continue;
+      if (frame.opcode !== Opcode.Text && frame.opcode !== Opcode.Binary) continue;
+      if (frame.opcode === Opcode.Binary) {
+        if (frame.payload.byteLength > MAX_AUDIO_BYTES) {
+          safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'audio frame too large' })));
+          continue;
+        }
+        try {
+          this.onAudio?.(Buffer.from(frame.payload));
+        } catch {
+          // Ingest errors must never crash the socket; the control plane stays up.
+        }
+        continue;
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(Buffer.from(frame.payload).toString('utf8'));

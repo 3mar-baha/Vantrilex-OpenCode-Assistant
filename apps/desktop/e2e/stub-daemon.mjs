@@ -7,8 +7,12 @@ import { UiServer } from '../../../dist/ipc/ui-server.js';
 const token = process.env['VOICE_RUNTIME_IPC_TOKEN'] ?? 'e2e-token';
 let server = new UiServer({ token, contractVersion: '3.1.0' });
 const received = [];
+const audioFrames = [];
 server.onCommand = (cmd) => {
   received.push(cmd);
+};
+server.onAudio = (pcm) => {
+  audioFrames.push(pcm.byteLength);
 };
 
 const CONTROL_PORT = 4197;
@@ -33,6 +37,15 @@ const control = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && req.url === '/commands') {
     send(200, received);
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/audio') {
+    send(200, { frames: audioFrames.length, bytes: audioFrames.reduce((a, b) => a + b, 0) });
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/audio/reset') {
+    audioFrames.length = 0;
+    send(200, { reset: true });
     return;
   }
 
@@ -66,6 +79,9 @@ const control = http.createServer((req, res) => {
     server = new UiServer({ token, contractVersion: '3.1.0' });
     server.onCommand = (cmd) => {
       received.push(cmd);
+    };
+    server.onAudio = (pcm) => {
+      audioFrames.push(pcm.byteLength);
     };
     server.start(4097).then(
       () => send(200, { revived: true }),

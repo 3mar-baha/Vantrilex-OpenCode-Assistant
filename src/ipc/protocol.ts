@@ -13,6 +13,12 @@ export const MISSED_PINGS_LIMIT = 3;
 export const RESUME_BUFFER_CAP = 256;
 /** Hard inbound message cap — a single frame may never exceed this. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
+/** Voice capture contract (P4): 16 kHz mono Int16 PCM over binary frames. */
+export const AUDIO_SAMPLE_RATE = 16000;
+export const AUDIO_FRAME_MS = 100;
+export const AUDIO_FRAME_BYTES = ((AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS) / 1000) * 2;
+/** Per-chunk audio cap — glitches get an error frame, never a dropped socket. */
+export const MAX_AUDIO_BYTES = 64 * 1024;
 export const ACK_KIND = 'ack';
 export const ERROR_KIND = 'error';
 

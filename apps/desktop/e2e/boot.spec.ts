@@ -23,8 +23,9 @@ test('controls expose Arabic tooltips and toggle their pressed state', async ({ 
 
   const mic = page.getByTestId('mic-toggle');
   await expect(mic).toHaveAttribute('title', /الميكروفون/);
-  await mic.click();
   await expect(mic).toHaveAttribute('aria-pressed', 'true');
+  await mic.click();
+  await expect(mic).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('announce')).not.toHaveText('');
 
   const bot = page.getByTestId('bot-toggle');

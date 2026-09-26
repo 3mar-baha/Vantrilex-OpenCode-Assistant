@@ -289,3 +289,59 @@ describe('UiServer resume + broadcast', () => {
   });
 });
 
+
+describe('UiServer binary audio ingest (P4 voice capture)', () => {
+  function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
+    const start = Date.now();
+    return new Promise((resolve, reject) => {
+      const tick = (): void => {
+        if (cond()) {
+          resolve();
+          return;
+        }
+        if (Date.now() - start > ms) {
+          reject(new Error('waitFor timeout'));
+          return;
+        }
+        setTimeout(tick, 10);
+      };
+      tick();
+    });
+  }
+
+  test('binary PCM frame reaches onAudio with exact bytes', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText(); // hello
+    const received: Buffer[] = [];
+    server.onAudio = (pcm) => void received.push(pcm);
+    const pcm = Buffer.from([1, 2, 3, 4, 5, 6]);
+    sock.write(maskFrame(Opcode.Binary, pcm, Buffer.from([9, 9, 9, 9])));
+    await waitFor(() => received.length > 0);
+    expect(received[0]).toEqual(pcm);
+    sock.end();
+  });
+
+  test('oversized binary frame gets an error frame, no onAudio, socket survives', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText(); // hello
+    let called = 0;
+    server.onAudio = () => {
+      called += 1;
+    };
+    const big = Buffer.alloc(65 * 1024, 7);
+    sock.write(maskFrame(Opcode.Binary, big, Buffer.from([1, 2, 3, 4])));
+    const err = JSON.parse(await sock.readText()) as { type: string };
+    expect(err.type).toBe('error');
+    expect(called).toBe(0);
+    expect(server.listening).toBe(true);
+    sock.end();
+  });
+});

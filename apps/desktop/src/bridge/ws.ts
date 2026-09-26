@@ -59,6 +59,7 @@ export interface CommandMsg {
 
 export interface SocketLike {
   send(data: string): void;
+  sendBinary(data: Uint8Array): void;
   close(): void;
   onopen: ((this: unknown, ev: unknown) => void) | null;
   onmessage: ((this: unknown, ev: { data: unknown }) => void) | null;
@@ -149,6 +150,24 @@ export interface BridgeOptions {
   readonly onClose?: () => void;
 }
 
+/** Adapt a native browser WebSocket to the SocketLike surface (binary included). */
+function adaptWebSocket(ws: WebSocket): SocketLike {
+  const adapter: SocketLike = {
+    send: (data: string) => ws.send(data),
+    sendBinary: (data: Uint8Array) => ws.send(data),
+    close: () => ws.close(),
+    onopen: null,
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+  };
+  ws.onopen = (ev: Event) => adapter.onopen?.(ev);
+  ws.onmessage = (ev: MessageEvent) => adapter.onmessage?.({ data: ev.data });
+  ws.onclose = (ev: CloseEvent) => adapter.onclose?.(ev);
+  ws.onerror = (ev: Event) => adapter.onerror?.(ev);
+  return adapter;
+}
+
 export class VoxauraBridge {
   private readonly opts: BridgeOptions;
   private socket: SocketLike | null = null;
@@ -171,7 +190,7 @@ export class VoxauraBridge {
     if (this.disposed || this.refused || this.socket !== null) return;
     const base = this.opts.url ?? UI_WS_URL;
     const url = this.lastSeq >= 0 ? withQuery(base, 'lastSeq', String(this.lastSeq)) : base;
-    const create = this.opts.createSocket ?? ((u, p) => new WebSocket(u, p) as unknown as SocketLike);
+    const create = this.opts.createSocket ?? ((u, p) => adaptWebSocket(new WebSocket(u, p)));
     const socket = create(url, [UI_SUBPROTOCOL, this.opts.token]);
     this.socket = socket;
     socket.onopen = () => {
@@ -209,6 +228,21 @@ export class VoxauraBridge {
         resolve(false);
       }
     });
+  }
+
+  /**
+   * Fire-and-forget PCM uplink (P4 voice capture). Binary frames bypass the
+   * ack ledger by design — audio is loss-tolerant, commands are not.
+   */
+  sendPcm(bytes: Uint8Array): boolean {
+    const socket = this.socket;
+    if (socket === null) return false;
+    try {
+      socket.sendBinary(bytes);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   dispose(): void {

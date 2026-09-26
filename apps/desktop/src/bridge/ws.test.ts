@@ -17,6 +17,7 @@ class FakeSocket implements SocketLike {
   onclose: SocketLike['onclose'] = null;
   onerror: SocketLike['onerror'] = null;
   readonly sent: string[] = [];
+  readonly sentBinary: Uint8Array[] = [];
   closed = false;
   constructor(
     readonly url: string,
@@ -24,6 +25,9 @@ class FakeSocket implements SocketLike {
   ) {}
   send(data: string): void {
     this.sent.push(data);
+  }
+  sendBinary(data: Uint8Array): void {
+    this.sentBinary.push(data);
   }
   close(): void {
     this.closed = true;
@@ -322,3 +326,56 @@ describe('VoxauraBridge handshake', () => {
   });
 });
 
+
+describe('sendPcm (P4 binary voice uplink)', () => {
+  function liveBridge(): { bridge: VoxauraBridge; getSocket: () => FakeSocket } {
+    let socket: FakeSocket | null = null;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    return {
+      bridge,
+      getSocket: () => {
+        if (socket === null) throw new Error('socket not created');
+        return socket;
+      },
+    };
+  }
+
+  test('returns false with no socket, true after connect, bytes recorded', () => {
+    const idle = new VoxauraBridge({ token: 'tok', contractVersion: '3.1.0' });
+    expect(idle.sendPcm(new Uint8Array([1, 2, 3]))).toBe(false);
+    idle.dispose();
+    const { bridge, getSocket } = liveBridge();
+    const sock = getSocket();
+    sock.onopen?.(null);
+    const frame = new Uint8Array([4, 5, 6, 7]);
+    expect(bridge.sendPcm(frame)).toBe(true);
+    expect(sock.sentBinary).toHaveLength(1);
+    expect(sock.sentBinary[0]).toBe(frame);
+    bridge.dispose();
+  });
+
+  test('a throwing socket resolves false instead of crashing', () => {
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      createSocket: (url, protocols) => {
+        const sock = new FakeSocket(url, protocols);
+        sock.sendBinary = () => {
+          throw new Error('dead');
+        };
+        return sock;
+      },
+    });
+    bridge.connect();
+    expect(bridge.sendPcm(new Uint8Array([1]))).toBe(false);
+    bridge.dispose();
+  });
+});

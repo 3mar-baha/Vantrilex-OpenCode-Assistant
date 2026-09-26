@@ -5,6 +5,7 @@ import { SiriWaveCanvas } from './components/waveform/SiriWaveCanvas.js';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
+import { AudioCapture } from './audio/capture.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { envToken, resolveIpcToken } from './settings/ipc-token.js';
@@ -24,7 +25,7 @@ export function App(): JSX.Element {
   const [bridge, setBridge] = useState<BridgeState>(envToken() !== undefined ? 'connecting' : 'degraded');
   const [persona, setPersona] = useState<'kareem' | 'nour'>('kareem');
   const [matrix, setMatrix] = useState<MatrixState>(0);
-  const [userMuted, setUserMuted] = useState(false);
+  const [userMuted, setUserMuted] = useState(true);
   const [botMuted, setBotMuted] = useState(false);
   const [announce, setAnnounce] = useState('');
   const [sessionState, dispatchSession] = useReducer(sessionsReducer, initialSessionsState);
@@ -35,6 +36,8 @@ export function App(): JSX.Element {
   const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
+  const captureRef = useRef<AudioCapture | null>(null);
+  if (captureRef.current === null) captureRef.current = new AudioCapture();
   const cardRef = useRef<HTMLDivElement>(null);
   useAutoSize(cardRef, { paddingY: 16 });
   const lastFrameAt = useRef<number>(Date.now());
@@ -109,6 +112,9 @@ export function App(): JSX.Element {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  // Release the microphone when the shell unmounts (no dangling tracks).
+  useEffect(() => () => captureRef.current?.stop(), []);
+
   const send = (cmd: Parameters<VoxauraBridge['sendCommand']>[0], ok: string, fail: string): void => {
     const bridgeClient = bridgeRef.current;
     if (bridgeClient === null) {
@@ -171,6 +177,21 @@ export function App(): JSX.Element {
   const toggleUserMute = (): void => {
     const next = !userMuted;
     setUserMuted(next);
+    const capture = captureRef.current;
+    if (capture !== null) {
+      if (next) {
+        capture.stop();
+      } else {
+        void capture
+          .start({
+            onFrame: (bytes) => {
+              bridgeRef.current?.sendPcm(bytes);
+            },
+            onError: () => setAnnounce('تعذّر الوصول إلى الميكروفون'),
+          })
+          .catch(() => setAnnounce('تعذّر الوصول إلى الميكروفون'));
+      }
+    }
     send({ id: nextCmdId(), kind: 'deafen' }, next ? 'تم صمّ الميكروفون' : 'تم تشغيل الميكروفون', 'تعذّر تغيير حالة الميكروفون');
   };
 
