@@ -307,4 +307,19 @@ the brain lane needs a valid OpenRouter key (stored credential returns 401).
 | Secret scan | 10 build artifacts, 0 leaks |
 | Housekeeping | coral drafts + registry removed; tree fully clean |
 
+## P4b speech downlink (daemon speech → shell playback)
+
+| Item | Change | Commit | Evidence |
+|---|---|---|---|
+| **Framing** | `src/ipc/audio.ts`: `[type:1][seq:u16be][mp3…]`, 32 KiB chunks, sequential seq | 21f4a20 | 4 codec tests incl. wrap + rejection |
+| **Fan-out** | `UiServer.broadcastAudio` splits MP3 and fans binary frames to every shell | 21f4a20 | loopback test: 70 KiB → 3 chunks, seq 0–2, lossless |
+| **Renderer** | `AudioPlayer` strict FIFO (decode failures skip, never stall); bridge routes binary to `onAudio` with Blob fallback; `binaryType=arraybuffer` set (browsers default to Blob — the actual bug found) | 21f4a20 | 5 player tests; 2 bridge tests; speaking indicator latches 1.5 s |
+| **Daemon** | utterance replies synthesized via Fish and broadcast; failures swallowed by design | 21f4a20 | — (covered by pipeline + broadcast tests) |
+| **E2E proof** | stub publishes speech → indicator lights | 21f4a20 | `downlink.spec.ts` green in the 13/13 suite |
+
+**Gates:** root 212 + desktop 84 unit; E2E 13/13; tsc clean.
+
+**Still open:** spoken replies need a valid OpenRouter key upstream (stored credential returns 401);
+P5 runtime agent orchestration remains deferred.
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
