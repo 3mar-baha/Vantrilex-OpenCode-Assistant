@@ -14,7 +14,16 @@ test('settings opens in its own window, tabs swap content, Esc closes', async ({
   await expect(settings.getByRole('tab')).toHaveCount(4);
   // Keys are decoupled from general settings.
   await expect(settings.getByTestId('apikey-groq')).toHaveCount(0);
-  await expect(settings.getByTestId('chain-nemotron')).toBeVisible();
+  // Anchored on `chain-list`, the container, not a per-agent testid. This
+  // asserted `chain-nemotron` until dc84866 moved the coordinator role to
+  // Inkling and the id became `chain-inkling-coordinator`; the unit test was
+  // updated with that change and this E2E spec was not, so it went red only
+  // when E2E was run outside the `test:vantrilex` gate. A roster change should
+  // not be able to break this again, so assert the list and that it is
+  // populated rather than pinning one agent's name.
+  const chain = settings.getByTestId('chain-list');
+  await expect(chain).toBeVisible();
+  await expect(chain.locator('[data-testid^="chain-"]')).not.toHaveCount(0);
 
   await settings.getByRole('tab', { name: /الصوت/ }).click();
   await settings.getByTestId('persona-nour').click();
