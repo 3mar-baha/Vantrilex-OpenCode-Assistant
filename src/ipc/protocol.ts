@@ -10,6 +10,13 @@ export const IPC_TOKEN_ENV = 'VOICE_RUNTIME_IPC_TOKEN';
 export const SERVE_PORT = 4096;
 export const PING_INTERVAL_MS = 5000;
 export const MISSED_PINGS_LIMIT = 3;
+/**
+ * L15: hard cap on simultaneous WS-4097 clients. The surface is loopback-only
+ * and single-user, so this is generous for legitimate use while bounding what a
+ * stuck or hostile local client can accumulate — the connection set was
+ * previously unbounded, so every broadcast fanned out to all of it.
+ */
+export const MAX_CONNECTIONS = 8;
 export const RESUME_BUFFER_CAP = 256;
 /** Hard inbound message cap — a single frame may never exceed this. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;

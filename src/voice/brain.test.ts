@@ -50,12 +50,14 @@ describe('OpenRouterBrainClient', () => {
   });
 
   test('persistent empties throw retryable; non-JSON and 401 throw non-retryable', async () => {
+    // L24: these used to all carry code BRAIN_TIMEOUT. The codes are now honest
+    // so a caller can tell a bad key from a bad completion from a slow network.
     const empty = new OpenRouterBrainClient(
       'k',
       undefined,
       mockFetch([{ status: 200, body: { choices: [{ message: { content: '' } }] } }]),
     );
-    await expect(empty.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_TIMEOUT', retryable: true });
+    await expect(empty.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_REJECTED', retryable: true });
 
     const bad = new OpenRouterBrainClient(
       'k',
@@ -70,6 +72,59 @@ describe('OpenRouterBrainClient', () => {
       mockFetch([{ status: 401, body: { error: { message: 'bad key' } } }]),
     );
     await expect(denied.respond('hi', 'ctx')).rejects.toMatchObject({ retryable: false });
+  });
+
+  // L24 — the point of the change. Each cause must be separately identifiable,
+  // because the user action differs: rotate the key, wait for quota, or retry.
+  test('a rejected credential is BRAIN_AUTH, not a timeout', async () => {
+    const c = new OpenRouterBrainClient('k', undefined, mockFetch([{ status: 403, body: {} }]));
+    await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_AUTH', retryable: false });
+  });
+
+  test('HTTP 429 is RATE_LIMITED and is never retried', async () => {
+    let calls = 0;
+    const counting = ((...args: unknown[]) => {
+      calls += 1;
+      return mockFetch([{ status: 429, body: {} }])(...(args as []));
+    }) as unknown as typeof fetch;
+    const c = new OpenRouterBrainClient('k', undefined, counting);
+    await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'RATE_LIMITED', retryable: false });
+    // Retrying an exhausted quota just burns the same exhausted budget.
+    expect(calls).toBe(1);
+  });
+
+  test('a 5xx is retryable and distinct from auth and quota', async () => {
+    const c = new OpenRouterBrainClient('k', undefined, mockFetch([{ status: 503, body: {} }]));
+    await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_REJECTED', retryable: true });
+  });
+
+  test('a genuine timeout is still BRAIN_TIMEOUT', async () => {
+    // The one case the old code was actually named for must keep its name.
+    const aborting = (() => {
+      const e = new Error('aborted');
+      e.name = 'AbortError';
+      return Promise.reject(e);
+    }) as unknown as typeof fetch;
+    const c = new OpenRouterBrainClient('k', undefined, aborting);
+    await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_TIMEOUT' });
+  });
+
+  test('the four rejection causes are four different codes', async () => {
+    const codes = new Set<string>();
+    for (const [status, expected] of [
+      [401, 'BRAIN_AUTH'],
+      [429, 'RATE_LIMITED'],
+      [503, 'BRAIN_REJECTED'],
+    ] as const) {
+      const c = new OpenRouterBrainClient('k', undefined, mockFetch([{ status, body: {} }]));
+      try {
+        await c.respond('hi', 'ctx');
+      } catch (err) {
+        codes.add((err as { code: string }).code);
+        expect((err as { code: string }).code).toBe(expected);
+      }
+    }
+    expect(codes.size).toBe(3);
   });
 });
 

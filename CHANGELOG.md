@@ -1,5 +1,140 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.6.2 — bounded resources, honest microphone, live diagnostics (2026-09-27)
+
+Install v0.6.1 or later. v0.6.0 is broken and must not be installed.
+
+### The microphone no longer stays hot in a hidden window (L19)
+
+A voice-first HUD is unmuted by default, so the old behaviour — the capture graph
+running for as long as the window merely lost focus — was a standing privacy and
+battery cost nobody asked for. A **hidden** window now releases the hardware track
+and re-acquires it on return. The user's own mute choice is never overridden, so
+minimising and restoring is non-destructive.
+
+The start sequence moved into a `useCallback` so the visibility handler can
+genuinely re-acquire the hardware rather than just flipping a flag; a mic that
+never restarts after a minimise is worse than the bug being fixed. The rule lives
+in `micPolicy()` in `src/audio/vad.ts` and is unit-tested.
+
+### Microphone failures now say why (SEC-7, partially)
+
+`getUserMedia` rejects with a `DOMException` whose `name` is the only thing that
+separates the causes, and all of them were being reported as one generic Arabic
+sentence — leaving "voice is dead" undiagnosable from a user's report alone.
+`NotAllowedError`, `NotFoundError` and `NotReadableError` now produce three
+distinct instructions.
+
+**Still unverified:** whether WebView2 grants the microphone in a packaged build.
+wry registers a `PermissionRequested` handler that leaves the mic at
+`PERMISSION_STATE_DEFAULT` (it only explicitly allows clipboard reads), and
+`tauri-runtime-wry` exposes no passthrough to change that. Whether WebView2 then
+prompts or silently denies could not be determined from the build machine, and
+Tauri has no hook to force it. The distinct notice is the mitigation: a user
+reporting `NotAllowedError` identifies the case precisely.
+
+### Bounded resources (L15, L20)
+
+- **WS-4097 connections were unbounded.** A loopback client could open sockets
+  indefinitely and every broadcast fanned out to all of them. Capped at 8,
+  oldest evicted first — evicting the newest would break the real user, who is
+  the one that just reconnected.
+- **Parked FR-12 commands were unbounded.** The map was swept only when the next
+  destructive command arrived, so a burst of parks with no follow-up grew it
+  without bound while each entry stayed *executable* for the full TTL. Capped at
+  8, oldest evicted, so a legitimate confirmation is never the one dropped.
+
+Both caps are verified non-vacuous: disabling either makes its tests fail.
+
+### Dead supervision code deleted (L13)
+
+`SupervisedLauncher`, `resolvePort` and the whole `siblings.ts` orphan sweeper
+were a complete, plausible-looking second supervision layer that **nothing ever
+called** — and `killTree` documented the sweeper as its "backstop", so two
+mutually-referencing safety nets existed, neither running. A maintainer reading
+that code would reasonably conclude orphans were handled.
+
+Process ownership now lives in exactly one place: the Rust
+`KILL_ON_JOB_CLOSE` Job Object, covered by 26 Rust tests and verified by
+cold-launching the packaged build. `resolvePort` went for a second reason — on a
+password mismatch it escalated to `basePort + 1`, i.e. **4097**, which is the
+WS-4097 UI bridge port. Reviving it would have handed serve the UI bridge's
+socket. Only `probeHealth` survived, and it is what `doctor` actually uses.
+
+### Telemetry is finally wired (audit §3.4)
+
+`TelemetryWriter` was fully built, schema-validated and unit-tested, and then
+never called — dead in exactly the way `SileroVad` was. It now records STT, BRAIN
+and TTS latency plus the four real failure paths (`STT_FAILED`, `STT_TIMEOUT`,
+`BRAIN_FAILED`, `TTS_FAILED`) and the keyless state (`KEYS_MISSING`) to
+`~/.opencode-voice-runtime/voice-runtime.jsonl`, flushed on shutdown.
+
+The closed error-code union gained `STT_TIMEOUT`, `BRAIN_FAILED` and
+`KEYS_MISSING`: it predated instrumentation, and reusing `BRAIN_TIMEOUT` for all
+three would have put a lie in the data. The schema still has **no** transcript or
+free-text field, so adversarial voice input cannot reach an agent through this
+channel, and every call is wrapped so a diagnostics bus can never break the voice
+loop it measures.
+
+Verified live: a keyless real daemon wrote a real `KEYS_MISSING` row.
+
+### Brain failures are no longer all "timeout" (L24)
+
+Six distinct brain failures — credential rejection, HTTP 429, 5xx, provider error
+body, empty completion, and a real timeout — all reported `BRAIN_TIMEOUT`. An
+expired key was indistinguishable from a slow network, and **quota exhaustion was
+not a timeout at all** but nothing could tell.
+
+Now: `BRAIN_AUTH` (401/403), `RATE_LIMITED` (429), `BRAIN_REJECTED` (5xx,
+provider error, empty or non-JSON completion), and `BRAIN_TIMEOUT` for the one
+case it was actually named for. The `retryable` flag is unchanged, so retry
+behaviour is preserved — and the retry loop now keys off `retryable` rather than
+off the old single code. 429 is deliberately **not** retried: retrying an
+exhausted quota just burns the same exhausted budget.
+
+This also unblocks the diagnostics bus, whose classifier could not previously
+see `QuotaExceeded` because the brain never emitted a quota code.
+
+### Orphan gate run to the full 30 cycles — and the gate itself was broken
+
+The audit specified 30 force-kill cycles; only 3 had ever been run. The first
+30-cycle script reported **30/30 ORPHAN**, which was a false alarm caused by two
+bugs in the script itself:
+
+- a helper that both printed *and* returned, so PowerShell captured its
+  diagnostic **strings** as the stray list — the count was never measured;
+- cleanup used `$_.Kill()` inside `foreach ($p in ...)`, so nothing was ever
+  killed and a single stray persisted through all 30 cycles.
+
+The counter-evidence was in its own output the whole time: `ports=0` on every
+cycle. The corrected gate separates printing from returning, prints process
+identity, and reports stale-ports and strays as independent signals.
+
+**Result, 30/30 clean:** each cycle brought up 3 processes (shell + sidecar
+`node.exe` + `opencode-cli.exe`); the `KILL_ON_JOB_CLOSE` Job Object reaped all
+three, ports 2→0. **0 stale ports, 0 stray processes.**
+
+A gate that reports a verdict it never measured is worse than no gate.
+
+### Version metadata corrected
+
+`docs/00-PROJECT-GUIDE.md` and `assets/hero-banner.svg` still said 0.6.0 — the
+0.6.1 bump missed them — and `package-lock.json` still said 0.5.0, two releases
+behind.
+
+### Gates
+tsc 0 · eslint 0 · root vitest **469** · desktop vitest **149** · `cargo test` 26 ·
+E2E **18/18** · `cargo build --release` 0 · orphan gate **30/30 clean**
+
+Installer: `Voxaura_0.6.2_x64-setup.exe`, 26,161,576 B,
+sha256 `C890CFB54F8CD84DBCE5D4319784586170E64C2A3F6465E7227CCCC6BE526E00`.
+Verified by installing and cold-launching: 4096 + 4097 bound, `daemon.log` empty.
+
+**Still unverified:** whether WebView2 grants the microphone in a packaged build.
+wry leaves the mic at `PERMISSION_STATE_DEFAULT` and `tauri-runtime-wry` exposes
+no passthrough, so it could not be forced or observed from the build machine.
+The three distinct failure notices are the mitigation.
+
 ## v0.6.1 — hotfix: the packaged daemon could not start (2026-09-27)
 
 **v0.6.0 is broken; do not install it.** `onnxruntime-node` is a native module the

@@ -42,6 +42,13 @@ const ErrorCodeSchema = z.enum([
   'SESSION_NOT_FOUND',
   'STT_FAILED',
   'BRAIN_TIMEOUT',
+  // Added when the writer was finally wired to the daemon. The closed union
+  // predated instrumentation and had no honest code for a STT stall, a brain
+  // failure, or a keyless daemon. Reusing BRAIN_TIMEOUT for all three would
+  // have put a lie in the data, which is the one thing this file must not do.
+  'STT_TIMEOUT',
+  'BRAIN_FAILED',
+  'KEYS_MISSING',
   'TTS_FAILED',
   'AUDIO_DEVICE_MISSING',
   'VAULT_CORRUPT',

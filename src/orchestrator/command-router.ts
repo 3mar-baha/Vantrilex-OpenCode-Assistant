@@ -64,6 +64,13 @@ export interface CommandRouterDeps {
 /** Kinds that may destroy work or touch the host — these require FR-12. */
 export const DESTRUCTIVE_KINDS: ReadonlySet<UiCommand['kind']> = new Set(['execSessionShell']);
 export const CONFIRMATION_TTL_MS = 60_000;
+/**
+ * L20: upper bound on parked (awaiting-confirmation) commands. A companion is
+ * single-user, so anything above a handful is a stuck client or a loop, not a
+ * legitimate burst. Oldest is evicted first so the in-flight confirmation is
+ * never the one dropped.
+ */
+export const MAX_PARKED = 8;
 
 /**
  * Session ids are opaque `ses_…` tokens — never paths or free text.
@@ -247,9 +254,18 @@ export function createCommandHandler(
           if (unsafe !== null) return { ok: false, detail: unsafe };
         }
         // FR-12: park the payload; nothing happens until an explicit confirm.
+        // L20: the map was swept ONLY when the next destructive command
+        // arrived, so a burst of parks with no follow-up grew it without bound
+        // and a parked command stayed executable for the full TTL. Cap it, and
+        // drop the OLDEST — the newest is the one being confirmed.
         pending.set(cmd.id, { at: now(), cmd });
         for (const [key, entry] of pending) {
           if (now() - entry.at > CONFIRMATION_TTL_MS) pending.delete(key);
+        }
+        while (pending.size > MAX_PARKED) {
+          const oldest = pending.keys().next();
+          if (oldest.done === true) break;
+          pending.delete(oldest.value);
         }
         return { ok: true, detail: 'confirmation-required' };
       }

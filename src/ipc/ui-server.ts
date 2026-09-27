@@ -13,6 +13,7 @@ import {
   IPC_TOKEN_ENV,
   MAX_AUDIO_BYTES,
   MISSED_PINGS_LIMIT,
+  MAX_CONNECTIONS,
   NoticeFrameSchema,
   Opcode,
   parseSeq,
@@ -336,7 +337,24 @@ export class UiServer {
       'utf8',
     );
     const conn: Conn = { socket, reassembler: new FrameReassembler(), missedPongs: 0 };
+    // L15: the connection set was unbounded, so a loopback client could open
+    // sockets indefinitely and every broadcast would fan out to all of them.
+    // A companion is single-user, so a handful is generous; evict the OLDEST,
+    // which is the least likely to be the live shell.
     this.conns.add(conn);
+    while (this.conns.size > MAX_CONNECTIONS) {
+      const oldest = this.conns.values().next();
+      if (oldest.done === true) break;
+      const victim = oldest.value;
+      this.conns.delete(victim);
+      // The eviction is visible in the connection count, which `ui connections`
+      // already reports; no logging facility exists in this module.
+      try {
+        victim.socket.end();
+      } catch {
+        // best-effort; already removed from the set
+      }
+    }
     socket.on('data', (chunk: Buffer) => this.onData(conn, chunk));
     socket.on('close', () => void this.conns.delete(conn));
     socket.on('error', () => void this.conns.delete(conn));

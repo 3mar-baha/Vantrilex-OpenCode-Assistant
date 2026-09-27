@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,8 @@ type SileroVadLike = {
   reset(): void;
 };
 import { writeKeyPools } from './voice/key-store.js';
+import { TelemetryWriter } from './telemetry/index.js';
+import type { SanitizedErrorClass, TelemetryInput } from './telemetry/index.js';
 
 // Production daemon — the missing composition root. It adopts an already-running
 // `opencode serve` (single-supervisor rule: it never fights one), owns the
@@ -210,6 +212,44 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // loop without a restart. A keyless daemon keeps the control plane up, drops
   // audio, and tells the shell to show the first-run call to action.
   const keyMaterial = (key: AcquiredKey): string => Buffer.from(key.material).toString('utf8');
+  /**
+   * Machine diagnostics (was built and never called — the observability hole
+   * from the audit's §3.4).
+   *
+   * The schema is a closed union with NO transcript or free-text field, so
+   * adversarial voice input cannot reach an agent through this channel. Every
+   * call is wrapped: telemetry must never be able to break the voice loop it is
+   * measuring, and a diagnostics bus that can crash the product is worse than
+   * none.
+   */
+  const telemetry = new TelemetryWriter(join(homedir(), '.opencode-voice-runtime', 'voice-runtime.jsonl'));
+  const record = (input: Omit<TelemetryInput, 'sessionId' | 'eventId'>): void => {
+    try {
+      telemetry.record({ sessionId: activeSession ?? 'none', eventId: randomUUID(), ...input });
+    } catch {
+      // Deliberately swallowed — see above.
+    }
+  };
+  /** Map a thrown value to the closed error-class union. Never leaks a message. */
+  const classify = (err: unknown): SanitizedErrorClass => {
+    if (err instanceof OrchestratorError) {
+      // Only reachable now that the brain stops reporting every failure as
+      // BRAIN_TIMEOUT (L24). Before that, quota exhaustion — the live blocker —
+      // was indistinguishable from a slow network here.
+      if (err.code === 'RATE_LIMITED') return 'QuotaExceeded';
+      if (err.code === 'BRAIN_AUTH') return 'AuthError';
+      if (err.code === 'BRAIN_REJECTED') return 'FetchError';
+      if (err.code === 'SERVE_UNREACHABLE' || err.code === 'SSE_DISCONNECTED') return 'FetchError';
+      if (err.code === 'CONFIG_INVALID' || err.code === 'HIGH_STAKES_CONFIRM_REQUIRED') return 'AuthError';
+      if (err.code === 'CONTRACT_DRIFT') return 'ContractDrift';
+    }
+    const name = err instanceof Error ? err.name : '';
+    if (name === 'AbortError' || name === 'TimeoutError') return 'TimeoutError';
+    if (name === 'ZodError') return 'ZodError';
+    if (name === 'TypeError' && err instanceof Error && /fetch|network|socket/i.test(err.message)) return 'FetchError';
+    return 'Unknown';
+  };
+
   let audio: AudioPipeline | null = null;
   let voicePhase = 'idle';
 
@@ -291,14 +331,23 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           // HUD flickered listening→thinking 10×/s. It is now set in `think`,
           // which runs only for a window that survived the speech gate.
           const key = ring.acquire('groq');
+          const t0 = Date.now();
           try {
             const res = await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)));
+            record({ subsystem: 'STT', status: 'OK', latencyMs: Date.now() - t0 });
             // D1: surface no_speech_prob so the pipeline can drop a window
             // Whisper itself believes was not speech.
             return res.noSpeechProb === undefined
               ? res.text
               : { text: res.text, noSpeechProb: res.noSpeechProb };
           } catch (err) {
+            record({
+              subsystem: 'STT',
+              status: 'ERROR',
+              latencyMs: Date.now() - t0,
+              errorCode: 'STT_FAILED',
+              sanitizedErrorClass: classify(err),
+            });
             ui.notice('stt-failed', `تعذّر تحويل الكلام إلى نص: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
             throw err;
           } finally {
@@ -307,11 +356,20 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         },
         think: async (transcript) => {
           setVoicePhase('thinking', transcript);
+          const t0 = Date.now();
           try {
             const mission = await coordinator.run(transcript);
+            record({ subsystem: 'BRAIN', status: 'OK', latencyMs: Date.now() - t0 });
             const reply = mission.replyAr ?? '';
             return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
           } catch (err) {
+            record({
+              subsystem: 'BRAIN',
+              status: 'ERROR',
+              latencyMs: Date.now() - t0,
+              errorCode: 'BRAIN_FAILED',
+              sanitizedErrorClass: classify(err),
+            });
             ui.notice('brain-failed', `تعذّر توليد الرد: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
             throw err;
           }
@@ -320,6 +378,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         // D5: a stalled provider costs one window, not the session, and the
         // shell is told so the silence is not read as a bug.
         onSttTimeout: (ms) => {
+          record({
+            subsystem: 'STT',
+            status: 'DEGRADED',
+            latencyMs: Math.round(ms),
+            errorCode: 'STT_TIMEOUT',
+            sanitizedErrorClass: 'TimeoutError',
+            remediationAttempted: 'None',
+          });
           ui.notice('stt-timeout', `تجاوز تحويل الصوت المهلة (${Math.round(ms / 1000)} ثانية) — تم تجاهل النافذة ومتابعة الاستماع.`, 'warn');
         },
         onUtterance: (utterance) => {
@@ -338,6 +404,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
             const voiceId = VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'];
             const gen = speechGate.capture();
             const sentences = splitSentences(text);
+            const t0 = Date.now();
             try {
               for (const sentence of sentences) {
                 if (!speechGate.isCurrent(gen)) return;
@@ -345,7 +412,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
                 if (!speechGate.isCurrent(gen)) return;
                 ui.broadcastAudio(mp3);
               }
+              record({ subsystem: 'TTS', status: 'OK', latencyMs: Date.now() - t0 });
             } catch (err) {
+              record({
+                subsystem: 'TTS',
+                status: 'ERROR',
+                latencyMs: Date.now() - t0,
+                errorCode: 'TTS_FAILED',
+                sanitizedErrorClass: classify(err),
+              });
               ui.notice('tts-failed', `تعذّر توليد الصوت: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
             } finally {
               setVoicePhase('idle');
@@ -362,6 +437,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     audio = buildVoicePipeline();
     if (audio === null) {
       ui.onAudio = null;
+      // The keyless state is the single most common reason a user reports
+      // "voice does not work". It must be visible in the diagnostics bus, not
+      // only as a UI notice that a user may never have seen.
+      record({
+        subsystem: 'KEYRING',
+        status: 'DEGRADED',
+        latencyMs: 0,
+        errorCode: 'KEYS_MISSING',
+        sanitizedErrorClass: 'AuthError',
+        remediationAttempted: 'None',
+      });
       ui.notice('voice-disabled-no-keys', 'الصوت معطّل — لم تُهيّأ المفاتيح بعد. أدخل المفاتيح لتفعيل الحلقة الصوتية.', 'warn');
       return;
     }
@@ -409,6 +495,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     activePersona: () => activePersona,
     stop: async () => {
       inventory.dispose();
+      // Flush the diagnostics buffer before the socket goes away, or the last
+      // few rows — usually the ones explaining WHY the user is shutting down —
+      // are lost.
+      await telemetry.close().catch(() => undefined);
       await ui.close();
     },
   };

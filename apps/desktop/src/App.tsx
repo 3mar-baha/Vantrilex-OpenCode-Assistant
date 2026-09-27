@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { VoxauraBridge, type ContextMsg } from './bridge/ws.js';
 import { WaveformEmblem } from './components/brand/WaveformEmblem.js';
 import { SiriWaveCanvas, SPEAKER_PALETTE, type WaveSpeaker } from './components/waveform/SiriWaveCanvas.js';
@@ -9,7 +9,7 @@ import { ConfirmPortal } from './components/portals/ConfirmPortal.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import { AudioCapture } from './audio/capture.js';
 import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
-import { bargePolicy } from './audio/vad.js';
+import { bargePolicy, micFailureNotice, micPolicy } from './audio/vad.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { envToken, resolveIpcTokenWithRetry } from './settings/ipc-token.js';
@@ -182,6 +182,77 @@ export function App(): JSX.Element {
   useEffect(() => () => captureRef.current?.stop(), []);
 
   /**
+   * Start the capture pipeline.
+   *
+   * Extracted from `toggleUserMute` and held in a `useCallback` with no
+   * dependencies: every value it closes over is a ref or a stable setter, so it
+   * is safe to call from a `visibilitychange` handler. That matters because the
+   * L19 fix has to be able to genuinely RE-acquire the hardware, not just flip a
+   * piece of state — a mic that never restarts after a minimise is a mic the
+   * user has to re-enable by hand, which is worse than the bug being fixed.
+   */
+  const startMic = useCallback((): void => {
+    const capture = captureRef.current;
+    if (capture === null) return;
+    void capture
+      .start({
+        onEnergy: (energy) => {
+          // Throttle: the worklet posts every few ms; 80 ms is plenty.
+          const now = Date.now();
+          if (now - lastEnergyAt.current > 80) {
+            lastEnergyAt.current = now;
+            setMicEnergy(energy);
+          }
+        },
+        onFrame: (bytes) => {
+          // Echo suppression + barge-in: while the assistant talks, quiet
+          // frames (room tone / speaker echo) are ducked locally and never
+          // reach STT; a voice burst stops playback, aborts the daemon
+          // reply, and goes up immediately. Silent abort — no announce spam.
+          const decision = bargePolicy(speakingRef.current, bytes);
+          if (decision === 'duck') return;
+          if (decision === 'barge') {
+            playerRef.current?.stop();
+            setSpeakingState(false);
+            const live = bridgeRef.current;
+            if (live !== null) void live.sendCommand({ id: nextCmdId(), kind: 'abort' });
+          }
+          bridgeRef.current?.sendPcm(bytes);
+        },
+        onError: (err) => setAnnounce(micFailureNotice(err)),
+      })
+      .catch((err: unknown) => setAnnounce(micFailureNotice(err)));
+  }, []);
+
+  /**
+   * L19 — the microphone stayed hot whenever the window was minimised or
+   * covered. That is a standing privacy and battery cost for a user who never
+   * asked for it, so a HIDDEN window releases the hardware track. `userMuted` is
+   * deliberately untouched, so the user's own choice survives the window being
+   * minimised and the mic comes back on its own when it returns.
+   *
+   * Only `hidden` releases it. A plain blur with the window still on screen is
+   * not a reason to take the microphone away, and restarting on every focus
+   * change would thrash the audio graph for nothing.
+   */
+  useEffect(() => {
+    const onVisibility = (): void => {
+      const action = micPolicy(document.visibilityState === 'hidden' ? 'hidden' : 'visible', userMuted);
+      if (action === 'release') captureRef.current?.stop();
+      else if (action === 'start') startMic();
+    };
+    // `blur` is registered too because a minimise does not always fire
+    // `visibilitychange` in WebView2. The same guard applies, so a plain focus
+    // change with the window still visible is a no-op.
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('blur', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', onVisibility);
+    };
+  }, [userMuted, startMic]);
+
+  /**
    * Phase 5 — ZERO CANNED REPLIES.
    *
    * The success text used to be a literal passed by each call site ('تم تبديل
@@ -283,34 +354,7 @@ export function App(): JSX.Element {
       if (next) {
         capture.stop();
       } else {
-        void capture
-          .start({
-            onEnergy: (energy) => {
-              // Throttle: the worklet posts every few ms; 80 ms is plenty.
-              const now = Date.now();
-              if (now - lastEnergyAt.current > 80) {
-                lastEnergyAt.current = now;
-                setMicEnergy(energy);
-              }
-            },
-            onFrame: (bytes) => {
-              // Echo suppression + barge-in: while the assistant talks, quiet
-              // frames (room tone / speaker echo) are ducked locally and never
-              // reach STT; a voice burst stops playback, aborts the daemon
-              // reply, and goes up immediately. Silent abort — no announce spam.
-              const decision = bargePolicy(speakingRef.current, bytes);
-              if (decision === 'duck') return;
-              if (decision === 'barge') {
-                playerRef.current?.stop();
-                setSpeakingState(false);
-                const live = bridgeRef.current;
-                if (live !== null) void live.sendCommand({ id: nextCmdId(), kind: 'abort' });
-              }
-              bridgeRef.current?.sendPcm(bytes);
-            },
-            onError: () => setAnnounce('تعذّر الوصول إلى الميكروفون'),
-          })
-          .catch(() => setAnnounce('تعذّر الوصول إلى الميكروفون'));
+        startMic();
       }
     }
     send({ id: nextCmdId(), kind: 'deafen' }, 'تعذّر تغيير حالة الميكروفون');

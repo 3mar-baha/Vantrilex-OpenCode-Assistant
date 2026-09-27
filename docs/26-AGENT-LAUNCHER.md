@@ -1,5 +1,31 @@
 # 26 — Agent Launcher: Process Supervisor, Health Probes, Zombie Reaping & Shutdown
 
+> ## ⚠️ SUPERSEDED IN PART — the TypeScript launcher described below no longer exists
+>
+> This document is a **frozen design spec**, kept for history. It is **not** a
+> description of the current code, and §26.1's normative rule is now false.
+>
+> **What is no longer true:** §26.1 states that `src/launcher/` owns the
+> `opencode serve` child end-to-end and that *"no other module may spawn `serve`
+> or signal it directly; all control flows through `launcher/`."* As of
+> **v0.6.2** the launcher module no longer has that capability at all.
+> `SupervisedLauncher`, `resolvePort` and the whole `siblings.ts` orphan sweeper
+> were deleted as dead code: nothing ever called them, and they formed two
+> mutually-referencing "safety nets" (`killTree` documented the sweeper as its
+> backstop) while neither actually ran. Only `probeHealth` survives, because
+> that is what `doctor` genuinely uses.
+>
+> **What actually supervises serve:** `apps/desktop/src-tauri/src/main.rs` — a
+> Rust supervisor that provisions the token and serve password, spawns both
+> children, and puts them in a `KILL_ON_JOB_CLOSE` Job Object so the OS reaps the
+> tree. It is covered by 26 Rust tests and was verified by cold-launching the
+> installed build. **The Rust supervisor is the single owner of the serve
+> process; the TypeScript launcher is not a competing path and must not be
+> "restored".**
+>
+> Do not read §26.1 as an architecture requirement. If you are changing process
+> supervision, change `main.rs` and its `phase2_tests`.
+
 > **Canonical status:** Design/immunity/owner batch. Supervision truth for FR-1 (`01`).
 > Boot sequence: `04` §4.4.1 · Port policy: `13` §13.5 · I-4: `12` §12.3.
 

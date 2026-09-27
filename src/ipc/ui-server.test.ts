@@ -1,6 +1,6 @@
 import { createConnection } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
-import { decodeFrames, maskFrame, Opcode } from './protocol.js';
+import { decodeFrames, maskFrame, MAX_CONNECTIONS, Opcode } from './protocol.js';
 import { UiServer } from './ui-server.js';
 
 // G2 TDD — transport behavior over real loopback sockets on ephemeral ports.
@@ -397,5 +397,77 @@ describe('UiServer audio broadcast (P4b downlink)', () => {
     expect(received).toHaveLength(3);
     expect(received.map((r) => r.seq)).toEqual([0, 1, 2]);
     expect(received.reduce((a, r) => a + r.bytes, 0)).toBe(mp3.byteLength);
+  });
+});
+
+describe('UiServer connection cap (L15)', () => {
+  // The connection set was previously unbounded. WS-4097 is loopback-only and
+  // single-user, so a client that opened sockets without limit made every
+  // broadcast fan out to an ever-growing set. The cap evicts the OLDEST, which
+  // is the least likely to be the live shell.
+
+  test('accepts up to the cap without evicting anyone', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const live: Array<Awaited<ReturnType<typeof rawSocket>>> = [];
+    for (let i = 0; i < MAX_CONNECTIONS; i += 1) {
+      const sock = await rawSocket(port);
+      sock.write(handshake('t'));
+      await sock.readText();
+      live.push(sock);
+    }
+    expect(server.connectionCount).toBe(MAX_CONNECTIONS);
+  });
+
+  test('one over the cap evicts the OLDEST and keeps the newest', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+
+    const open = async (): Promise<Awaited<ReturnType<typeof rawSocket>>> => {
+      const sock = await rawSocket(port);
+      sock.write(handshake('t'));
+      await sock.readText(); // hello
+      return sock;
+    };
+    // Does this socket still receive broadcasts? Proves liveness behaviourally
+    // rather than by watching a close event, which is timing-sensitive.
+    const alive = async (sock: Awaited<ReturnType<typeof rawSocket>>): Promise<boolean> =>
+      Promise.race([
+        sock.readText().then(
+          () => true,
+          () => false,
+        ),
+        new Promise<boolean>((r) => setTimeout(() => r(false), 250)),
+      ]);
+
+    const first = await open();
+    for (let i = 1; i < MAX_CONNECTIONS; i += 1) await open();
+    expect(server.connectionCount).toBe(MAX_CONNECTIONS);
+
+    const extra = await open();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(server.connectionCount).toBe(MAX_CONNECTIONS);
+
+    // Broadcast once: whoever is still in the connection set receives it.
+    server.broadcast({ type: 'event', eventId: 'cap-probe', state: 'complete' });
+    expect(await alive(extra)).toBe(true);
+    // The OLDEST was shed, not the newcomer. Evicting the newest instead would
+    // break the real user, who is the one that just (re)connected.
+    expect(await alive(first)).toBe(false);
+  });
+
+  test('the cap is a hard bound however many clients connect', async () => {
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    for (let i = 0; i < MAX_CONNECTIONS * 3; i += 1) {
+      const sock = await rawSocket(port);
+      sock.write(handshake('t'));
+      await sock.readText();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    expect(server.connectionCount).toBeLessThanOrEqual(MAX_CONNECTIONS);
   });
 });

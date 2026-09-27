@@ -172,8 +172,14 @@ export class OpenRouterBrainClient implements BrainClient {
         return { ...result, attempts: attempt };
       } catch (err) {
         lastError = err;
-        const retryableEmpty = err instanceof OrchestratorError && err.code === 'BRAIN_TIMEOUT' && err.retryable;
-        if (!retryableEmpty || attempt === 3) throw err;
+        // Retry only a genuinely transient refusal. Previously this keyed off
+        // `code === 'BRAIN_TIMEOUT' && retryable`, which only worked because
+        // every failure wore that one code; now that the codes are honest it
+        // must key off `retryable` alone. Auth and quota are non-retryable and
+        // are therefore never re-attempted, which is the whole point of
+        // distinguishing them.
+        const retryable = err instanceof OrchestratorError && err.retryable;
+        if (!retryable || attempt === 3) throw err;
       }
     }
     throw lastError;
@@ -204,26 +210,35 @@ export class OpenRouterBrainClient implements BrainClient {
         signal: controller.signal,
       });
       const elapsedMs = Date.now() - started;
+      // L24 — each of these was reported as BRAIN_TIMEOUT, so an expired key,
+      // an exhausted quota and a slow network were indistinguishable. The
+      // `retryable` flag is what drives the retry loop, so it is preserved
+      // exactly; only the code becomes honest.
       if (res.status === 401 || res.status === 403) {
-        throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain rejected credentials (rotate OPENROUTER_API_KEY)');
+        throw new OrchestratorError('BRAIN_AUTH', false, 'brain rejected credentials (rotate OPENROUTER_API_KEY)');
+      }
+      if (res.status === 429) {
+        // Quota or upstream load. Retrying immediately just burns the same
+        // exhausted budget, so this is the one non-2xx that is NOT retryable.
+        throw new OrchestratorError('RATE_LIMITED', false, 'brain rate limited or out of quota (HTTP 429)');
       }
       if (!res.ok) {
-        throw new OrchestratorError('BRAIN_TIMEOUT', true, `brain endpoint HTTP ${res.status} — retrying once`);
+        throw new OrchestratorError('BRAIN_REJECTED', true, `brain endpoint HTTP ${res.status}`);
       }
       const payload = (await res.json()) as {
         choices?: Array<{ message?: { content?: unknown } }>;
         error?: { message?: unknown };
       };
       if (typeof payload?.error?.message === 'string') {
-        throw new OrchestratorError('BRAIN_TIMEOUT', false, `brain provider error: ${payload.error.message.slice(0, 200)}`);
+        throw new OrchestratorError('BRAIN_REJECTED', false, `brain provider error: ${payload.error.message.slice(0, 200)}`);
       }
       const content = payload?.choices?.[0]?.message?.content;
       if (typeof content !== 'string' || content.trim().length === 0) {
-        throw new OrchestratorError('BRAIN_TIMEOUT', true, 'brain returned empty completion — retrying once');
+        throw new OrchestratorError('BRAIN_REJECTED', true, 'brain returned an empty completion');
       }
       const output = normalizeBrainJson(extractJson(content));
       if (output === null) {
-        throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain returned non-JSON output — fallback briefing');
+        throw new OrchestratorError('BRAIN_REJECTED', false, 'brain returned non-JSON output');
       }
       return { output, elapsedMs, goldenBreached: elapsedMs > BRAIN_GOLDEN_MS };
     } catch (err) {

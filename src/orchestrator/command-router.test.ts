@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { SessionId } from '../common/brands.js';
 import { OrchestratorError } from '../common/errors.js';
 import type { UiCommand } from '../ipc/protocol.js';
-import { createCommandHandler, parseModelRef, shellCommandError } from './command-router.js';
+import { createCommandHandler, MAX_PARKED, parseModelRef, shellCommandError } from './command-router.js';
 
 // Final wiring TDD — renderer intents → ServeClient mutations with structured
 // outcomes; the active session is used when the command omits sessionId.
@@ -352,5 +352,82 @@ describe('createCommandHandler', () => {
     expect(
       await h.handler(cmd({ kind: 'setSessionAgent', sessionId: '../../etc', agent: 'x' })),
     ).toEqual({ ok: false, detail: 'no active session' });
+  });
+});
+
+describe('parked-command bound (L20)', () => {
+  // A parked command is one awaiting FR-12 confirmation, and it is still
+  // EXECUTABLE. The map was swept only when the next destructive command
+  // arrived, so a burst of parks with no follow-up grew it without bound and
+  // each entry stayed live for the full TTL.
+
+  test('a park storm leaves exactly MAX_PARKED live, not more', async () => {
+    const h = harness();
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_PARKED * 4; i += 1) {
+      const id = `p${i}`;
+      ids.push(id);
+      await h.handler(cmd({ id, kind: 'execSessionShell', command: `echo ${i}` }));
+    }
+    // Measure the live set by confirming every id ever issued and counting the
+    // ones that actually execute. The bound is the cap, not "at most the cap":
+    // an over-eager eviction would quietly drop a command the user is looking
+    // at, and an under-eager one leaves stale entries executable.
+    let executed = 0;
+    for (const id of ids) {
+      const r = await h.handler(cmd({ id: `c-${id}`, kind: 'confirm', confirmId: id }));
+      if (r.ok) executed += 1;
+    }
+    expect(executed).toBe(MAX_PARKED);
+  });
+
+  test('the newest parked command is the one that survives', async () => {
+    const h = harness();
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_PARKED * 3; i += 1) {
+      const id = `p${i}`;
+      ids.push(id);
+      await h.handler(cmd({ id, kind: 'execSessionShell', command: `echo ${i}` }));
+    }
+    // The most recent park is the one the user is actually confirming; if the
+    // cap evicted it, a legitimate confirmation would silently do nothing.
+    const newest = ids[ids.length - 1] as string;
+    await h.handler(cmd({ id: 'c', kind: 'confirm', confirmId: newest }));
+    expect(h.calls.shell).toEqual([['ses_active', `echo ${MAX_PARKED * 3 - 1}`]]);
+  });
+
+  test('the oldest parked command is evicted first', async () => {
+    const h = harness();
+    const first = 'p0';
+    await h.handler(cmd({ id: first, kind: 'execSessionShell', command: 'echo first' }));
+    for (let i = 1; i <= MAX_PARKED; i += 1) {
+      await h.handler(cmd({ id: `p${i}`, kind: 'execSessionShell', command: `echo ${i}` }));
+    }
+    // Evicted: confirming it reports nothing pending rather than running a
+    // command the user can no longer see or reason about.
+    expect(await h.handler(cmd({ id: 'c0', kind: 'confirm', confirmId: first }))).toEqual({
+      ok: false,
+      detail: 'no pending action',
+    });
+    expect(h.calls.shell).toEqual([]);
+  });
+
+  test('a confirmation storm cannot resurrect evicted commands', async () => {
+    const h = harness();
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_PARKED * 5; i += 1) {
+      const id = `p${i}`;
+      ids.push(id);
+      await h.handler(cmd({ id, kind: 'execSessionShell', command: `echo ${i}` }));
+    }
+    // Confirm every id ever issued. At most the surviving window may execute;
+    // the rest must be reported as unknown.
+    const results = [];
+    for (const id of ids) {
+      results.push(await h.handler(cmd({ id: `c-${id}`, kind: 'confirm', confirmId: id })));
+    }
+    const executed = results.filter((r) => r.ok).length;
+    expect(executed).toBeLessThanOrEqual(MAX_PARKED);
+    expect(executed).toBeGreaterThan(0);
   });
 });

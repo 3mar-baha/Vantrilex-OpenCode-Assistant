@@ -86,7 +86,16 @@ export class AudioCapture {
         audio: { sampleRate: TARGET_RATE, echoCancellation: true, noiseSuppression: true },
       });
     } catch (err) {
-      throw new Error(`microphone denied or absent: ${err instanceof Error ? err.message : 'unknown'}`);
+      // Preserve the DOMException's `name`. It is the ONLY thing that separates
+      // "permission refused" from "no microphone" from "device busy", and
+      // wrapping it in a plain Error collapsed all three into one — which is
+      // what made SEC-7 undiagnosable from a user's report. The original is
+      // kept as `cause`.
+      const message = `microphone denied or absent: ${err instanceof Error ? err.message : 'unknown'}`;
+      throw Object.assign(new Error(message), {
+        name: err instanceof Error && err.name !== '' ? err.name : 'Error',
+        cause: err,
+      });
     }
     const context = new AudioContext({ sampleRate: 48000 });
     const source = context.createMediaStreamSource(stream);
