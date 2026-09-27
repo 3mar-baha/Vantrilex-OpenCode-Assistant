@@ -312,36 +312,57 @@ export const UiEventSchema = z.object({
 });
 export type UiEvent = z.infer<typeof UiEventSchema>;
 
-export const UiCommandSchema = z.object({
-  id: z.string().min(1),
-  kind: z.enum([
-    'abort',
-    'mute',
-    'deafen',
-    'arm',
-    'setPersona',
-    'switchSession',
-    'setSessionAgent',
-    'setSessionModel',
-    'toggleSessionSkill',
-    'execSessionShell',
-    'saveApiKeys',
-    'confirm',
-  ]),
-  persona: z.enum(['kareem', 'nour']).optional(),
-  minutes: z.number().int().positive().optional(),
-  sessionId: z.string().min(1).optional(),
-  agent: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
-  skill: z.string().min(1).optional(),
-  skillAction: z.enum(['attach', 'detach']).optional(),
-  command: z.string().min(1).optional(),
-  groqKey: z.string().min(1).optional(),
-  fishKey: z.string().min(1).optional(),
-  openrouterKey: z.string().min(1).optional(),
-  confirmId: z.string().min(1).optional(),
-  approve: z.boolean().optional(),
-});
+/**
+ * L23 — the command envelope is the trust boundary.
+ *
+ * It previously accepted arbitrary unknown keys (a typo vanished and the command
+ * did something other than what the caller believed) and unbounded free strings
+ * for every field that later reaches a shell or a filesystem path. Now:
+ * `.strict()`, length-bounded ids, an opaque `ses_`-prefixed session id, a
+ * restricted charset for the identifiers forwarded to serve, and a command
+ * length cap enforced at the schema rather than only in the router.
+ */
+const CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]/;
+/** Identifiers forwarded to serve: `provider/id`, agent and skill names. */
+const IDENT_RE = /^[A-Za-z0-9._:/-]+$/;
+
+export const UiCommandSchema = z
+  .object({
+    id: z.string().min(1).max(128).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters'),
+    kind: z.enum([
+      'abort',
+      'mute',
+      'deafen',
+      'arm',
+      'setPersona',
+      'switchSession',
+      'setSessionAgent',
+      'setSessionModel',
+      'toggleSessionSkill',
+      'execSessionShell',
+      'saveApiKeys',
+      'confirm',
+    ]),
+    persona: z.enum(['kareem', 'nour']).optional(),
+    minutes: z.number().int().positive().max(1440).optional(),
+    sessionId: z
+      .string()
+      .regex(/^ses_[A-Za-z0-9_-]{1,120}$/, 'session id must be an opaque ses_ token')
+      .optional(),
+    agent: z.string().min(1).max(64).regex(IDENT_RE, 'invalid agent').optional(),
+    model: z.string().min(1).max(128).regex(IDENT_RE, 'invalid model').optional(),
+    skill: z.string().min(1).max(128).regex(IDENT_RE, 'invalid skill').optional(),
+    skillAction: z.enum(['attach', 'detach']).optional(),
+    command: z.string().min(1).max(512).optional(),
+    // Keys are opaque secrets: no control characters, so a key can never be
+    // used to forge a log line.
+    groqKey: z.string().min(1).max(512).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
+    fishKey: z.string().min(1).max(512).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
+    openrouterKey: z.string().min(1).max(512).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
+    confirmId: z.string().min(1).max(128).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
+    approve: z.boolean().optional(),
+  })
+  .strict();
 export type UiCommand = z.infer<typeof UiCommandSchema>;
 
 export const AckFrameSchema = z.object({

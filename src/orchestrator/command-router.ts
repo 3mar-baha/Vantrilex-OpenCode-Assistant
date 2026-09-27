@@ -44,19 +44,45 @@ export interface CommandRouterDeps {
 export const DESTRUCTIVE_KINDS: ReadonlySet<UiCommand['kind']> = new Set(['execSessionShell']);
 export const CONFIRMATION_TTL_MS = 60_000;
 
-/** Session ids are opaque `ses_…` tokens — never paths or free text. */
-const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
-/** Shell metacharacters that enable injection/chaining — refused outright. */
-const UNSAFE_SHELL_RE = /[;&|`$<>\n\r]/;
+/**
+ * Session ids are opaque `ses_…` tokens — never paths or free text.
+ *
+ * L23: this now requires the `ses_` prefix rather than merely tolerating
+ * arbitrary alphanumerics. A value that merely *looks* like a token (`..`,
+ * `ses_a/../ses_b`) must not be able to reach a path-shaped consumer.
+ */
+const SESSION_ID_RE = /^ses_[A-Za-z0-9_-]{1,120}$/;
+
+/**
+ * Shell metacharacters that enable injection, chaining, enumeration or
+ * traversal — refused outright.
+ *
+ * L21: the original list was `;&|`<><\n\r`, which left glob (`*?`), brace and
+ * group expansion (`{}()`), subshells, tilde expansion, history expansion and
+ * `..` traversal completely open. A glob is a read-side enumeration primitive;
+ * `{}` and `()` are expansion/substitution in every POSIX shell.
+ *
+ * This is defense-in-depth BEHIND the FR-12 confirm gate and session scoping.
+ * It is a deny-list and therefore not a sandbox: it raises the cost of an
+ * accidental or naive payload, and it is tested both for what it refuses and
+ * for what it must not break (`rm -rf build` is the FR-12 spec case).
+ */
+const UNSAFE_SHELL_RE = /[;&|`$<>\n\r*?(){}!~]/;
+/** Path traversal as its own rule, so the message says why. */
+const TRAVERSAL_RE = /\.\./;
 
 /**
  * Defense-in-depth for `execSessionShell`. The FR-12 confirm gate is the real
- * control (now reachable from the HUD); this rejects payloads that could chain
- * or redirect commands before they are ever parked.
+ * control (reachable from the HUD); this rejects payloads that could chain,
+ * redirect, enumerate or escape before they are ever parked.
+ *
+ * The returned message never echoes the payload: it goes to the supervisor log
+ * and back to the shell.
  */
 export function shellCommandError(command: string): string | null {
   if (command.trim().length === 0) return 'command required';
   if (command.length > 512) return 'command too long';
+  if (TRAVERSAL_RE.test(command)) return 'command rejected (path traversal)';
   if (UNSAFE_SHELL_RE.test(command)) return 'command rejected (unsafe metacharacters)';
   return null;
 }

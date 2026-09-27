@@ -453,4 +453,24 @@ added as part of the work.
 | Residual | the audit's gate said 30 force-kill cycles; 3 were run here — the failure mode is deterministic, but 30 is the stated bar and was not reached |
 | Not done | `SupervisedLauncher` / `siblings.ts` sweeper remain dead code (audit L13); `daemon-stderr.log` is now `daemon.log` — any tooling reading the old name needs updating |
 
+## Phase 3 remediation — latent hardening (audio, network, command input)
+
+Closed L1, L2, L3, L7, L9, D5, L21, L23. **L4/L5 were already completed in Phase 1**
+(`AudioPlayer.dispose()`, `onDispose` bridge hook, `AudioContext.resume()` on first
+decode, one `GainNode` at 0.9) and were not redone.
+
+| Item | Evidence |
+|---|---|
+| **L1 downlink queue cap** | `PLAYBACK_QUEUE_CAP = 32`; overflow drops the **oldest** chunks (the tail is what the user is waiting to hear) and increments a `dropped` counter, so audio loss is observable rather than silent. Accounting invariant pinned: `queued + dropped + 1 === enqueued` (one chunk is in `decode`) |
+| **L2 cache ceiling** | `SPEECH_CACHE_MAX_ENTRY_BYTES = 2 MB`; an oversized whole-reply blob is **not written** to the cache. Playback is unaffected; a normal reply is still cached (fast path preserved) |
+| **L3 temp sweep** | `sweepOldPlaybackFiles()` deletes playback files older than `PLAYBACK_RETENTION_MS` (15 min) and runs before each write. A missing directory is 0, not an error; a file held by a playing sink is kept |
+| **L7 ingest buffer** | `bufferedBytes` is now the **true pending count** (it previously reported a stale high-water mark, so it was unusable as a backpressure signal). Window geometry and the shed path are unchanged — pinned by tests that incremental 100 ms chunks never shed and a burst past the 6-window cap sheds exactly 2 |
+| **L9 Fish timeout** | `fetchWithTimeout()` + `TtsTimeoutError`, matching the `brain.ts` idiom. `FISH_TIMEOUT_MS = 20 s`, injectable via constructor |
+| **L9 bug caught by test** | the first implementation only passed an `AbortSignal`. A stub — or any client that does not honour cancellation — never settles, so the call still hung. **The timer is now raced**, making "returns within `timeoutMs`" a property of our function rather than a hope about the transport |
+| **D5 STT timeout** | `transcribeStream` races a `STT_TIMEOUT_MS = 15 s` bound and throws `SttTimeoutError`. The pipeline **drops the window and continues** (`onSttTimeout` hook, `sttTimeoutDrops` counter, Arabic `stt-timeout` notice) instead of propagating — previously one hung window abandoned every later window too. A non-timeout error still propagates, so real failures are not hidden |
+| **L21 shell guard** | the regex covered only `;&\|` `` ` `` `<>\n\r`. Now also `*?(){}!~` and `..` as a separate traversal rule. `rm -rf build` (the FR-12 spec case) and other ordinary commands still pass. The rejection message never echoes the payload |
+| **L23 command envelope** | `.strict()`, bounded `id`/`confirmId`, `sessionId` must match `^ses_[A-Za-z0-9_-]{1,120}$` (so `../../etc`, `ses_a/../ses_b` and newline smuggling are rejected), `agent`/`model`/`skill` charset+length restricted, `command` capped at 512 **in the schema** (previously only in the router), key fields cannot contain control characters. A regression test asserts every payload the real shell sends still parses |
+| Gates | `tsc` 0 · `eslint --max-warnings 0` 0 · root vitest **322** (was 284) · desktop vitest **125** (was 120) · `cargo test` 26 · E2E **18/18** |
+| Explicitly not done | the O(n²) ingest rewrite into a true ring buffer — the observable contract (bounded memory, truthful count, identical window geometry) is pinned and the cap bounds the copy at 6 windows, so a full rewrite buys no measurable behaviour. L13 dead supervision code, L15/L16/L17, L20, L22, L24 remain open |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

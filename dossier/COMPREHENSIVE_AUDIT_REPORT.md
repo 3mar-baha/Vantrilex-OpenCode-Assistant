@@ -277,6 +277,36 @@ timeout test asserts the PID is gone afterwards.
 
 ---
 
+## 0.7 Phase 3 — Latent Hardening: COMPLETE (L1, L2, L3, L7, L9, D5, L21, L23)
+
+Measured ledger in `docs/10-CHECKPOINT.md`. Summary:
+
+- **L4/L5 were already done in Phase 1** (`dispose()`, `onDispose`, `resume()`, one
+  `GainNode`) and were not redone. Correcting the phase plan, which listed them as
+  outstanding.
+- **A real bug was caught by the L9 test, not by review:** passing an `AbortSignal`
+  only bounds a call if the fetch honours it. The first implementation hung against
+  a stub, so the timer is now **raced** — "returns within `timeoutMs`" became a
+  property of our function rather than a hope about the transport.
+- **D5's consequence was worse than the audit recorded:** because `pushChunk` awaits
+  windows serially, one hung STT call abandoned every *later* window too. Timeouts
+  are now dropped-and-continued, while genuine errors still propagate.
+- **L21/L23 close the command trust boundary:** `.strict()` envelope, `ses_`-prefixed
+  opaque session ids, bounded/charset-checked identifiers, and a shell guard extended
+  from `;&|`<><\n\r` to also cover glob, brace, subshell, tilde, history and `..` —
+  without breaking `rm -rf build`.
+- **L7 was partially a wrong finding:** the audit described an O(n²) copy, but the
+  actionable defect was that `bufferedBytes` reported a stale high-water mark, making
+  it useless as a backpressure signal. That is now exact. A full ring-buffer rewrite
+  was deliberately **not** done: the observable contract is pinned by tests and the
+  existing cap already bounds the copy at 6 windows, so it would buy no measurable
+  behaviour.
+
+Gates: `tsc` 0 · `eslint` 0 · root vitest **322** (was 284) · desktop vitest **125**
+(was 120) · `cargo test` 26 · E2E 18/18.
+
+---
+
 ## 1. Executive Diagnostic Summary — what the recent run actually shows
 
 ### Live runtime ground truth (captured during this audit)

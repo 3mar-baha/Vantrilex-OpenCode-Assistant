@@ -1,12 +1,21 @@
 import { describe, expect, test } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
+  fetchWithTimeout,
   fishRequestBody,
+  FishHttpTransport,
+  FISH_TIMEOUT_MS,
   isSpeakable,
+  PLAYBACK_RETENTION_MS,
   SpeechGate,
+  SPEECH_CACHE_MAX_ENTRY_BYTES,
   SPEECH_FILLERS,
   splitSentences,
   stripSpeechText,
+  sweepOldPlaybackFiles,
   TtsEngine,
+  TtsTimeoutError,
 } from './tts.js';
 import type { FishTransport } from './tts.js';
 import type { VoiceId } from '../common/brands.js';
@@ -190,8 +199,67 @@ describe('stripSpeechText', () => {
   });
 });
 
-// D3 — synthesis policy. Every field below is taken from the published
-// Fish Audio `TTSRequest` schema (docs.fish.audio, openapi v1), not guessed.
+// L9 — the Fish fetch had no timeout, so a hung socket wedged the utterance
+// and the speech phase forever. brain.ts already uses this exact idiom
+// (`fetchImpl` + AbortController); the transport now matches it.
+describe('fetchWithTimeout (L9)', () => {
+  test('aborts a hung request and throws a typed, distinguishable error', async () => {
+    const hung = new Promise<Response>(() => undefined);
+    const started = Date.now();
+    await expect(fetchWithTimeout('https://x', {}, 120, () => hung)).rejects.toBeInstanceOf(TtsTimeoutError);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test('passes an abort signal to the underlying fetch', async () => {
+    let seen: AbortSignal | undefined;
+    const spy = (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      seen = init?.signal ?? undefined;
+      return Promise.reject(new Error('stop here'));
+    };
+    await expect(fetchWithTimeout('https://x', {}, 5000, spy)).rejects.toThrow('stop here');
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen?.aborted).toBe(false);
+  });
+
+  test('returns the response when it resolves inside the budget', async () => {
+    const ok = new Response('body', { status: 200 });
+    const res = await fetchWithTimeout('https://x', {}, 5000, () => Promise.resolve(ok));
+    expect(res.status).toBe(200);
+  });
+
+  test('clears its timer on success so the process is not held open', async () => {
+    // A leaked timer keeps the event loop alive; assert it is disarmed.
+    const before = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
+    await fetchWithTimeout('https://x', {}, 60_000, () => Promise.resolve(new Response('')));
+    await new Promise((r) => setTimeout(r, 10));
+    const after = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
+    expect(after).toBeLessThanOrEqual(before);
+  });
+
+  test('the transport passes a signal, so a hung synthesis cannot wedge a turn', async () => {
+    const captured: Array<AbortSignal | null | undefined> = [];
+    const ring = {
+      acquire: () => ({ material: new Uint8Array([1]) }),
+      release: () => undefined,
+    } as unknown as Parameters<typeof FishHttpTransport>[0];
+    const transport = new FishHttpTransport(ring, 'https://fish.invalid', {
+      fetchImpl: (_u, init) => {
+        captured.push(init?.signal);
+        return Promise.reject(new Error('network down'));
+      },
+      timeoutMs: 1234,
+    });
+    await expect(transport.synthesize('مرحبا', 'ref')).rejects.toThrow('network down');
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  test('FishHttpTransport default timeout is bounded', () => {
+    expect(FISH_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(FISH_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
+  });
+});
+
 describe('Fish request policy (D3)', () => {
   test('speaks calmly: quality latency, slower pace, negative dB volume', () => {
     const body = fishRequestBody('مرحبا', 'ref-1');
@@ -230,6 +298,75 @@ describe('Fish request policy (D3)', () => {
     expect(body.text).toBe('مرحبا.');
     expect(body.reference_id).toBe('ref-1');
     expect(body.format).toBe('mp3');
+  });
+});
+
+// L2 — speakSentences accumulated every sentence's audio into one blob to build
+// a single cache entry, so peak memory equalled the whole reply with no ceiling.
+describe('TtsEngine cache ceiling (L2)', () => {
+  const cfg = {
+    dir: 'C:/Users/omarb/AppData/Local/Temp/opencode/tts-l2-cache',
+    maxEntries: 50,
+    maxBytes: 1_000_000,
+    maxEntryBytes: 500_000,
+  };
+
+  test('an over-long reply is not cached whole, and says so', async () => {
+    const transport: FishTransport = {
+      synthesize: async () => new TextEncoder().encode('x'.repeat(4096)),
+    };
+    const engine = new TtsEngine(cfg, transport, { play: async () => ({ startedMs: 0 }) });
+    // Four 4 KB sentences = 16 KB of audio, under a 4 KB ceiling.
+    const res = await engine.speakSentences('أ. ب. ج. د.', 'male-default' as VoiceId);
+    expect(res.sentences).toBe(4);
+    // No exception, no unbounded blob: the oversized entry is simply skipped.
+    expect(res.cacheHit).toBe(false);
+  });
+
+  test('a normal reply is still cached, so the fast path is not lost', async () => {
+    const transport: FishTransport = {
+      synthesize: async (text: string) => new TextEncoder().encode(text),
+    };
+    const engine = new TtsEngine(cfg, transport, { play: async () => ({ startedMs: 0 }) });
+    await engine.speakSentences('تمام.', 'male-default' as VoiceId);
+    const second = await engine.speakSentences('تمام.', 'male-default' as VoiceId);
+    expect(second.cacheHit).toBe(true);
+  });
+
+  test('SPEECH_CACHE_MAX_ENTRY_BYTES is a sane, explicit ceiling', () => {
+    expect(SPEECH_CACHE_MAX_ENTRY_BYTES).toBeGreaterThan(0);
+    expect(SPEECH_CACHE_MAX_ENTRY_BYTES).toBeLessThanOrEqual(8 * 1024 * 1024);
+  });
+});
+
+// L3 — FileAudioOut wrote an MP3 to %TEMP% per reply and nothing ever pruned it.
+describe('FileAudioOut pruning (L3)', () => {
+  test('prunes old files and leaves recent ones', () => {
+    const dir = 'C:/Users/omarb/AppData/Local/Temp/opencode/tts-l3-sweep';
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    const old = path.join(dir, 'old.mp3');
+    const fresh = path.join(dir, 'fresh.mp3');
+    fs.writeFileSync(old, 'x');
+    fs.writeFileSync(fresh, 'x');
+    const now = Date.now();
+    fs.utimesSync(old, new Date(now - 10 * 60_000), new Date(now - 10 * 60_000));
+
+    const removed = sweepOldPlaybackFiles(dir, 5 * 60_000, now);
+
+    expect(removed).toBe(1);
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('a missing directory is not an error', () => {
+    expect(sweepOldPlaybackFiles('C:/Users/omarb/AppData/Local/Temp/opencode/tts-l3-absent', 60_000, Date.now())).toBe(0);
+  });
+
+  test('the default retention is bounded', () => {
+    expect(PLAYBACK_RETENTION_MS).toBeGreaterThan(0);
+    expect(PLAYBACK_RETENTION_MS).toBeLessThanOrEqual(60 * 60_000);
   });
 });
 

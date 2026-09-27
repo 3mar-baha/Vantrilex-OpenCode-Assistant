@@ -1,5 +1,16 @@
 import { describe, expect, test } from 'vitest';
-import { chunkPcm, meanNoSpeechProb, transcribeStream } from './stt.js';
+import { AudioIngest } from './ingest.js';
+import { AudioPipeline } from '../orchestrator/audio-pipeline.js';
+import { chunkPcm, meanNoSpeechProb, STT_TIMEOUT_MS, SttTimeoutError, transcribeStream } from './stt.js';
+
+/** 5 s of a 440 Hz tone at a speech-like level (-12 dBFS). */
+function speechWindow(): Uint8Array {
+  const samples = new Int16Array(80_000);
+  for (let i = 0; i < samples.length; i += 1) {
+    samples[i] = Math.round(32768 * 0.25 * Math.sin((2 * Math.PI * 440 * i) / 16_000));
+  }
+  return new Uint8Array(samples.buffer);
+}
 
 // D1 TDD — `response_format: 'verbose_json'` already returns per-segment
 // no_speech_prob; it was discarded, so hallucinated text was indistinguishable
@@ -35,6 +46,110 @@ describe('meanNoSpeechProb', () => {
     // The property the gate actually relies on.
     const v = meanNoSpeechProb([{ no_speech_prob: 0.9 }, { no_speech_prob: 0.85 }, { no_speech_prob: 0.7 }]);
     expect(v).toBeGreaterThan(0.6);
+  });
+});
+
+// D5 — the STT call had no timeout. `AudioPipeline.pushChunk` awaits windows
+// serially, so one hung Whisper request wedged the whole capture loop and the
+// speech phase with it.
+describe('STT timeout (D5)', () => {
+  test('a hung client rejects with a typed error inside the budget', async () => {
+    const started = Date.now();
+    await expect(
+      transcribeStream(new Uint8Array(64_000), { transcribe: () => new Promise<string>(() => undefined) }, undefined, {
+        timeoutMs: 120,
+      }),
+    ).rejects.toBeInstanceOf(SttTimeoutError);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test('the timeout names its own budget and is distinguishable from a provider error', async () => {
+    const err = await transcribeStream(
+      new Uint8Array(64_000),
+      { transcribe: () => new Promise<string>(() => undefined) },
+      undefined,
+      { timeoutMs: 80 },
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SttTimeoutError);
+    expect((err as SttTimeoutError).name).toBe('SttTimeoutError');
+    expect((err as Error).message).toContain('80ms');
+  });
+
+  test('a provider error passes through unchanged', async () => {
+    await expect(
+      transcribeStream(
+        new Uint8Array(64_000),
+        {
+          transcribe: async () => {
+            throw new Error('Groq 401');
+          },
+        },
+        undefined,
+        { timeoutMs: 5000 },
+      ),
+    ).rejects.toThrow('Groq 401');
+  });
+
+  test('a slow-but-in-budget client still succeeds', async () => {
+    const res = await transcribeStream(
+      new Uint8Array(64_000),
+      {
+        transcribe: async () => {
+          await new Promise((r) => setTimeout(r, 40));
+          return 'تم';
+        },
+      },
+      undefined,
+      { timeoutMs: 5000 },
+    );
+    expect(res.text).toBe('تم');
+  });
+
+  test('the pipeline abandons a timed-out window and keeps flowing', async () => {
+    // The real consequence of D5: one hung window used to stop every later
+    // window from being processed. `transcribeStream` owns the timeout and
+    // throws this; the pipeline's contract is to drop the window and continue.
+    let call = 0;
+    const timeouts: number[] = [];
+    const utterances: unknown[] = [];
+    const pipeline = new AudioPipeline({
+      ingest: new AudioIngest(),
+      transcribe: async () => {
+        call += 1;
+        if (call === 1) throw new SttTimeoutError(STT_TIMEOUT_MS);
+        return 'بعد التعافي';
+      },
+      think: async () => ({ reply: 'حاضر' }),
+      activeSessionId: () => undefined,
+      onSttTimeout: (ms) => void timeouts.push(ms),
+      onUtterance: (u) => void utterances.push(u),
+    });
+    await pipeline.pushChunk(speechWindow());
+    expect(timeouts).toEqual([STT_TIMEOUT_MS]);
+    expect(pipeline.sttTimeoutDrops).toBe(1);
+    expect(utterances).toHaveLength(0);
+
+    // The next window is processed normally: the wedge is gone.
+    await pipeline.pushChunk(speechWindow());
+    expect(utterances).toEqual([{ transcript: 'بعد التعافي', reply: 'حاضر', receipt: null }]);
+  });
+
+  test('a non-timeout transcription error still propagates', async () => {
+    // Only timeouts are swallowed. A real provider failure must not be hidden.
+    const pipeline = new AudioPipeline({
+      ingest: new AudioIngest(),
+      transcribe: async () => {
+        throw new Error('Groq 401');
+      },
+      think: async () => ({ reply: 'x' }),
+      activeSessionId: () => undefined,
+    });
+    await expect(pipeline.pushChunk(speechWindow())).rejects.toThrow('Groq 401');
+  });
+
+  test('STT_TIMEOUT_MS is bounded', () => {
+    expect(STT_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(STT_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
   });
 });
 

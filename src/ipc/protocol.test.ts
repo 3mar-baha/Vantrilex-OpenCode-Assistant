@@ -191,6 +191,82 @@ describe('frame schemas', () => {
     expect(UiCommandSchema.safeParse({ kind: 'abort' }).success).toBe(false);
   });
 
+  // L23 — the command envelope is the trust boundary. It accepted arbitrary
+  // extra keys and unbounded free strings for every field that later reaches a
+  // shell or a filesystem path.
+  describe('L23 command envelope hardening', () => {
+    const base = { id: 'cmd-1', kind: 'switchSession' } as const;
+
+    test('rejects unknown keys instead of silently dropping them', () => {
+      // A typo in a field name used to vanish, leaving a command that did
+      // something other than what the caller believed.
+      expect(UiCommandSchema.safeParse({ ...base, sessinId: 'ses_x' }).success).toBe(false);
+      expect(UiCommandSchema.safeParse({ ...base, __proto__: { polluted: true } }).success).toBe(false);
+    });
+
+    test('every field the shell sends still parses', () => {
+      // Regression guard: .strict() must not break the real client.
+      const real = [
+        { ...base, sessionId: 'ses_abc123' },
+        { id: 'c', kind: 'setPersona', persona: 'nour' },
+        { id: 'c', kind: 'mute' },
+        { id: 'c', kind: 'arm', minutes: 5 },
+        { id: 'c', kind: 'setSessionAgent', sessionId: 'ses_a', agent: 'explore' },
+        { id: 'c', kind: 'setSessionModel', sessionId: 'ses_a', model: 'opencode/muse' },
+        { id: 'c', kind: 'toggleSessionSkill', sessionId: 'ses_a', skill: 'mission-handoff', skillAction: 'attach' },
+        { id: 'c', kind: 'execSessionShell', sessionId: 'ses_a', command: 'rm -rf build' },
+        { id: 'c', kind: 'saveApiKeys', groqKey: 'g', fishKey: 'f', openrouterKey: 'o' },
+        { id: 'c', kind: 'confirm', confirmId: 'x1', approve: true },
+      ];
+      for (const cmd of real) {
+        const r = UiCommandSchema.safeParse(cmd);
+        expect(r.success, `${JSON.stringify(cmd)} -> ${r.success ? '' : r.error.message}`).toBe(true);
+      }
+    });
+
+    test('sessionId must be an opaque ses_ token, never a path', () => {
+      const ok = (v: string): boolean => UiCommandSchema.safeParse({ ...base, sessionId: v }).success;
+      expect(ok('ses_abc123')).toBe(true);
+      expect(ok('../../etc/passwd')).toBe(false);
+      expect(ok('..\\..\\windows')).toBe(false);
+      expect(ok('ses_a/../ses_b')).toBe(false);
+      expect(ok('ses_a b')).toBe(false);
+      // Newlines in an id become header/log injection downstream.
+      expect(ok('ses_a\nX-Injected: 1')).toBe(false);
+      expect(ok('a'.repeat(200))).toBe(false);
+    });
+
+    test('agent, model and skill are length-bounded and charset-checked', () => {
+      const withField = (k: string, v: string): boolean =>
+        UiCommandSchema.safeParse({ id: 'c', kind: 'setSessionAgent', sessionId: 'ses_a', [k]: v }).success;
+      expect(withField('agent', 'explore')).toBe(true);
+      expect(withField('agent', 'a'.repeat(300))).toBe(false);
+      expect(withField('agent', 'a\nb')).toBe(false);
+    });
+
+    test('command length is bounded at the schema, not only in the router', () => {
+      const cmd = (v: string): boolean =>
+        UiCommandSchema.safeParse({ id: 'c', kind: 'execSessionShell', sessionId: 'ses_a', command: v }).success;
+      expect(cmd('rm -rf build')).toBe(true);
+      expect(cmd('x'.repeat(5000))).toBe(false);
+    });
+
+    test('key fields cannot smuggle control characters', () => {
+      const r = UiCommandSchema.safeParse({
+        id: 'c',
+        kind: 'saveApiKeys',
+        groqKey: 'gsk-a\nBARE',
+        fishKey: 'f',
+        openrouterKey: 'o',
+      });
+      expect(r.success).toBe(false);
+    });
+
+    test('id is length-bounded so it cannot be used to flood a log line', () => {
+      expect(UiCommandSchema.safeParse({ id: 'c'.repeat(500), kind: 'abort' }).success).toBe(false);
+    });
+  });
+
   test('ack and error kinds are namespaced', () => {
     expect(ACK_KIND).toBe('ack');
     expect(ERROR_KIND).toBe('error');

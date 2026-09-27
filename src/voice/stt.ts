@@ -131,16 +131,48 @@ function pcmToWav(pcm: Uint8Array): Uint8Array {
   return out;
 }
 
+/** Hard abort for one transcription window. */
+export const STT_TIMEOUT_MS = 15_000;
+
+/**
+ * Distinguishable from a provider 4xx/5xx so the daemon can say "we gave up"
+ * instead of "Groq refused", and so a key-rotation path is not triggered by a
+ * slow network.
+ */
+export class SttTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`STT request timed out after ${ms}ms`);
+    this.name = 'SttTimeoutError';
+  }
+}
+
+export interface TranscribeOptions {
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Transcribe a window with a hard bound.
+ *
+ * D5: this had no timeout at all. `AudioPipeline.pushChunk` awaits windows
+ * serially, so a single hung Whisper request stopped every later window from
+ * being processed and left the HUD in `thinking` forever.
+ *
+ * The bound is enforced by racing, not by handing the SDK an abort signal: the
+ * guarantee we want is "this call returns within `timeoutMs`", and that has to
+ * hold even if the client ignores cancellation.
+ */
 export async function transcribeStream(
   pcm: Uint8Array,
   client: WhisperClient,
   startedAt: string = nowIso(),
+  options: TranscribeOptions = {},
 ): Promise<Transcript> {
+  const timeoutMs = options.timeoutMs ?? STT_TIMEOUT_MS;
   const chunks = chunkPcm(pcm);
   const texts: string[] = [];
   const probs: number[] = [];
   for (const chunk of chunks) {
-    const res = await client.transcribe(chunk);
+    const res = await withTimeout(client.transcribe(chunk), timeoutMs);
     if (typeof res === 'string') {
       texts.push(res);
       continue;
@@ -158,4 +190,15 @@ export async function transcribeStream(
     roundTripMs: Date.parse(nowIso()) - Date.parse(startedAt),
     ...(noSpeechProb === undefined ? {} : { noSpeechProb }),
   };
+}
+
+/** Reject with `SttTimeoutError` if `work` has not settled within `ms`. */
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SttTimeoutError(ms)), ms);
+  });
+  return Promise.race([work, expiry]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }

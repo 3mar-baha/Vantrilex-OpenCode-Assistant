@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nowIso, VOICE_IDS } from '../common/brands.js';
@@ -199,6 +199,8 @@ export class FileAudioOut implements AudioOut {
   async playStream(chunks: AsyncIterable<Uint8Array>, voice: VoiceId): Promise<{ startedMs: number }> {
     const started = Date.now();
     mkdirSync(this.dir, { recursive: true });
+    // L3: sweep before writing so the directory cannot grow without bound.
+    sweepOldPlaybackFiles(this.dir, PLAYBACK_RETENTION_MS);
     const path = join(this.dir, `${cacheKey(nowIso(), voice)}.mp3`);
     const { openSync, writeSync, closeSync } = await import('node:fs');
     const fd = openSync(path, 'w');
@@ -262,11 +264,107 @@ export function fishRequestBody(text: string, fishVoiceId: string): Record<strin
   };
 }
 
+/** Hard abort for a synthesis request. A hung socket must not wedge a turn. */
+export const FISH_TIMEOUT_MS = 20_000;
+
+/**
+ * L2: the combined per-reply audio is cached as ONE entry, so an unbounded
+ * reply meant an unbounded allocation held for the length of the cache
+ * lifetime. 2 MB is far more than a spoken paragraph and small enough to be
+ * harmless when exceeded — in which case the entry is simply not written.
+ */
+export const SPEECH_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024;
+
+/** L3: how long a written playback file is kept. */
+export const PLAYBACK_RETENTION_MS = 15 * 60_000;
+
+/**
+ * Delete playback files older than `maxAgeMs`. Returns how many were removed.
+ *
+ * L3: `FileAudioOut` wrote one MP3 per reply into %TEMP% and nothing ever
+ * cleaned up, so the directory grew for the lifetime of the machine. Best
+ * effort by contract: a missing directory is zero, not an error.
+ */
+export function sweepOldPlaybackFiles(dir: string, maxAgeMs: number, now: number = Date.now()): number {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of entries) {
+    const file = join(dir, name);
+    try {
+      if (now - statSync(file).mtimeMs < maxAgeMs) continue;
+      unlinkSync(file);
+      removed += 1;
+    } catch {
+      // A file held open by a still-playing sink is simply kept for next time.
+    }
+  }
+  return removed;
+}
+
+/** Distinguishable from a provider 4xx/5xx so callers can tell them apart. */
+export class TtsTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`TTS request timed out after ${ms}ms`);
+    this.name = 'TtsTimeoutError';
+  }
+}
+
+/**
+ * `fetch` with a hard abort, using the same idiom as `brain.ts` so the codebase
+ * has one timeout pattern. L9: the Fish call previously had none, so a stalled
+ * connection held the utterance chain and the `speaking` phase indefinitely.
+ *
+ * The timer is **raced**, not merely signalled. Passing an `AbortSignal` only
+ * bounds the call if the fetch implementation honours it — a stub, a polyfill,
+ * or a hung socket inside a proxy may simply never settle. Racing makes "returns
+ * within `timeoutMs`" a property of this function rather than a hope about
+ * someone else's code.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new TtsTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([fetchImpl(url, { ...init, signal: controller.signal }), expiry]);
+  } catch (err) {
+    // If the signal fired, report the timeout even if the underlying call
+    // rejected with something else (a socket reset during teardown, say), so
+    // callers see one cause rather than a different error per transport.
+    if (controller.signal.aborted && !(err instanceof TtsTimeoutError)) throw new TtsTimeoutError(timeoutMs);
+    throw err;
+  } finally {
+    // Always disarm: a live timer keeps the event loop (and the daemon) alive.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export class FishHttpTransport implements FishTransport {
+  private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
+
   constructor(
     private readonly keyring: Keyring,
     private readonly endpoint = 'https://api.fish.audio/v1/tts',
-  ) {}
+    options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  ) {
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.timeoutMs = options.timeoutMs ?? FISH_TIMEOUT_MS;
+  }
 
   async synthesize(text: string, fishVoiceId: string): Promise<Uint8Array> {
     const parts: Uint8Array[] = [];
@@ -286,16 +384,21 @@ export class FishHttpTransport implements FishTransport {
   async *synthesizeStream(text: string, fishVoiceId: string): AsyncGenerator<Uint8Array> {
     const key = this.keyring.acquire('fish');
     try {
-      const res = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${Buffer.from(key.material).toString('utf8')}`,
-          'Content-Type': 'application/json',
-          model: TTS_MODEL,
-          Accept: 'audio/mpeg',
+      const res = await fetchWithTimeout(
+        this.endpoint,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${Buffer.from(key.material).toString('utf8')}`,
+            'Content-Type': 'application/json',
+            model: TTS_MODEL,
+            Accept: 'audio/mpeg',
+          },
+          body: JSON.stringify(fishRequestBody(text, fishVoiceId)),
         },
-        body: JSON.stringify(fishRequestBody(text, fishVoiceId)),
-      });
+        this.timeoutMs,
+        this.fetchImpl,
+      );
       if (res.status === 429) {
         this.keyring.release(key, false, 429);
         throw new Error('TTS rate-limited (429)');
@@ -420,7 +523,11 @@ export class TtsEngine {
       combined.set(part, offset);
       offset += part.byteLength;
     }
-    await this.cache.set(clean, voice, combined);
+    // L2: skip the whole-reply cache entry when the blob is oversized, rather
+    // than allocating and holding it. Playback is unaffected; only the cache is.
+    if (total <= SPEECH_CACHE_MAX_ENTRY_BYTES) {
+      await this.cache.set(clean, voice, combined);
+    }
     return { cacheHit: false, startedMs: Date.now() - started, firstChunkMs, sentences: sentences.length };
   }
 }

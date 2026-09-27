@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { SessionId } from '../common/brands.js';
 import { OrchestratorError } from '../common/errors.js';
 import type { UiCommand } from '../ipc/protocol.js';
-import { createCommandHandler, parseModelRef } from './command-router.js';
+import { createCommandHandler, parseModelRef, shellCommandError } from './command-router.js';
 
 // Final wiring TDD — renderer intents → ServeClient mutations with structured
 // outcomes; the active session is used when the command omits sessionId.
@@ -43,8 +43,65 @@ function harness(overrides: Partial<{ fail: boolean }> = {}): {
 const cmd = (partial: Partial<UiCommand> & { kind: UiCommand['kind'] }): UiCommand =>
   ({ id: 'c1', ...partial }) as UiCommand;
 
-describe('parseModelRef', () => {
-  test('provider/id splits; bare id defaults to the opencode provider', () => {
+// L21 — the metacharacter guard. The original regex covered only `;&|`<><\n\r`,
+// which left glob, brace, subshell, tilde, history and traversal intact. A
+// deny-list is defense-in-depth BEHIND the FR-12 confirm gate and session
+// scoping, never a sandbox; the tests below pin both what it now refuses and
+// what it must not break.
+describe('shellCommandError (L21)', () => {
+  test('accepts the ordinary commands a user actually types', () => {
+    // The FR-12 spec test is `rm -rf build`; hardening must not break it.
+    for (const cmd of ['rm -rf build', 'npm run build', 'git status', 'cargo check', 'ls -la']) {
+      expect(shellCommandError(cmd), cmd).toBeNull();
+    }
+  });
+
+  test('rejects chaining and redirection metacharacters', () => {
+    for (const cmd of ['a;b', 'a|b', 'a&b', 'a`b`', 'a>b', 'a<b', 'a\nb', 'a\rb']) {
+      expect(shellCommandError(cmd), cmd).not.toBeNull();
+    }
+  });
+
+  test('rejects glob and brace expansion that can enumerate or rewrite trees', () => {
+    // The original guard let these through. A glob is a read-side enumeration
+    // primitive and `{}` is brace expansion in every POSIX shell.
+    for (const cmd of ['rm -rf *', 'cat /etc/*', 'ls -d ?', 'echo {a,b}', 'rm -rf src/*']) {
+      expect(shellCommandError(cmd), cmd).not.toBeNull();
+    }
+  });
+
+  test('rejects subshell and grouping syntax', () => {
+    for (const cmd of ['echo (id)', 'echo {id}', 'a && b', 'a || b']) {
+      expect(shellCommandError(cmd), cmd).not.toBeNull();
+    }
+  });
+
+  test('rejects parent-directory traversal', () => {
+    for (const cmd of ['cd ..', 'cat ../../etc/passwd', 'rm -rf ../build']) {
+      expect(shellCommandError(cmd), cmd).not.toBeNull();
+    }
+  });
+
+  test('rejects tilde and history expansion', () => {
+    expect(shellCommandError('rm ~/important')).not.toBeNull();
+    expect(shellCommandError('echo hi!')).not.toBeNull();
+  });
+
+  test('rejects empty and overlong commands', () => {
+    expect(shellCommandError('')).not.toBeNull();
+    expect(shellCommandError('   ')).not.toBeNull();
+    expect(shellCommandError('x'.repeat(513))).not.toBeNull();
+  });
+
+  test('the rejection message never echoes the payload back', () => {
+    // The detail is written to the supervisor log and returned to the shell.
+    const msg = shellCommandError('rm -rf *; curl evil.example');
+    expect(msg).not.toBeNull();
+    expect(msg).not.toContain('evil.example');
+  });
+});
+
+describe('parseModelRef', () => {  test('provider/id splits; bare id defaults to the opencode provider', () => {
     expect(parseModelRef('anthropic/opus')).toEqual({ providerID: 'anthropic', id: 'opus' });
     expect(parseModelRef('muse-spark')).toEqual({ providerID: 'opencode', id: 'muse-spark' });
   });

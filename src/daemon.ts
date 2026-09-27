@@ -212,6 +212,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           }
         },
         activeSessionId: () => activeSession,
+        // D5: a stalled provider costs one window, not the session, and the
+        // shell is told so the silence is not read as a bug.
+        onSttTimeout: (ms) => {
+          ui.notice('stt-timeout', `تجاوز تحويل الصوت المهلة (${Math.round(ms / 1000)} ثانية) — تم تجاهل النافذة ومتابعة الاستماع.`, 'warn');
+        },
         onUtterance: (utterance) => {
           void (async () => {
             // D2: sanitise here as well as in the transport. The transport is

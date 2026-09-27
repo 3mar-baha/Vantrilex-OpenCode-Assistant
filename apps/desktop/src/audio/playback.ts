@@ -19,11 +19,20 @@ export interface AudioPlayerOptions {
   readonly dispose?: () => void;
 }
 
+/**
+ * L1: the downlink queue used to be an unbounded array, so a decode slower than
+ * the downlink grew the heap for as long as the assistant kept talking. 32
+ * chunks is roughly several seconds of speech — far more than any honest
+ * sentence-level backlog, and small enough to be irrelevant when it is hit.
+ */
+export const PLAYBACK_QUEUE_CAP = 32;
+
 export class AudioPlayer {
   private readonly queue: Uint8Array[] = [];
   private draining = false;
   private started = false;
   private generation = 0;
+  private droppedCount = 0;
 
   constructor(private readonly options: AudioPlayerOptions) {}
 
@@ -37,9 +46,20 @@ export class AudioPlayer {
     return this.queue.length;
   }
 
+  /** Chunks discarded by the queue cap. Non-zero means audio was lost. */
+  get dropped(): number {
+    return this.droppedCount;
+  }
+
   enqueue(bytes: Uint8Array): void {
     if (bytes.byteLength === 0) return;
     this.queue.push(bytes);
+    // Drop the OLDEST on overflow: the tail is what the user is waiting to
+    // hear, and dropping it would truncate the reply mid-sentence.
+    while (this.queue.length > PLAYBACK_QUEUE_CAP) {
+      this.queue.shift();
+      this.droppedCount += 1;
+    }
     if (!this.started) {
       this.started = true;
       this.options.onStart?.();

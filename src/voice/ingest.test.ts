@@ -121,6 +121,60 @@ describe('isLoudWindow', () => {
   });
 });
 
+describe('L7 bufferedBytes is exact', () => {
+  test('reports the true pending byte count at every step', () => {
+    // L7: the accumulator reported a stale high-water mark, so
+    // `bufferedBytes` was not a usable backpressure signal.
+    const ingest = new AudioIngest();
+    expect(ingest.bufferedBytes).toBe(0);
+    ingest.push(new Uint8Array(1000));
+    expect(ingest.bufferedBytes).toBe(1000);
+    ingest.push(new Uint8Array(2000));
+    expect(ingest.bufferedBytes).toBe(3000);
+    const windows = ingest.push(new Uint8Array(WINDOW_BYTES - 3000));
+    expect(windows).toHaveLength(1);
+    expect(ingest.bufferedBytes).toBe(0);
+  });
+
+  test('incremental 100 ms chunks never shed; only a burst past the cap does', () => {
+    // L7: the accumulator copied the whole buffer on every push. The contract
+    // that matters is (a) memory stays bounded and (b) the pending count stays
+    // truthful. Incremental chunks complete windows promptly, so the shed path
+    // is reserved for a burst that would otherwise exceed the cap.
+    const incremental = new AudioIngest();
+    for (let i = 0; i < 400; i += 1) incremental.push(new Uint8Array(3200));
+    expect(incremental.droppedWindows).toBe(0);
+    expect(incremental.bufferedBytes).toBeLessThan(WINDOW_BYTES);
+
+    const burst = new AudioIngest();
+    const emitted = burst.push(new Uint8Array(WINDOW_BYTES * 8));
+    expect(emitted).toHaveLength(6);
+    expect(burst.droppedWindows).toBe(2);
+    expect(burst.bufferedBytes).toBeLessThanOrEqual(WINDOW_BYTES);
+  });
+
+  test('window boundaries survive the chunked path unchanged', () => {
+    // Same geometry as before, so the 5 s STT window contract is preserved.
+    const a = new AudioIngest();
+    for (let i = 0; i < 50; i += 1) for (const w of a.push(new Uint8Array(3200).fill(7))) void w;
+    expect(a.bufferedBytes).toBe(0);
+
+    const b = new AudioIngest();
+    const emitted: Uint8Array[] = [];
+    for (let i = 0; i < 50; i += 1) for (const w of b.push(new Uint8Array(3200).fill(i % 256))) emitted.push(w);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]![0]).toBe(0);
+    expect(emitted[0]![3200]).toBe(1);
+  });
+
+  test('reset() empties the buffer and its counters', () => {
+    const ingest = new AudioIngest();
+    ingest.push(new Uint8Array(5000));
+    ingest.reset();
+    expect(ingest.bufferedBytes).toBe(0);
+  });
+});
+
 describe('bytesToFloat32', () => {
   test('normalises Int16LE to the -1..1 range Silero expects', () => {
     const pcm = new Int16Array([0, 16384, -16384, 32767]);

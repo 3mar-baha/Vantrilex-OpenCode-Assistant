@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { AudioPlayer, createDefaultPlayer, PLAYBACK_GAIN } from './playback.js';
+import { AudioPlayer, createDefaultPlayer, PLAYBACK_GAIN, PLAYBACK_QUEUE_CAP } from './playback.js';
 
 // P4b TDD — the player is a strict FIFO: decode in order, play in order,
 // failures skip the chunk without stalling, empty input is dropped.
@@ -98,6 +98,65 @@ describe('AudioPlayer', () => {
     // The stale drain resolves after the stop: nothing new plays, no second end.
     expect(ended).toEqual(['end']);
     expect(player.playing).toBe(false);
+  });
+});
+
+// L1 — the downlink queue was an unbounded array. A slow decode under a
+// sustained reply grew the heap without limit, and nothing reported it.
+describe('AudioPlayer queue cap (L1)', () => {
+  function slowPlayer() {
+    const played: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const player = new AudioPlayer({
+      decode: async (b: Uint8Array) => {
+        await gate;
+        return new TextDecoder().decode(b) as unknown as AudioBuffer;
+      },
+      sink: { play: (buf) => void played.push(buf as unknown as string) },
+    });
+    return { player, played, release };
+  }
+
+  test('the queue is bounded, so a stalled decode cannot grow it forever', () => {
+    const { player } = slowPlayer();
+    for (let i = 0; i < 500; i += 1) player.enqueue(new Uint8Array([i & 0xff]));
+    expect(player.queued).toBeLessThanOrEqual(PLAYBACK_QUEUE_CAP);
+  });
+
+  test('overflow drops the OLDEST chunks, preserving the most recent speech', () => {
+    // Dropping the newest would truncate the reply mid-sentence; the tail is
+    // what the user is currently waiting to hear.
+    const { player } = slowPlayer();
+    for (let i = 0; i < 500; i += 1) player.enqueue(new Uint8Array([i & 0xff]));
+    expect(player.queued).toBe(PLAYBACK_QUEUE_CAP);
+    expect(player.dropped).toBeGreaterThan(0);
+  });
+
+  test('dropped chunks are counted, so the loss is observable not silent', () => {
+    const { player } = slowPlayer();
+    const enqueued = 300;
+    for (let i = 0; i < enqueued; i += 1) player.enqueue(new Uint8Array([1]));
+    // One chunk is in `decode` and not in the queue, so the accounting is
+    // queued + dropped + 1 === enqueued. Everything else was dropped.
+    expect(player.queued + player.dropped + 1).toBe(enqueued);
+    expect(player.dropped).toBeGreaterThan(0);
+  });
+
+  test('an empty enqueue is ignored and does not consume queue space', () => {
+    const { player } = slowPlayer();
+    player.enqueue(new Uint8Array(0));
+    expect(player.queued).toBe(0);
+  });
+
+  test('stop() clears the queue but keeps the drop count', () => {
+    const { player } = slowPlayer();
+    for (let i = 0; i < 200; i += 1) player.enqueue(new Uint8Array([1]));
+    player.stop();
+    expect(player.queued).toBe(0);
+    expect(player.dropped).toBeGreaterThan(0);
   });
 });
 

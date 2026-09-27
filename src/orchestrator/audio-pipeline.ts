@@ -1,5 +1,6 @@
 import type { SessionId } from '../common/brands.js';
 import { AudioIngest, isLoudWindow } from '../voice/ingest.js';
+import { STT_TIMEOUT_MS, SttTimeoutError } from '../voice/stt.js';
 
 // Voice capture pipeline (P4): ingest windows → Whisper transcript → brain
 // reply → session dispatch. Three fail-closed rules: silence is gated before
@@ -41,6 +42,12 @@ export interface AudioPipelineDeps {
   dispatch?(text: string): Promise<{ receipt: string }>;
   activeSessionId(): SessionId | undefined;
   onUtterance?(utterance: Utterance): void;
+  /**
+   * D5: a transcription window that timed out. The window is abandoned and the
+   * loop CONTINUES with the next one — a single stalled provider call must not
+   * cost the rest of the capture session.
+   */
+  onSttTimeout?(ms: number): void;
 }
 
 export class AudioPipeline {
@@ -50,6 +57,7 @@ export class AudioPipeline {
   private gatedCount = 0;
   private hallucinationCount = 0;
   private repeatCount = 0;
+  private sttTimeouts = 0;
 
   constructor(deps: AudioPipelineDeps) {
     this.deps = deps;
@@ -79,6 +87,11 @@ export class AudioPipeline {
     return this.repeatCount;
   }
 
+  /** Windows abandoned because transcription timed out. */
+  get sttTimeoutDrops(): number {
+    return this.sttTimeouts;
+  }
+
   reset(): void {
     this.ingest.reset();
     this.recent = [];
@@ -90,7 +103,9 @@ export class AudioPipeline {
         this.gatedCount += 1;
         continue;
       }
-      const result = await this.deps.transcribe(window);
+      const result = await this.transcribeWindow(window);
+      // A timed-out window is dropped, not thrown: the loop must keep flowing.
+      if (result === null) continue;
       const text = typeof result === 'string' ? result : result.text;
       const noSpeechProb = typeof result === 'string' ? undefined : result.noSpeechProb;
       const transcript = text.trim();
@@ -120,6 +135,23 @@ export class AudioPipeline {
   private async isSpeech(window: Uint8Array): Promise<boolean> {
     if (this.deps.speechGate !== undefined) return this.deps.speechGate(window);
     return isLoudWindow(window);
+  }
+
+  /**
+   * D5: drop a window whose transcription timed out instead of throwing.
+   * `pushChunk` awaits windows serially, so propagating would abandon every
+   * later window too — the wedge this fix exists to remove. Any other error is
+   * a real failure and still propagates.
+   */
+  private async transcribeWindow(window: Uint8Array): Promise<Transcription | null> {
+    try {
+      return await this.deps.transcribe(window);
+    } catch (err) {
+      if (!(err instanceof SttTimeoutError)) throw err;
+      this.sttTimeouts += 1;
+      this.deps.onSttTimeout?.(STT_TIMEOUT_MS);
+      return null;
+    }
   }
 
   /** Punctuation/whitespace/case insensitive so trivial variants still repeat. */
