@@ -8,7 +8,7 @@ let host: HTMLDivElement | null = null;
 
 const chain = [
   { id: 'dots3', name: 'Dots3', role: 'الاستقبال الحواري' },
-  { id: 'nemotron', name: 'Nemotron', role: 'المنسق الرئيسي' },
+  { id: 'inkling-coordinator', name: 'Inkling', role: 'المنسق الرئيسي' },
   { id: 'inkling', name: 'Inkling', role: 'المنفذ داخل الجلسة' },
 ];
 
@@ -37,7 +37,7 @@ describe('SettingsView (general settings window; keys are decoupled)', () => {
     expect(document.body.querySelector('[data-testid="settings-view"]')).not.toBeNull();
     expect(document.body.querySelectorAll('[role="tab"]')).toHaveLength(4);
     expect(document.body.querySelector('[data-testid="apikey-groq"]')).toBeNull();
-    expect(document.body.querySelector('[data-testid="chain-nemotron"]')).not.toBeNull();
+    expect(document.body.querySelector('[data-testid="chain-inkling-coordinator"]')).not.toBeNull();
   });
 
   test('tab selection swaps content without unmounting the view', () => {
@@ -61,7 +61,9 @@ describe('SettingsView (general settings window; keys are decoupled)', () => {
   test('technical acronyms stay Latin verbatim', () => {
     mount(<SettingsView chain={chain} />);
     const modelsText = document.body.textContent ?? '';
-    for (const token of ['OpenCode', 'Dots3', 'Nemotron', 'Inkling', 'Groq', 'Fish Audio']) {
+    // The coordinator is served by the Inkling model, so 'Nemotron' no longer
+    // appears; the Latin-verbatim rule is checked against the slugs that do.
+    for (const token of ['OpenCode', 'Dots3', 'Inkling', 'Groq', 'Fish Audio', 'whisper-large-v3-turbo']) {
       expect(modelsText).toContain(token);
     }
     act(() => {

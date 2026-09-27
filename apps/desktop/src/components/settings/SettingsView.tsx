@@ -32,7 +32,7 @@ const BRIDGE_SKILLS = ['mission-handoff', 'prompt-synthesis', 'vault-sync'] as c
 
 const MODEL_ROSTER = [
   { role: 'الاستقبال الحواري', slug: 'dots-studio/dots-3-note-preview:free' },
-  { role: 'المنسق الرئيسي', slug: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
+  { role: 'المنسق الرئيسي', slug: 'thinkingmachines/inkling:free' },
   { role: 'المنفذ داخل الجلسة', slug: 'thinkingmachines/inkling:free' },
   { role: 'STT', slug: 'whisper-large-v3-turbo (Groq)' },
   { role: 'TTS', slug: 's2.1-pro-free (Fish Audio)' },

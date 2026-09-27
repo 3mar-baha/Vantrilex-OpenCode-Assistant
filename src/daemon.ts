@@ -207,7 +207,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   });
 
   // Voice capture pipeline (P4+P5): binary PCM → Whisper transcript →
-  // 3-agent chain (Dots3 intake → Nemotron plan → Inkling handoff). Built from
+  // 3-agent chain (Dots3 intake → Inkling plan → Inkling handoff). Built from
   // the vault; kept REBUILDABLE so keys saved from the UI activate the voice
   // loop without a restart. A keyless daemon keeps the control plane up, drops
   // audio, and tells the shell to show the first-run call to action.

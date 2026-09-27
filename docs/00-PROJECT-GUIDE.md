@@ -82,7 +82,7 @@ Measured live: serve answers in ~125 ms, voice reply first-chunk in
 | Job | Provider | Exact model | Status |
 |---|---|---|---|
 | Conversational intake | OpenRouter | `dots-studio/dots-3-note-preview:free` | **Live** |
-| Master coordinator & brain | OpenRouter | `nvidia/nemotron-3-ultra-550b-a55b:free` | **Live** |
+| Master coordinator & brain | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
 | Sub-agent execution driver | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
 | Session default | OpenRouter | Nemotron (same slug) | **Live** |
 | Speech-to-text | Groq | `whisper-large-v3-turbo` | **Live** |

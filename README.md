@@ -59,12 +59,12 @@ provider models, and memory notes instead of starting cold.
 **Agent hierarchy.** Dots3 (`dots-studio/dots-3-note-preview:free`) takes
 Arabic intake and emits English missions — with reasoning suppressed
 (`effort: none`, 200 tokens) it answers in ~1.5 s as the fast primary, with a
-one-shot Nemotron intake failover if it ever returns unparseable output.
-Nemotron
-(`nvidia/nemotron-3-ultra-550b-a55b:free`, the coordinator default) decomposes
+one-shot inkling intake failover if it ever returns unparseable output.
+Inkling
+(`thinkingmachines/inkling:free`, the coordinator default) decomposes
 missions into dependency-ordered task DAGs under strict JSON-schema
 enforcement (plus one bounded retry) and dispatches them. Inkling
-(`thinkingmachines/inkling:free`, `mode: subagent`) drives work strictly
+(`thinkingmachines/inkling:free`, `mode: subagent`) also drives work strictly
 inside OpenCode session boundaries and reports concise English summaries with
 receipts. A.R.E.E.B. (أَرِيب) is the Type-1 foundation model behind the
 persona layer.
@@ -74,7 +74,7 @@ persona layer.
 | Role | Model | MCP surface | Forbidden |
 |---|---|---|---|
 | Dots3 intake | `dots-studio/dots-3-note-preview:free` | conversation only | tool dispatch |
-| Nemotron coordinator | `nvidia/nemotron-3-ultra-550b-a55b:free` | sequential-thinking, memory, filesystem, github, context7 | direct OS execution |
+| Inkling coordinator | `thinkingmachines/inkling:free` | sequential-thinking, memory, filesystem, github, context7 | direct OS execution |
 | Inkling driver | `thinkingmachines/inkling:free` | filesystem, memory, sequential-thinking, obsidian-vault, github | out-of-session acts, model/agent switches, credentials |
 
 ---

@@ -3,12 +3,24 @@ import type { SessionId } from '../common/brands.js';
 import { extractJson, requiresConfirmation } from '../voice/brain.js';
 
 // P5 runtime orchestration — the 3-agent chain as executable code:
-// Dots3 intake ({reply_ar, task_en}) → Nemotron plan (task DAG) → Inkling
+// Dots3 intake ({reply_ar, task_en}) → Inkling plan (task DAG) → Inkling
 // handoff dispatched to the active OpenCode session. The fast verbal reply is
 // spoken before planning completes; every malformed model output becomes a
 // structured failure, never an escape; destructive plans honor FR-12.
+//
+// The coordinator role was previously served by Nemotron
+// (nvidia/nemotron-3-ultra-550b-a55b:free). It is now served by Inkling
+// (thinkingmachines/inkling:free), verified live 2026-09-27: 5/5 valid task
+// DAGs against the production strict json_schema (p50 1950 ms, max 3987 ms,
+// within the 25 s planning ceiling). Two measured constraints travel with it:
+// inkling answers HTTP 403 without an agentic User-Agent (see
+// OPENROUTER_USER_AGENT in voice/brain.ts), and without strict schema
+// enforcement it emits raw tool-call syntax instead of a plan (0/5
+// prompt-only) — so PLAN_RESPONSE_FORMAT is load-bearing, not decorative.
+// "Nemotron" survives in the handoff envelope only as the coordinator role
+// name defined by the mission-handoff skill contract, not as a model slug.
 export const INTAKE_MODEL = 'dots-studio/dots-3-note-preview:free';
-export const COORDINATOR_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
+export const COORDINATOR_MODEL = 'thinkingmachines/inkling:free';
 
 export const IntakeSchema = z.object({
   reply_ar: z.string().min(1),

@@ -35,6 +35,8 @@ describe('OpenRouterBrainClient', () => {
     expect(attempts).toBe(1);
     expect(seen!.url).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect((seen!.init.headers as Record<string, string>)['Authorization']).toBe('Bearer test-key');
+    // Harness-gated models (inkling:free) 403 without an agentic UA.
+    expect((seen!.init.headers as Record<string, string>)['User-Agent']).toBe('opencode/1.0 (Voxaura)');
     const body = JSON.parse(seen!.init.body as string) as Record<string, unknown>;
     expect(body['model']).toBe(BRAIN_OPENROUTER_MODEL);
     expect(body['response_format']).toEqual({ type: 'json_object' });
@@ -214,14 +216,20 @@ describe('openRouterChat (shared P5 transport)', () => {
     const body = JSON.parse(seen.init.body);
     expect(body).toMatchObject({ model: 'm/slug', response_format: { type: 'json_object' } });
     expect(seen.init.headers['Authorization']).toBe('Bearer k');
+    expect(seen.init.headers['User-Agent']).toBe('opencode/1.0 (Voxaura)');
   });
 
   test('401 rejects non-retryable; empty content rejects retryable', async () => {
     const denied = async () =>
       openRouterChat('k', 'm', 's', 'u', mockFetch([{ status: 401, body: { error: { message: 'bad' } } }]));
-    await expect(denied()).rejects.toMatchObject({ retryable: false });
+    // Same honest codes as the BrainClient path: a refused credential is not
+    // a timeout, and quota exhaustion must be identifiable, not retried.
+    await expect(denied()).rejects.toMatchObject({ code: 'BRAIN_AUTH', retryable: false });
+    const limited = async () =>
+      openRouterChat('k', 'm', 's', 'u', mockFetch([{ status: 429, body: {} }]));
+    await expect(limited()).rejects.toMatchObject({ code: 'RATE_LIMITED', retryable: false });
     const empty = async () =>
       openRouterChat('k', 'm', 's', 'u', mockFetch([{ status: 200, body: { choices: [{ message: { content: ' ' } }] } }]));
-    await expect(empty()).rejects.toMatchObject({ retryable: true });
+    await expect(empty()).rejects.toMatchObject({ code: 'BRAIN_REJECTED', retryable: true });
   });
 });

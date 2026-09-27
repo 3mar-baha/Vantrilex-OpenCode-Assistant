@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Coordinator, INTAKE_MODEL, COORDINATOR_MODEL, buildHandoff } from './coordinator.js';
 
-// P5 TDD — Dots3 intake → Nemotron plan → Inkling handoff dispatch.
+// P5 TDD — Dots3 intake → Inkling plan → Inkling handoff dispatch.
 // Fast verbal reply first, structured failure never throws out.
 function chatFor(responses: Record<string, string>): (model: string, _s: string, _u: string) => Promise<string> {
   return async (model: string) => {
@@ -23,7 +23,7 @@ const PLAN_OK = JSON.stringify({
 describe('coordinator chain', () => {
   test('model slugs match the locked roster', () => {
     expect(INTAKE_MODEL).toBe('dots-studio/dots-3-note-preview:free');
-    expect(COORDINATOR_MODEL).toBe('nvidia/nemotron-3-ultra-550b-a55b:free');
+    expect(COORDINATOR_MODEL).toBe('thinkingmachines/inkling:free');
   });
 
   test('D4: a hung speak must not block planning or dispatch', async () => {

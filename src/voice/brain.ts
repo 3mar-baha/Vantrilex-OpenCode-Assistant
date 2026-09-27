@@ -8,6 +8,20 @@ import { OrchestratorError } from '../common/errors.js';
 export const BRAIN_GOLDEN_MS = 2000;
 export const BRAIN_CEILING_MS = 5000;
 
+/**
+ * OpenRouter client identity.
+ *
+ * Measured 2026-09-27: `thinkingmachines/inkling:free` answers HTTP 403
+ * ("only available on agentic harnesses") unless the request carries a
+ * `User-Agent` identifying a known coding agent. `opencode/<version>` passes
+ * (any version; suffixes after the version are accepted, so the product names
+ * itself honestly), as do `claude-cli/`, `codex-cli/` and `cursor/`. Bare
+ * `voxaura/`, `aider/`, `continue/` and browser UAs are rejected. Node's
+ * default fetch sends no such UA, so without this header the coordinator
+ * could never use inkling at all — every plan call would fail as a 403.
+ */
+export const OPENROUTER_USER_AGENT = 'opencode/1.0 (Voxaura)';
+
 export const BrainOutputSchema = z.object({
   intent: z.enum(['newSession', 'followUp', 'control']),
   control: z.enum(['approve', 'cancel', 'repeat', 'switchVoice', 'none']).default('none'),
@@ -147,6 +161,9 @@ export async function openRouterChat(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
         'X-Title': 'opencode-voice-runtime',
+        // Required by harness-gated models (measured: inkling:free 403s
+        // without an agentic UA). Harmless for every other model.
+        'User-Agent': OPENROUTER_USER_AGENT,
       },
       body: JSON.stringify({
         model,
@@ -162,22 +179,32 @@ export async function openRouterChat(
       }),
       signal: controller.signal,
     });
+    // Same honest codes as respondOnce (L24): the coordinator and narrator both
+    // run through this function, and every failure here used to wear
+    // BRAIN_TIMEOUT. Retryable flags are preserved exactly — except 429, which
+    // used to be retryable-true and is now false: retrying an exhausted quota
+    // just burns the same exhausted budget. The coordinator's intake failover
+    // catches all chat errors regardless of `retryable`, so that path is
+    // unaffected.
     if (res.status === 401 || res.status === 403) {
-      throw new OrchestratorError('BRAIN_TIMEOUT', false, 'brain rejected credentials (rotate OPENROUTER_API_KEY)');
+      throw new OrchestratorError('BRAIN_AUTH', false, 'brain rejected credentials (rotate OPENROUTER_API_KEY)');
+    }
+    if (res.status === 429) {
+      throw new OrchestratorError('RATE_LIMITED', false, 'brain rate limited or out of quota (HTTP 429)');
     }
     if (!res.ok) {
-      throw new OrchestratorError('BRAIN_TIMEOUT', true, `brain endpoint HTTP ${res.status}`);
+      throw new OrchestratorError('BRAIN_REJECTED', true, `brain endpoint HTTP ${res.status}`);
     }
     const payload = (await res.json()) as {
       choices?: Array<{ message?: { content?: unknown } }>;
       error?: { message?: unknown };
     };
     if (typeof payload?.error?.message === 'string') {
-      throw new OrchestratorError('BRAIN_TIMEOUT', false, `brain provider error: ${payload.error.message.slice(0, 200)}`);
+      throw new OrchestratorError('BRAIN_REJECTED', false, `brain provider error: ${payload.error.message.slice(0, 200)}`);
     }
     const content = payload?.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || content.trim().length === 0) {
-      throw new OrchestratorError('BRAIN_TIMEOUT', true, 'brain returned empty completion');
+      throw new OrchestratorError('BRAIN_REJECTED', true, 'brain returned empty completion');
     }
     return content;
   } catch (err) {
@@ -235,6 +262,8 @@ export class OpenRouterBrainClient implements BrainClient {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.apiKey}`,
           'X-Title': 'opencode-voice-runtime',
+          // Same harness-gate reason as openRouterChat above.
+          'User-Agent': OPENROUTER_USER_AGENT,
         },
         body: JSON.stringify({
           model: this.model,
