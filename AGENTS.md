@@ -50,7 +50,7 @@ NSIS (`makensis`) must be installed. Silent install: `Voxaura_<v>_x64-setup.exe 
 ## Gates & their blind spots
 
 - `test:vantrilex` is **typecheck → eslint → oxlint → root vitest → desktop vitest**. E2E is **not** part of it.
-- Current counts (keep these moving up, never down): root **491 passed + 3 skipped** (45 files) · desktop **149** (23 files) · `cargo test` **26** · E2E **18** across 14 specs. `npm run test:vantrilex` exits 0 on all of these.
+- Current counts (keep these moving up, never down): root **498 passed + 0 skipped** (39 files) · desktop **149** (23 files) · `cargo test` **26** · E2E **18** across 14 specs. `npm run test:vantrilex` exits 0 on all of these. The root count went 491 -> 498 *while 70 tests were deleted*: 44 unreachable modules were quarantined and 30 seam tests added. A falling count is not automatically a regression — check `git log` before "fixing" it.
 - `cargo check --no-default-features`, `cargo build --release` and `test:e2e` are separate.
 - Almost all network clients are **injected mocks**. E2E drives `stub-daemon.mjs` (real `UiServer` + router, fake control port `:4197`, no providers/vault). Only `node dist/cli.js live` and `scripts/live_console_test.ts` touch real APIs — neither is in the gate, so **green CI does not mean the live loop works**. v0.6.0 is the proof: every gate green, daemon could not boot.
 - Desktop unit tests run in `happy-dom`; root in node.
@@ -82,17 +82,37 @@ Routing table (every slug is `:free`; the 100%-free constraint is a product deci
 
 Measured free-tier latency (same day, same key): intake p50 **901 ms** · inkling plan p50 **1,950 ms** / max 3,987 · narration p50 **2,615 ms** / max 5,463 · STT 726 ms · TTS 3,196+1,267 ms. Free tiers are slow and lossy — re-measure, don't assume.
 
-## ⚠️ Dead code — 24.6% of `src/` is unreachable, and some of it is documented as shipped
+## Dead code — `src/` is at 0%, and reachability is measured
 
-Verified by resolving every relative import transitively from the two real entry points (`src/daemon.ts`, `src/cli.ts`): **31 of 63 `src/` production modules (1,987 lines) have zero importers**, and **19 of 45 root test files (~4,100 lines) test only that unreachable code**. A green suite here partly measures a product that does not ship.
+**This section replaced a 24.6 % dead-code warning. As of v0.7.0 there is none.**
+Resolve every relative import transitively from `src/daemon.ts` and `src/cli.ts`:
 
-Unreachable today: all of `src/guidance/` (11 files, RAG/BLUF/overseer/guild-skills), all of `src/ui/` (4, legacy settings UI superseded by React), all of `src/runtime/laya/` (3, the ONNX model), `orchestrator/{orchestrator,mentions,slash,prompt-optimizer,dispatch,ledger,queue,events,laya-advisor,index}.ts`, `ipc/attach.ts`, `voice/{disambiguation,index}.ts`.
+```
+LIVE production modules : 37
+DEAD production modules : 0
+live source lines       : 6598
+dead source lines       : 0
+```
 
-**`mentions.ts`, `slash.ts` and `prompt-optimizer.ts` are described in `CHANGELOG.md` and `docs/10-CHECKPOINT.md` as wired and shipped. They are not reachable.** Do not trust those claims, and do not "fix" a bug in a module that nothing imports. Before editing anything under `src/`, check that `daemon.ts`/`cli.ts` can actually reach it.
+Three modules that were in that dead set while `CHANGELOG.md` and
+`docs/10-CHECKPOINT.md` claimed they shipped are now wired in `daemon.ts` `think()`:
+`slash.ts`, `mentions.ts`, `prompt-optimizer.ts`. The other 28 were **moved, not
+deleted**, to `.opencode/_archive/dead-code-phase1/` — 44 files including their tests and
+fixtures. Quarantine rather than deletion was a deliberate call: the Laya ONNX heads and the
+RAG/guidance layer are real work a later phase may want to wire properly. `vitest.config.ts`
+includes only `src/**/*.test.ts`, so the archive is outside both the runner and `tsc`.
 
-Also: `docs/19-MOBILE-PAIRING.md` (no relay/QR/approval code exists — the only trace is a `'mobile'` union member in `runtime/client.ts`) and `docs/26-AGENT-LAUNCHER.md` (its `src/launcher/` ownership claim is false) both carry supersession banners. `opencode.json` is **this repo's own dev-session config**, not product config. iOS/Android icon sets under `src-tauri/icons/` are inert scaffold — there is no mobile target. `pnpm-lock.yaml` is vestigial; npm is the real package manager.
+**Re-derive reachability before trusting any document that claims a feature is wired** —
+including this one. The generalisable lesson is the one that was missed twice: a green suite
+plus a confident changelog is not evidence that a feature ships. `mentions.ts`, `slash.ts`
+and `prompt-optimizer.ts` had passing tests and zero importers at the same time.
 
-The full ledger — every module's exports, what each dead file was designed to do, and the L1–L24 finding status — is in `dossier/PROJECT_MASTER_DOSSIER.md` §2. Re-derive reachability before trusting either document: resolve every relative import transitively from `daemon.ts` and `cli.ts`.
+Also historical, still useful: `docs/19-MOBILE-PAIRING.md` (no relay/QR/approval code exists —
+the only trace is a `'mobile'` union member in `runtime/client.ts`) and
+`docs/26-AGENT-LAUNCHER.md` (its `src/launcher/` ownership claim is false) both carry
+supersession banners. `opencode.json` is **this repo's own dev-session config**, not product
+config. iOS/Android icon sets under `src-tauri/icons/` are inert scaffold. `pnpm-lock.yaml` is
+vestigial; npm is the real package manager.
 
 ## Vault — the single credential source
 

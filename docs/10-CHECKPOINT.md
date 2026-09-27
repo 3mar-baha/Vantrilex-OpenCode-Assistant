@@ -524,6 +524,49 @@ reachable, so the HUD showed nothing in real use.
 | Tests | root **448** (was 441) · desktop 135 · `cargo test` 26 · E2E 18/18 |
 | Two Phase 1 tests updated | They asserted `limit: null` with no argument — i.e. they pinned the *broken* behaviour. Replaced with tests for the catalog lookup, so the inert state cannot come back |
 
+## v0.7.0 — the code that actually ships (2026-09-27)
+
+Version metadata corrected across all nine carriers: `package.json`,
+`apps/desktop/package.json`, `apps/desktop/package-lock.json` (which had only
+one occurrence, not two), `tauri.conf.json`, `Cargo.toml`,
+`scripts/provision-sidecar.mjs`, `docs/00-PROJECT-GUIDE.md`,
+`assets/hero-banner.svg` and both READMEs. The bump asserted an exact
+occurrence count per file and refused to write on a mismatch — which is how
+the `package-lock.json` and multi-occurrence files were caught before they
+could be flattened. Release history in this file, the CHANGELOG and the
+dossier is left intact; a new section is added above it.
+
+| Area | Status | Evidence |
+|---|---|---|
+| Dead code | 0% | 44 modules quarantined; 0 dead production modules, 0 dead source lines, re-derived from `daemon.ts` + `cli.ts` |
+| L17 key rotation | closed | all 7 call sites release with the real status; 6 tests fail when reverted to unconditional `true` |
+| L16 telemetry | closed | `KeyAdvanced` now has a producer; 1 test fails if the `from !== to` check is dropped |
+| L16 doctor | closed | reads the vault, not env; 3 tests fail if the verdict is forced ok |
+| L6 barge-in | closed | generation counter re-checked after every await; 6 tests fail when removed, 15 pre-existing tests pass either way |
+| L22 persona | closed | daemon is the single source + equality echo guard; 3 tests fail per half when removed |
+| E2E | 18 / 14 specs | one stale assertion fixed: `chain-nemotron` was renamed by the Inkling switch and only failed outside the gate |
+| Live Arabic loop | 2 / 3 rounds | STT 421–688 ms, plan 4,776–5,073 ms, narration 5,010–5,015 ms, turn 14.3–16.0 s |
+
+### Carried into this release as known issues
+
+- **Fish TTS returns HTTP 402 "Insufficient API credit" on both keys**
+  (repo `0860168e89c5`, installed `7187a46e34d6`). Speech output is dead in
+  this environment while the key looks perfectly healthy. This is the hardest
+  class of key failure to diagnose and the reason `doctor` was corrected to
+  read the vault.
+- **Narration has ~3 s of headroom** on free-tier Inkling: measured 5,010–
+  5,015 ms against an 8,000 ms ceiling.
+- **The ingest window is 5 s**, so a shorter utterance buffers and never
+  transcribes. Correct, but surprising.
+- SEC-7 (packaged microphone grant) remains unverified: `wry` leaves the mic
+  at `PERMISSION_STATE_DEFAULT` and there is no `tauri-runtime-wry` passthrough.
+
+### Gates
+
+`test:vantrilex` exit 0 — typecheck 0, eslint 0 warnings, oxlint 8 advisory,
+root **498 passed + 0 skipped** (39 files), desktop **149** (23 files).
+`cargo test` **26**. E2E **18** across 14 specs. All measured, not assumed.
+
 ## v0.6.2 — bounded resources, honest microphone, live diagnostics
 
 | Item | Evidence |

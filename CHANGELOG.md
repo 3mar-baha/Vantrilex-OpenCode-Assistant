@@ -1,5 +1,118 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.7.0 — the code that actually ships (2026-09-27)
+
+Install v0.6.1 or later. v0.6.0 is broken and must not be installed.
+
+This release exists because the previous changelog entries described features
+that were never reachable. `mentions.ts`, `slash.ts` and `prompt-optimizer.ts`
+were all documented as wired; none of them had a single importer. Spoken
+`/compact` went to the planning model as prose, and a spoken `@secret.env` was
+forwarded as literal text — the exact leak the mention resolver's own header
+exists to prevent. Reachability is now measured rather than believed, and
+`src/` is at 0% dead code.
+
+### Three documented-as-shipped features are now actually wired
+
+- **`/compact`, `/new`, `/help`** are handled natively in the voice path and never
+  reach a model. Forwarding `/rm -rf /` to a planning agent is how a typo becomes
+  an incident. `/compact` maps to the `ServeClient.compactSession` that already
+  existed with no way to reach it.
+- **`@file` / `@agent` / `@skill`** are resolved before any model sees the text.
+  Rejected tokens never reach a model; the agent/skill catalog is fetched once per
+  daemon lifetime rather than twice per utterance.
+- **Prompt optimization** runs behind `isActionableInstruction`, so an
+  acknowledgement ("تمام") costs zero provider calls and can never become a task.
+  It uses the intake model with an 8 s ceiling, and any failure falls back to the
+  **user's own words** — never a canned rewrite.
+
+### A dead key now rotates instead of silently killing voice (L17)
+
+`Keyring.release(key, ok, status)` only advances the pool on 429/401/403, but all
+seven daemon and CLI call sites passed an unconditional `true`. A revoked key was
+therefore never rotated: the daemon kept paying for the same dead credential and
+the user saw voice simply stop, with nothing to distinguish an invalid key from a
+healthy one. All call sites now release with the real provider status, recovered
+from the thrown value — `OrchestratorError` has a code but no status, and STT goes
+through `groq-sdk`, whose `APIError` carries one. An unrecognised failure does
+**not** rotate: a transient 5xx or timeout must not walk you through a valid key
+pool.
+
+A rotation is now also visible. `remediationAttempted: 'KeyAdvanced'` existed in
+the telemetry schema with no producer, so the key changed and nothing recorded it.
+`doctor` no longer reports key availability from environment variables alone — the
+vault is the single credential source, so a normal installed run used to print
+`miss` for all three pools and exit non-zero while working perfectly.
+
+### Barge-in abandons the turn in flight (L6)
+
+`AudioPipeline.reset()` cleared its buffers and stopped there, so a chunk already
+parked on the STT provider, the planner or the dispatch call carried on and
+produced a complete turn for an utterance you had already interrupted. The
+pipeline now carries a generation counter and re-checks it after every await. The
+speech gate could not cover this: by the time the planner is running, the abort
+has long since fired and the window is inside the provider.
+
+### One persona, not two (L22)
+
+The HUD and the settings window each kept their own persona state, and the daemon
+set the active persona without telling either. Changing it in one window left the
+other showing — and speaking — the previous one. The daemon is now the single
+source: it announces every change, both surfaces follow, and the equality guard
+makes the echo loop between them unrepresentable. `hello` carries the current
+persona so a reconnecting shell is not left on the default.
+
+### 0% dead code
+
+44 unreachable modules (1,987 lines) moved to `.opencode/_archive/dead-code-phase1/`
+rather than deleted, so the research stays reversible: the Laya ONNX heads and the
+RAG/guidance layer are real work a later phase may want to wire properly. A
+blocker check ran before the move — no live module, script, desktop source or E2E
+spec imported anything in the set.
+
+### Live Arabic round-trip, measured
+
+Synthesised Arabic speech through the real chain — TTS, energy gate, Whisper STT,
+prompt optimization, Dots3 intake, Inkling plan, Inkling narration:
+
+| Stage | Latency (free tier) |
+|---|---|
+| Groq STT | 421–688 ms |
+| Prompt optimizer (Dots3) | 2,796–5,193 ms |
+| Plan (Dots3 → Inkling) | 4,776–5,073 ms |
+| Narration (Inkling) | 5,010–5,015 ms |
+| End-to-end turn | 14.3–16.0 s |
+
+Narration lands at ~5.01 s against the narrator's 8 s ceiling. That is roughly 3 s
+of headroom on a free tier, and it is the tightest margin in the chain.
+
+### Known issues in this release
+
+- **Speech output is dead in this environment.** Both Fish keys return HTTP 402
+  "Insufficient API credit" — verified against the repo vault and the installed
+  vault. The key is present and looks healthy, which is precisely the failure mode
+  that is hardest to diagnose. The STT and brain halves are unaffected.
+  `httpStatusOf` deliberately does not rotate on 402: a billing problem is not a
+  bad key, and rotating would not help.
+- **Narration has ~3 s of headroom** on free-tier Inkling (above). A slower
+  provider response will time it out.
+- **A 5-second utterance is the minimum that works.** The ingest window is 5 s, so
+  a shorter turn buffers and never transcribes. This is correct behaviour and is
+  now stated in the harness, but it is worth knowing before concluding the mic is
+  broken.
+
+### Gates
+
+typecheck 0 · eslint 0 warnings · oxlint 8 advisory · root 498 passed + 0 skipped
+(39 files) · desktop 149 (23 files) · `cargo test` 26 · E2E 18 across 14 specs ·
+`test:vantrilex` exit 0.
+
+Every guard test added in this release was verified by disabling its fix: the
+mention containment guard, the slash control-character guard, the key-rotation
+release, the `KeyAdvanced` marker, the doctor verdict, the reset generation gate
+and the persona echo guard each fail tests when the fix is removed.
+
+
 ## v0.6.2 — bounded resources, honest microphone, live diagnostics (2026-09-27)
 
 Install v0.6.1 or later. v0.6.0 is broken and must not be installed.

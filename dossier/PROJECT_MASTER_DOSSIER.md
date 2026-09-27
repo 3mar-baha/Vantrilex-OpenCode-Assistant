@@ -129,7 +129,7 @@ Directory census of production source (lines):
 
 | Path | Verified content |
 |---|---|
-| `package.json` | `version 0.6.2`; `type: module`; scripts: `build`(tsc), `typecheck`, `lint`(eslint `--max-warnings 0`), `lint:ox`(oxlint), `test`(vitest), `test:desktop`, **`test:vantrilex`** = typecheck→eslint→oxlint→vitest→desktop-vitest, `dev`, `dev:web`, `doctor`. |
+| `package.json` | `version 0.7.0`; `type: module`; scripts: `build`(tsc), `typecheck`, `lint`(eslint `--max-warnings 0`), `lint:ox`(oxlint), `test`(vitest), `test:desktop`, **`test:vantrilex`** = typecheck→eslint→oxlint→vitest→desktop-vitest, `dev`, `dev:web`, `doctor`. |
 | `tsconfig.json` | ESM `NodeNext`; **`exactOptionalPropertyTypes`**, **`noUncheckedIndexedAccess`**; excludes `*.test.ts` from the build. |
 | `vitest.config.ts` | Root suite; node environment. |
 | `eslint.config.js` / `.oxlintrc.json` | Dual linter; oxlint reports 7 pre-existing *intentional* `no-control-regex` warnings (control-char rejection is the point) — **0 errors**. |
@@ -163,7 +163,7 @@ skips `#`, sets `process.env` only when unset).
 - `protocol.ts` (470 L) — frozen frame schemas + frame codec. Exports `UiCommandSchema` (**`.strict()`**), `UiEventSchema`, `HelloFrameSchema`, `InventoryFrameSchema`, `AgentFrameSchema`, `ContextFrameSchema`, `NoticeFrameSchema`, `VoiceFrameSchema`, `AckFrameSchema`, `FrameReassembler`, `WsProtocolError`, `Opcode`, `decodeFrames`, `encodeTextFrame`, `encodeBinaryFrame`, `maskFrame`, `parseSeq`, `buildAgentFrame`, `buildInventoryFrame`, plus limits: `MAX_MESSAGE_BYTES` 1 MiB, `MAX_AUDIO_BYTES` 64 KiB, `MAX_CONNECTIONS` **8** (L15), `MISSED_PINGS_LIMIT` 3, `PING_INTERVAL_MS`, `RESUME_BUFFER_CAP` 256, `UI_SUBPROTOCOL` `voice-ui.v1`, `UI_WS_PATH` `/v1/ui`, `UI_WS_PORT` 4097, `SERVE_PORT` 4096.
 - `ui-server.ts` (507 L) — `UiServer`, `CommandOutcome`, `UiServerOptions`. Zero-dependency RFC 6455 server. Bearer auth via **subprotocol token** (browsers cannot set upgrade headers). Oldest-first eviction at the connection cap.
 - `audio.ts` (39 L) — downlink framing `[type:1][seq:u16be][mp3…]`, `AUDIO_DOWNLINK_TYPE 0x01`, `MAX_AUDIO_CHUNK` 32 KiB, `encodeAudioChunk`, `decodeAudioChunk`, `splitAudio`.
-- `attach.ts` (30 L) — `attachInventory`, `InventoryPublisher`. **DEAD** (§2.12).
+- `attach.ts` (30 L) — `attachInventory`, `InventoryPublisher`. **QUARANTINED in v0.7.0** (§2.12).
 - `index.ts` (37 L) — barrel.
 
 **`src/orchestrator/`** — 15 files, 1,988 L.
@@ -172,11 +172,11 @@ skips `#`, sets `process.env` only when unset).
 - `audio-pipeline.ts` (175 L) — `AudioPipeline`, `NO_SPEECH_DROP`, `AudioPipelineDeps`, `Utterance`, `Transcription`.
 - `command-router.ts` (278 L) — `createCommandHandler`, `parseModelRef`, `shellCommandError`, `DESTRUCTIVE_KINDS`, `CONFIRMATION_TTL_MS`, `MAX_PARKED` **8** (L20).
 - `inventory.ts` (98 L) — `SessionInventory`, `SessionRecord`.
-- `mentions.ts` (163 L) — `resolveMentions`, `MENTION_MAX_FILES`, `MENTION_MAX_TOKENS`. **DEAD**.
-- `slash.ts` (81 L) — `SLASH_COMMANDS`, `parseSlashCommand`, `slashCommandError`. **DEAD**.
-- `prompt-optimizer.ts` (104 L) — `optimizePrompt`, `PROMPT_SYSTEM`. **DEAD**.
+- `mentions.ts` (163 L) — `resolveMentions`, `MENTION_MAX_FILES`, `MENTION_MAX_TOKENS`. **WIRED in v0.7.0** (was DEAD while documented as shipped).
+- `slash.ts` (81 L) — `SLASH_COMMANDS`, `parseSlashCommand`, `slashCommandError`. **WIRED in v0.7.0** (was DEAD while documented as shipped).
+- `prompt-optimizer.ts` (104 L) — `optimizePrompt`, `PROMPT_SYSTEM`. **WIRED in v0.7.0** (was DEAD while documented as shipped).
 - `orchestrator.ts` (291 L) — `Orchestrator`, `FR12_*_MIN`, `SpeechAdvisor`, `ScoringAdvisor`, `Speaker`. **DEAD cluster root.**
-- `dispatch.ts` (116 L), `events.ts` (59 L), `ledger.ts` (57 L), `queue.ts` (70 L), `laya-advisor.ts` (38 L), `index.ts` (13 L) — **DEAD** (self-referential only).
+- `dispatch.ts` (116 L), `events.ts` (59 L), `ledger.ts` (57 L), `queue.ts` (70 L), `laya-advisor.ts` (38 L), `index.ts` (13 L) — **QUARANTINED in v0.7.0** (self-referential only).
 - `failclosed.test.ts`, `fr12.test.ts`, `fr12-route.test.ts` — pass, but gate DEAD production code.
 
 **`src/runtime/`**
@@ -195,7 +195,7 @@ skips `#`, sets `process.env` only when unset).
 - `key-store.ts` (45 L) — `readKeyPools`, `mergeKeyPools`, `writeKeyPools`.
 - `ingest.ts` (106 L) — `AudioIngest`, `WINDOW_BYTES` 160,000, `SPEECH_GATE_DB` −30, `isLoudWindow`, `bytesToFloat32`, `windowRmsDb`.
 - `cache.ts` (111 L) — `AudioCache`, `cacheKey`, `normalizeForCache`.
-- `disambiguation.ts` (20 L), `index.ts` (18 L) — **DEAD**.
+- `disambiguation.ts` (20 L), `index.ts` (18 L) — **QUARANTINED in v0.7.0**.
 
 **`src/telemetry/`** — `writer.ts` (149 L) `TelemetryWriter` + closed `SanitizedErrorClassSchema`/`RemediationSchema`; `index.ts` (3 L). **No transcript or free-text field exists anywhere in the schema** — the anti-injection invariant.
 
@@ -205,7 +205,7 @@ skips `#`, sets `process.env` only when unset).
 
 **`src/guidance/`** — 11 files, 432 L: `agents.ts`, `bluf.ts`, `overseer.ts`, `guildskills.ts`, `guildskills.stub.ts`, `index.ts`, `rag/{guard,normalize,personas,retriever,index}.ts`. **Entire subsystem DEAD.**
 
-**`src/ui/`** — `mic.ts`, `modal.ts`, `settings.ts`, `index.ts` (240 L). Legacy settings/mic surface, self-referential only. **DEAD** — superseded by the React `SettingsView`/`KeysView`.
+**`src/ui/`** — `mic.ts`, `modal.ts`, `settings.ts`, `index.ts` (240 L). Legacy settings/mic surface, self-referential only. **QUARANTINED in v0.7.0** — superseded by the React `SettingsView`/`KeysView`.
 
 **`src/policy/`** — three source-level invariant tests, no production code: `zero-canned.test.ts` (141 L), `sidecar-safety.test.ts` (150 L), `telemetry-wired.test.ts` (135 L).
 
@@ -262,39 +262,39 @@ No central test tree exists; every test sits beside its subject. Line counts as 
 | 226 | `src/orchestrator/narrator.test.ts` | zero-canned, control-token leakage |
 | 209 | `src/voice/ingest.test.ts` | window RMS, energy gate |
 | 189 | `src/voice/stt.test.ts` | Whisper chunking, `no_speech_prob` |
-| 156 | `src/orchestrator/mentions.test.ts` | **DEAD subject** (`mentions.ts`) |
+| 156 | `src/orchestrator/mentions.test.ts` | **LIVE** — subject wired in v0.7.0 |
 | 150 | `src/policy/sidecar-safety.test.ts` | import-graph native-package scan |
 | 141 | `src/policy/zero-canned.test.ts` | source-level canned-string ban |
-| 140 | `src/orchestrator/dispatch.test.ts` | **DEAD subject** |
+| 140 | `src/orchestrator/dispatch.test.ts` | **QUARANTINED in v0.7.0** |
 | 135 | `src/policy/telemetry-wired.test.ts` | telemetry-is-actually-called |
-| 135 | `src/runtime/laya/laya.test.ts` | **DEAD subject** |
-| 134 | `src/orchestrator/prompt-optimizer.test.ts` | **DEAD subject** |
+| 135 | `src/runtime/laya/laya.test.ts` | **QUARANTINED in v0.7.0** |
+| 134 | `src/orchestrator/prompt-optimizer.test.ts` | **LIVE** — subject wired (or already live) in v0.7.0; still in the runner
 | 132 | `src/orchestrator/inventory.test.ts` | `SessionInventory` |
-| 124 | `src/orchestrator/failclosed.test.ts` | **DEAD subject** (orchestrator) |
+| 124 | `src/orchestrator/failclosed.test.ts` | **QUARANTINED in v0.7.0** (orchestrator) |
 | 122 | `src/daemon.test.ts` | daemon composition |
-| 116 | `src/orchestrator/slash.test.ts` | **DEAD subject** |
-| 114 | `src/guidance/guidance.test.ts` | **DEAD subject** |
+| 116 | `src/orchestrator/slash.test.ts` | **LIVE** — subject wired (or already live) in v0.7.0; still in the runner
+| 114 | `src/guidance/guidance.test.ts` | **QUARANTINED in v0.7.0** |
 | 111 | `src/voice/keyring.test.ts` | rotation, force-advance |
 | 105 | `src/telemetry/writer.test.ts` | schema, rotation, JSONL |
 | 100 | `src/runtime/fuzzy-match.test.ts` | uniqueness-at-every-tier |
-| 94 | `src/ui/ui.test.ts` | **DEAD subject** |
+| 94 | `src/ui/ui.test.ts` | **QUARANTINED in v0.7.0** |
 | 91 | `src/runtime/vad.test.ts` | `SileroVad` real contract |
-| 88 | `src/orchestrator/fr12.test.ts` | **DEAD subject** |
-| 83 | `src/orchestrator/fr12-route.test.ts` | **DEAD subject** |
-| 81 | `src/orchestrator/orchestrator.test.ts` | **DEAD subject** |
-| 75 | `src/runtime/laya/laya.integration.test.ts` | **DEAD subject** |
-| 75 | `src/ipc/attach.test.ts` | **DEAD subject** |
+| 88 | `src/orchestrator/fr12.test.ts` | **QUARANTINED in v0.7.0** |
+| 83 | `src/orchestrator/fr12-route.test.ts` | **LIVE** — subject wired (or already live) in v0.7.0; still in the runner
+| 81 | `src/orchestrator/orchestrator.test.ts` | **QUARANTINED in v0.7.0** |
+| 75 | `src/runtime/laya/laya.integration.test.ts` | **QUARANTINED in v0.7.0** |
+| 75 | `src/ipc/attach.test.ts` | **QUARANTINED in v0.7.0** |
 | 52 | `src/voice/key-store.test.ts` | pool merge/rotation |
-| 48 | `src/guidance/rag/personas.test.ts` | **DEAD subject** |
+| 48 | `src/guidance/rag/personas.test.ts` | **QUARANTINED in v0.7.0** |
 | 46 | `src/memory/vault.test.ts` | `ensureVault` |
-| 43 | `src/orchestrator/laya-advisor.test.ts` | **DEAD subject** |
-| 43 | `src/guidance/rag/retriever.test.ts` | **DEAD subject** |
+| 43 | `src/orchestrator/laya-advisor.test.ts` | **QUARANTINED in v0.7.0** |
+| 43 | `src/guidance/rag/retriever.test.ts` | **QUARANTINED in v0.7.0** |
 | 34 | `src/launcher/launcher.test.ts` | `probeHealth` (post-L13) |
 | 31 | `src/ipc/audio.test.ts` | chunk framing |
-| 30 | `src/guidance/rag/normalize.test.ts` | **DEAD subject** |
+| 30 | `src/guidance/rag/normalize.test.ts` | **QUARANTINED in v0.7.0** |
 | 22 | `src/common/logger.test.ts` | secret redaction |
 | 18 | `src/voice/cache.test.ts` | `AudioCache` |
-| 18 | `src/voice/voice.test.ts` | **DEAD subject** (`disambiguation.ts`) |
+| 18 | `src/voice/voice.test.ts` | **QUARANTINED in v0.7.0** (`disambiguation.ts`) |
 
 **19 of 45 root test files (≈4,100 lines) test code no user can execute.** This is the
 quantified form of the §2.12 finding: a large fraction of the green suite is measuring a
@@ -353,13 +353,12 @@ entry points (`src/daemon.ts`, `src/cli.ts`):
 
 | Metric | Value |
 |---|---|
-| Live production modules | **34** |
-| **Dead production modules** | **31** |
-| Live production lines | 6,093 |
-| **Dead production lines** | **1,987 (24.6 % of `src/`)** |
-| Dead lines including their own passing tests | **9,010** |
-
-Dead production modules, verified to have **zero importers anywhere in `src/` or `apps/`**:
+  | Live production modules | **37** |
+  | **Dead production modules** | **0** |
+  | Live production lines | 6,598 |
+  | **Dead production lines** | **0** (was 1,987 / 24.6 % at v0.6.2) |
+  | Dead lines including their own passing tests | **0** |
+Dead production modules **at v0.6.2** (verified to have zero importers anywhere in `src/` or `apps/`). Three were subsequently wired and the remaining 28 quarantined — see below:
 
 - `src/guidance/` — all 11 files (432 L): RAG retriever, personas, guard, BLUF, overseer, guild skills.
 - `src/ui/` — all 4 (240 L): legacy settings/mic UI superseded by React.
@@ -520,35 +519,65 @@ the `Provenance` union in `src/runtime/client.ts:242`.
 ### 4.2 Frame inventory (frozen, additive-only)
 
 Downstream (`UiEventSchema`): `hello`, `inventory`, `agent`, `event`, `ack`, `error`,
-`notice`, `voice`, `context`. Upstream (`UiCommandSchema`, **`.strict()`**): `abort`, `arm`,
-`mute`, `deafen`, `switchSession`, `createSession`, `compact`, `interrupt`, `setSessionAgent`,
-`setSessionModel`, `toggleSessionSkill`, `execSessionShell`, `confirm`, `saveApiKeys`,
-`setPersona`, `sessionContext`, `listModels`, `listSkills`, `listCommands`, `runInternalCommand`,
-`getEnvironment`, `optimizePrompt`, `setContextLimit`. Audio uplink: binary frames; audio
-downlink: `[0x01][seq][mp3]`.
+`notice`, `voice`, `context`.
+
+Upstream (`UiCommandSchema`) — **14 kinds, verified against `src/ipc/protocol.ts`**:
+`abort`, `arm`, `mute`, `deafen`, `setPersona`, `switchSession`, `setSessionAgent`,
+`setSessionModel`, `toggleSessionSkill`, `execSessionShell`, `saveApiKeys`, `confirm`,
+`sessionContext`, `createSession`.
+
+> **Correction (v0.7.0).** An earlier revision of this dossier listed 23 kinds, including
+> `compact`, `interrupt`, `listModels`, `listSkills`, `listCommands`, `runInternalCommand`,
+> `getEnvironment`, `optimizePrompt` and `setContextLimit`. **None of those nine exist.**
+> The table was written from the feature intent rather than from the schema, which is the
+> same class of error as documenting `mentions.ts` as wired. Anyone planning against those
+> names would have built a shell that sends frames the daemon rejects as
+> `unsupported command`.
+>
+> The same revision described the schema as `.strict()`, and that part was **correct**:
+> `src/ipc/protocol.ts:385` chains `.strict()` onto the object, so an unknown key is
+> rejected outright and the daemon answers `unknown command` (L23 is genuinely closed).
+> I initially "corrected" this to plain `z.object` on the strength of a truncated read
+> that stopped before line 385. The claim was wrong in the opposite direction from the
+> phantom commands, and it is recorded here because the failure mode is the dangerous one:
+> asserting a schema is *weaker* than it is invites shipping a client that depends on
+> fields being silently dropped.
+>
+> Two consequences that are real rather than hypothetical:
+>
+> - `compact` is not a command, but `ServeClient.compactSession()` **does** exist and had
+>   no way to be reached. It is now reachable from the voice path: a spoken `/compact` is
+>   handled in `daemon.ts` `think()` and never becomes a WS command, because the HUD is
+>   voice-only and a slash arrives as a transcript.
+> - `runInternalCommand` and `optimizePrompt` were the natural seams for the slash and
+>   optimizer modules. Both were wired in `think()` instead, so the frozen contract needed
+>   **no change at all** — additive-only was preserved by choosing the transcript path.
+>
+> A `minutes` field is declared in the schema and in `apps/desktop/src/bridge/ws.ts` and is
+> read by nothing on either side. It is dead weight in a frozen contract rather than a bug.
+
+Audio uplink: binary frames. Audio downlink: `[0x01][seq][mp3]`.
 
 ### 4.3 Full upstream command reference (`UiCommandSchema`, `.strict()`)
 
 | Command | Required fields | Enforced behaviour |
 |---|---|---|
-| `abort` | — | Cancels the in-flight reply |
-| `arm` / `mute` / `deafen` | — | Local mic state; acknowledged |
+| `abort` | — | Cancels the in-flight reply; trips the speech gate and the pipeline generation |
+| `arm` / `mute` / `deafen` | — | Local mic state; acknowledged, no daemon effect |
 | `switchSession` | `sessionId` | `ses_`-prefixed id; no path injection |
-| `createSession` | — | Created in the project directory only |
-| `compact` | — | Context compaction |
-| `interrupt` | — | Interrupts current session work |
 | `setSessionAgent` | `agent` | Resolves against the agent catalog |
 | `setSessionModel` | `model` | `parseModelRef` splits `provider/id`; bare id defaults to `opencode` |
 | `toggleSessionSkill` | `skill`, `skillAction` | attach/detach |
 | `execSessionShell` | `command` | **Parks for FR-12 confirmation**; metacharacter guard (L21) |
 | `confirm` | `confirmId` | Executes or discards a parked command; `MAX_PARKED` 8 |
 | `saveApiKeys` | `groqKey`, `fishKey`, `openrouterKey` | **All three mandatory**; writes via `writeKeyPools` |
-| `setPersona` | `persona` | kareem / nour |
+| `setPersona` | `persona` | kareem / nour; **equality-guarded** so it cannot echo (L22) |
 | `sessionContext` | — | Returns the context-gauge frame; honours `contextLimit` |
-| `listModels` / `listSkills` / `listCommands` | — | Feeds the gauge and the 360° inspector |
-| `runInternalCommand` | — | Assistant-internal `/` and `@` execution |
-| `getEnvironment` | — | Environment/agent/command inventory |
-| `optimizePrompt` | — | Prompt-optimization seam (note: its module is DEAD, §2.9) |
+| `createSession` | `title` (directory) | Created in the project directory only |
+
+That is the complete list. The nine phantom kinds listed in the superseded revision are
+gone; see the correction note in §4.2. `compact` is reachable as a spoken `/compact`
+through the transcript path, not as a command.
 
 `DESTRUCTIVE_KINDS` requires confirmation; the parked payload is bounded by
 `CONFIRMATION_TTL_MS` 60,000 **and** the L20 cap of 8 entries.
@@ -627,11 +656,11 @@ ba05917 feat(sessions): OpenCode 360 middleware - slash, mentions, context gauge
 ### 5.3 ⚠️ Local is 3 commits AHEAD of GitHub
 
 `git log origin/main..main` returns `1dbc6a5`, `dc84866`, `f122900`. **`origin/main` is at
-`5260b2e`.** The installed desktop app is `0.6.2` — which is `5260b2e`, meaning **the machine
+`5260b2e`.** The installed desktop app is `0.7.0` — which is `5260b2e`, meaning **the machine
 currently runs the pre-inkling wiring** (Nemotron coordinator, Dots3 narrator). The inkling
 switch is committed and gated but **not on GitHub and not in any release**.
 
-Releases: `v0.6.2` (Latest), `v0.6.1`, `v0.6.0` (**marked Pre-release — it is broken**),
+Releases: `v0.7.0` (Latest), `v0.6.1`, `v0.6.0` (**marked Pre-release — it is broken**),
 `v0.5.0`, `v0.4.4`…`v0.4.0`.
 
 ### 5.4 Test matrix (re-executed this session)
@@ -712,7 +741,7 @@ encrypted merge path as the `saveApiKeys` command) and verified by SHA-256 finge
 
 ### 6.2 Open items (exact)
 
-- **Dead code (§2.12): 31 modules / 1,987 lines unreachable.** Highest-value cleanup.
+- **Dead code: RESOLVED in v0.7.0.** Was 31 modules / 1,987 lines unreachable. Three were wired (`mentions.ts`, `slash.ts`, `prompt-optimizer.ts` — all three had been documented as shipped) and 28 were quarantined to `.opencode/_archive/dead-code-phase1/`. `src/` is now 0% dead code, re-derived from `daemon.ts` + `cli.ts`.
 - **L17** — key exhaustion never surfaces; a dead key looks healthy. *(We lived this.)*
 - **SEC-7** — WebView2 microphone grant in a packaged build is **unverified**. wry registers
   a `PermissionRequested` handler that leaves the mic at `PERMISSION_STATE_DEFAULT` (it only
@@ -736,7 +765,7 @@ encrypted merge path as the `saveApiKeys` command) and verified by SHA-256 finge
 1. Close the full live voice loop, including the Arabic STT round-trip.
 2. `v0.6.3`: rebuild sidecar + installer so the inkling switch ships; packaged cold-launch
    verify; E2E; tag and push (3 commits currently unpublished).
-3. Triage the dead-code ledger: wire what the specs claim is shipped (`mentions`, `slash`,
+3. ~~Triage the dead-code ledger~~ **DONE in v0.7.0** — `mentions`, `slash` and `prompt-optimizer` are wired; the other 28 modules are quarantined and `src/` is at 0% dead code.
    `prompt-optimizer`) or delete it and correct `CHANGELOG.md` + `docs/10-CHECKPOINT.md`,
    which currently assert these are shipped.
 4. L17 key-exhaustion surfacing; SEC-7 remains blocked on a physical machine with a microphone.
