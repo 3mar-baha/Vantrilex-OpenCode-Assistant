@@ -78,6 +78,49 @@ describe('coordinator chain', () => {
     }
   });
 
+  test('reply_ar is written FROM the situation, not from a stock phrase (Phase 5)', async () => {
+    // The whole point of the context block: a heavy model just swapped onto a
+    // full context window should produce a line ABOUT that, and the model must
+    // be able to see those facts to do it.
+    const systems: string[] = [];
+    const coordinator = new Coordinator({
+      chat: (model, system, user) => {
+        systems.push(system);
+        return chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK })(model, system, user);
+      },
+      dispatch: async () => ({ receipt: 'r' }),
+      activeSessionId: () => 'ses_a' as never,
+    });
+    await coordinator.run('حوّل النموذج', {
+      context: {
+        sessionTitle: 'إصلاح خطأ الصوت',
+        currentModel: 'nemotron',
+        currentAgent: 'explore',
+        contextPercent: 88,
+      },
+    });
+    const intakeSystemPrompt = systems[0] ?? '';
+    expect(intakeSystemPrompt).toContain('إصلاح خطأ الصوت');
+    expect(intakeSystemPrompt).toContain('nemotron');
+    expect(intakeSystemPrompt).toContain('88%');
+    expect(intakeSystemPrompt).toMatch(/forbidden|forbid|قوالب|آلية/i);
+  });
+
+  test('no context supplied means no SITUATION block, and still parses', async () => {
+    const systems: string[] = [];
+    const coordinator = new Coordinator({
+      chat: (model, system, user) => {
+        systems.push(system);
+        return chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK })(model, system, user);
+      },
+      dispatch: async () => ({ receipt: 'r' }),
+      activeSessionId: () => 'ses_a' as never,
+    });
+    const result = await coordinator.run('hi');
+    expect(systems[0]).not.toContain('SITUATION:');
+    expect(result.ok).toBe(true);
+  });
+
   test('full mission: speak first, then dispatch handoff with receipt', async () => {
     const order: string[] = [];
     const dispatched: string[] = [];

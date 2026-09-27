@@ -13,6 +13,9 @@ import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, type ChatFn } from './orchestrator/coordinator.js';
 import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { openRouterChat } from './voice/brain.js';
+import { INTAKE_MODEL } from './orchestrator/coordinator.js';
+import { narrate } from './orchestrator/narrator.js';
+import { OpenCodeBridge } from './runtime/opencode-bridge.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
@@ -66,6 +69,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   }
 
   const client = new ServeClient(`http://127.0.0.1:${options.servePort}`, options.servePassword);
+  // Phase 5: the 360° control surface over the same client.
+  const bridge = new OpenCodeBridge(client, options.directory ?? process.cwd());
   const ui = new UiServer({
     token: options.ipcToken,
     contractVersion: options.contractVersion ?? '3.1.0',
@@ -78,6 +83,69 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // synthesize or broadcast afterwards. Plain state — safe before key setup.
   const speechGate = new SpeechGate();
 
+  // Phase 5 — ZERO CANNED REPLIES.
+  //
+  // Previously each command site passed a literal like 'تم تبديل النموذج' as its
+  // success message, so every confirmation was a template the user could recite.
+  // Now the outcome of a command goes to the conversational model, which writes
+  // the line from the situation, and THAT is what is spoken and shown.
+  //
+  // If the brain is unavailable the narration is simply skipped: a visible
+  // silence beats a robotic sentence, and the notice banner still reports the
+  // outcome.
+  const narratorChat = (model: string, system: string, user: string): Promise<string> => {
+    const ring = Keyring.load(vault);
+    const key = ring.acquire('openrouter');
+    try {
+      return openRouterChat(
+        keyMaterial(key),
+        model,
+        system,
+        user,
+        fetch,
+        { temperature: 0.8, maxTokens: 90, timeoutMs: 8_000 },
+      );
+    } finally {
+      ring.release(key, true);
+    }
+  };
+
+  const narrateOutcome = (action: string, outcomeOk: boolean, errorDetail?: string, target?: string): void => {
+    void (async () => {
+      let sessionTitle: string | undefined;
+      let contextPercent: number | undefined;
+      let currentModel: string | undefined;
+      if (activeSession !== undefined) {
+        try {
+          const details = await bridge.getSessionDetails(activeSession);
+          sessionTitle = details?.title;
+          contextPercent = details?.tokens.percent ?? undefined;
+          currentModel = details?.model ?? undefined;
+        } catch {
+          // Telemetry is decoration for the narrator; never fail the command.
+        }
+      }
+      const line = await narrate(
+        {
+          action,
+          outcome: outcomeOk ? 'ok' : 'error',
+          ...(target !== undefined ? { target } : {}),
+          ...(sessionTitle !== undefined ? { sessionTitle } : {}),
+          ...(currentModel !== undefined ? { previousModel: currentModel } : {}),
+          ...(contextPercent !== undefined ? { contextPercent } : {}),
+          ...(errorDetail !== undefined ? { errorDetail } : {}),
+        },
+        narratorChat,
+        INTAKE_MODEL,
+      );
+      if (line === null) return;
+      setVoicePhase('speaking', line);
+      // The same generated line is both spoken and displayed: one source, so
+      // the screen can never show a template the user did not hear.
+      ui.notice('assistant-said', line, 'info');
+    })();
+  };
+
   ui.onCommand = createCommandHandler({
     client,
     // Phase 4: the project root serve is scoped to, and the directory a new
@@ -86,8 +154,23 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     onContext: (sessionId, usage) => {
       ui.context(sessionId, usage.used, usage.limit, usage.percent, usage.messageCount);
     },
-    switchSession: (id) => {
-      activeSession = id;
+    onExecuted: (executed, outcome) => {
+      const target =
+        typeof executed.model === 'string'
+          ? executed.model
+          : typeof executed.agent === 'string'
+            ? executed.agent
+            : typeof executed.sessionId === 'string'
+              ? executed.sessionId
+              : undefined;
+      narrateOutcome(
+        executed.kind,
+        outcome.ok,
+        outcome.detail,
+        target,
+      );
+    },
+    switchSession: (id) => {      activeSession = id;
       audio?.reset();
     },
     activeSessionId: () => activeSession,

@@ -30,11 +30,52 @@ export const PlanSchema = z.object({
 });
 export type Plan = z.infer<typeof PlanSchema>;
 
-const INTAKE_SYSTEM = [
+/**
+ * Situational context handed to intake so `reply_ar` is written FROM the
+ * situation rather than from a stock acknowledgement. Phase 5.
+ */
+export interface IntakeContext {
+  readonly sessionTitle?: string;
+  readonly currentModel?: string;
+  readonly currentAgent?: string;
+  /** Context-window fill, 0..100. */
+  readonly contextPercent?: number;
+  readonly lastOutcome?: string;
+}
+
+function intakeContextBlock(ctx?: IntakeContext): string {
+  if (ctx === undefined) return '';
+  const rows: string[] = [];
+  if (ctx.sessionTitle !== undefined) rows.push(`session title: ${ctx.sessionTitle}`);
+  if (ctx.currentModel !== undefined) rows.push(`current model: ${ctx.currentModel}`);
+  if (ctx.currentAgent !== undefined) rows.push(`current agent: ${ctx.currentAgent}`);
+  if (ctx.contextPercent !== undefined) rows.push(`context window used: ${ctx.contextPercent}%`);
+  if (ctx.lastOutcome !== undefined) rows.push(`last outcome: ${ctx.lastOutcome}`);
+  if (rows.length === 0) return '';
+  return `SITUATION:\n${rows.join('\n')}\n\n`;
+}
+
+function intakeSystem(ctx?: IntakeContext): string {
+  return [
   'You take Arabic voice transcripts and split them into two fields.',
   'Reply ONLY with this exact JSON, no prose outside it, no preamble:',
   '{"reply_ar": "<short natural Ammani Arabic acknowledgement, max 20 words>", "task_en": "<precise English task specification>"}',
-].join('\n');
+  '',
+  'How to write reply_ar — this is the line the user will HEAR, so it matters:',
+  '- Write it from the SITUATION you are given, not from a stock phrase.',
+  '- You are a calm, sharp senior engineer talking to a peer, not a call centre.',
+  '- React to what actually happened: if a heavier model was just swapped in for a hard task,',
+  '  say something about that capability; if the context window is nearly full, raise it',
+  '  naturally and offer to compact, without sounding like an automated alert.',
+  '- Vary your phrasing. Do NOT reuse a fixed opener. No "تم تنفيذ الأمر بنجاح",',
+  '  no "تم تغيير", no robotic confirmation templates — those are forbidden.',
+  '- If the user said something that needs no action, acknowledge it briefly and set',
+  '  task_en to a no-op marker rather than inventing work.',
+  '',
+  intakeContextBlock(ctx),
+  ].join('\n');
+}
+
 
 const COORDINATOR_SYSTEM = [
   'You are the planner for Voxaura, an agent runtime that executes your steps:',
@@ -135,7 +176,10 @@ function parseSchema<T>(schema: z.ZodType<T>, raw: string): T | null {
 export class Coordinator {
   constructor(private readonly deps: CoordinatorDeps) {}
 
-  async run(transcript: string, opts: { approve?: boolean; taskId?: string } = {}): Promise<MissionResult> {
+  async run(
+    transcript: string,
+    opts: { approve?: boolean; taskId?: string; context?: IntakeContext } = {},
+  ): Promise<MissionResult> {
     const intakeModel = this.deps.intakeModel ?? INTAKE_MODEL;
     const fallbackModel = this.deps.fallbackModel ?? COORDINATOR_MODEL;
     const coordinatorModel = this.deps.coordinatorModel ?? COORDINATOR_MODEL;
@@ -153,7 +197,7 @@ export class Coordinator {
       try {
         raw = await this.deps.chat(
           model,
-          INTAKE_SYSTEM,
+          intakeSystem(opts.context),
           transcript,
           model === intakeModel
             ? { reasoning: { effort: 'none' }, maxTokens: 200, temperature: 0.2, timeoutMs: 10_000 }

@@ -53,6 +53,12 @@ export interface CommandRouterDeps {
   readonly projectDirectory: () => string;
   /** Phase 4: publish context-window telemetry to the shell. */
   readonly onContext?: (sessionId: SessionId, usage: ContextUsageLike) => void;
+  /**
+   * Phase 5: fired after a command actually executed (not when it was parked
+   * for FR-12 confirmation). The daemon uses this to have the MODEL narrate
+   * the outcome — the reason confirmations stopped sounding like templates.
+   */
+  readonly onExecuted?: (cmd: UiCommand, outcome: CommandOutcome) => void;
 }
 
 /** Kinds that may destroy work or touch the host — these require FR-12. */
@@ -127,6 +133,15 @@ export function createCommandHandler(
   };
 
   const execute = async (cmd: UiCommand): Promise<CommandOutcome> => {
+    const outcome = await dispatch(cmd);
+    // Phase 5 — ZERO CANNED REPLIES. Every executed command reports back so
+    // the daemon can have the MODEL write the line the user hears. The router
+    // itself never produces a sentence.
+    deps.onExecuted?.(cmd, outcome);
+    return outcome;
+  };
+
+  const dispatch = async (cmd: UiCommand): Promise<CommandOutcome> => {
     switch (cmd.kind) {
       case 'switchSession': {
         if (cmd.sessionId === undefined) return { ok: false, detail: 'sessionId required' };

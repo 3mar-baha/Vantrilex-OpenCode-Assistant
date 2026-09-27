@@ -26,7 +26,23 @@ const router = createCommandHandler({
   switchSession: () => {},
   activeSessionId: () => 'ses_e2e',
   saveKeys: { saveKeys: async () => ({}) },
+  // Phase 5 — ZERO CANNED REPLIES. In production the daemon asks the model to
+  // write the confirmation line. The stub cannot call a model, so it stands in
+  // with a representative MODEL-WRITTEN line. What the E2E spec proves is that
+  // a supplied line reaches the HUD — and that it is not a canned template.
+  onExecuted: (cmd, outcome) => {
+    server.notice('assistant-said', narratorLineFor(cmd, outcome.ok), 'info');
+  },
 });
+
+/** Stands in for the narrator's model output. */
+function narratorLineFor(cmd, ok) {
+  if (!ok) return 'ما قدرت أوصّل الطلب، خلّيني أعيد المحاولة';
+  if (cmd.kind === 'deafen') return 'كتمت الميكروفون، وبقيت أسمعك عند اللزوم';
+  if (cmd.kind === 'mute') return 'كتمت صوتي، خذ الإشعار بدل الكلام';
+  if (cmd.kind === 'abort') return 'وقفت التوليد عند الحد';
+  return 'عملت';
+}
 function wireServer(srv) {
   srv.onCommand = (cmd) => {
     received.push(cmd);

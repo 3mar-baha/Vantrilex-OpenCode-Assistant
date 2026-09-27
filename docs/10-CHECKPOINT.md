@@ -488,4 +488,24 @@ decode, one `GainNode` at 0.9) and were not redone.
 | Gates | `tsc` 0 (root + desktop) · `eslint --max-warnings 0` 0 · root vitest **372** (was 322) · desktop vitest **135** (was 125) · `cargo test` 26 · E2E **18/18** |
 | Not done here | the prompt-optimisation layer (Phase 5) — it must sit downstream of a trustworthy sanitiser, and the observability `events.jsonl` writer still needs wiring. The GUI to *send* `/compact` and `@mentions` is not built: both are reachable from the voice/command path, but no text input exists in the HUD today, so slash commands currently arrive only via the command channel |
 
+## Phase 5 — Zero-Canned-Replies + OpenCode 360° omnipotent control
+
+| Item | Evidence |
+|---|---|
+| **Zero canned replies (root cause)** | nine literals were passed as success messages at the HUD call sites (`تم تبديل النموذج`, `تم تنفيذ الأمر بنجاح`, …). `send()` now takes **only** the command and a failure string — there is no success slot to fill, and a test asserts the signature has two parameters |
+| **Model-written narration** | `narrator.ts`: the outcome of every executed command goes to the conversational model with the full situation (session title, model, context %, target, failure reason) and the model writes the line. Published as an `assistant-said` notice and spoken via `setVoicePhase('speaking', line)` — **one source**, so the screen can never show a template the user did not hear |
+| **No fallback sentence** | if the brain is unavailable the narration is **skipped** and the result is `null`. A visible silence beats a robotic line. Pinned by test |
+| **Situational intake** | `INTAKE_SYSTEM` became `intakeSystem(ctx)`, carrying a `SITUATION:` block (session title, model, agent, context %, last outcome) and explicit instructions to react to the situation and to vary phrasing. Pinned by test asserting the block reaches the model |
+| **Policy enforcement** | `src/policy/zero-canned.test.ts` scans production source (comments stripped) for all twelve banned phrases. A phrase is allowed only on a line carrying a prohibition marker — a guard on the guard, so the allowance cannot become a hiding place |
+| **Voice-only invariant** | enforced by test: no `<input type="text">` and no `<textarea>` in `App.tsx`. Slash/`@` remain assistant-internal tools |
+| **360° session telemetry** | `OpenCodeBridge.getSessionDetails()` → `{id, title, model, agent, effort, tokens:{input,output,reasoning,cache,windowFill,windowMax,percent}, createdAt, lastMessageAt}`. **Window fill comes from `/api/session/{id}/context`; the row's `tokens` is lifetime spend** — pinned by a test with deliberately different numbers |
+| **Fuzzy model/agent switching** | `fuzzy-match.ts`: `muse spark` / `MUSE_SPARK` / `موس سبارك` → `muse-spark`, `نيموترون` → `nemotron`. Tiers: exact → alias → prefix → substring → subsequence, and **every tier requires uniqueness** — ambiguous input throws rather than switching a heavy task to the wrong model |
+| **Environment inspector** | `getEnvironmentStatus()` returns agents, commands, skills, plugins, mcpServers. Skills/plugins/MCP are reported **empty rather than invented**, so a consumer can tell "none" from "we did not look" |
+| **Internal slash execution** | `runInternalCommand` routes only `compact`, `undo`, `clear`, `model`, `interrupt`, `revert`. Anything else throws — never blind-forwarded to the model |
+| **Prompt optimization seam** | `prompt-optimizer.ts` rewrites a spoken instruction into a ROLE/CONTEXT/GOAL/CONSTRAINTS brief. Falls back to **the user's own words** on failure (the one place a fallback is correct — it is not a template). `isActionableInstruction` gates politeness so the assistant never acts on `تمام` |
+| **Test count** | root vitest **441** (was 372) · desktop vitest **135** (unchanged — no renderer feature was added) · `cargo test` 26 · E2E **18/18** |
+| E2E change | `boot.spec.ts` now asserts the **model-written** line reaches the notice banner and explicitly asserts it is NOT `تم إيقاف…` or `…بنجاح`. The stub daemon stands in for the narrator |
+| Compilation | `cargo build --release` **0**, `voxaura.exe` 8,518,656 B, no warnings |
+| Honest limits | (1) `getEnvironmentStatus` reports skills/plugins/MCP as empty because the OpenCode config is not exposed over the serve API — inventing them would be a lie. (2) Arbitrary Arabic→Latin transliteration of agent ids is **not** supported (no dictionary); the alias table covers the model roster, and refusals are tested. (3) The narrator is wired for **command** outcomes; the intake path (`reply_ar`) is situational via the SITUATION block but its live quality needs a real OpenRouter key to hear. (4) No live TTS/STT re-benchmark — quota still exhausted |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

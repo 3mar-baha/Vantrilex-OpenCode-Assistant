@@ -36,12 +36,16 @@ export interface SessionTokens {
 export interface SessionInfo {
   readonly sessionId: string;
   readonly state: string;
+  /** Phase 5: the session's own title — the strongest situational signal the
+   * narrator has for making a reply sound like it is about THIS work. */
+  readonly title?: string;
   readonly agent?: string;
   readonly model?: string;
   readonly projectId?: string;
   readonly cost?: number;
   readonly tokens?: SessionTokens;
   readonly updatedAt?: number;
+  readonly createdAt?: number;
 }
 
 /** A single message's token use, from a `StepFinishPart` in the context payload. */
@@ -156,20 +160,25 @@ function normalizeSessionRow(row: unknown): SessionInfo | null {
         : undefined;
   const state = sessionState(r);
   const projectId = typeof r['projectID'] === 'string' ? (r['projectID'] as string) : undefined;
+  const title = typeof r['title'] === 'string' && r['title'].length > 0 ? (r['title'] as string) : undefined;
   const cost = num(r['cost']);
   const tokens = normalizeTokens(r['tokens']);
   const time = r['time'];
   const updatedAt =
     typeof time === 'object' && time !== null ? num((time as Record<string, unknown>)['updated']) : undefined;
+  const createdAt =
+    typeof time === 'object' && time !== null ? num((time as Record<string, unknown>)['created']) : undefined;
   return {
     sessionId: id,
     state,
     ...(agent !== undefined ? { agent } : {}),
+    ...(title !== undefined ? { title } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(projectId !== undefined ? { projectId } : {}),
     ...(cost !== undefined ? { cost } : {}),
     ...(tokens !== undefined ? { tokens } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
   };
 }
 
@@ -437,8 +446,7 @@ export class ServeClient {
    * GET /api/agent?directory=<dir> → {data:[…]} — the 2.0.x contract requires a
    * directory scope; an unscoped call returns no data. Normalized to AgentInfo.
    */
-  async listAgents(directory: string): Promise<AgentInfo[]> {
-    const res = await this.request(`/api/agent?directory=${encodeURIComponent(directory)}`, { method: 'GET' });
+  async listAgents(directory: string): Promise<AgentInfo[]> {    const res = await this.request(`/api/agent?directory=${encodeURIComponent(directory)}`, { method: 'GET' });
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `agent.list failed with HTTP ${res.status}`);
     const data = unwrapData(await res.json());
     if (!Array.isArray(data)) return [];
@@ -542,8 +550,52 @@ export class ServeClient {
     return { ok: true };
   }
 
-  async probeContract(): Promise<string> {
+  /**
+   * Phase 5 — the slash-command catalog serve advertises, used by the assistant
+   * for `/help` and to know what exists. Read-only; never forwarded blindly.
+   */
+  async listCommands(): Promise<Array<{ readonly name: string }>> {
+    const res = await this.request('/api/command', { method: 'GET' });
+    if (!res.ok) return [];
+    const data = unwrapData(await res.json());
+    if (!Array.isArray(data)) return [];
+    const out: Array<{ name: string }> = [];
+    for (const row of data) {
+      if (typeof row !== 'object' || row === null) continue;
+      const name = (row as Record<string, unknown>)['name'];
+      if (typeof name === 'string' && name.length > 0 && name.length <= 64) out.push({ name });
+    }
+    return out;
+  }
+
+  /**
+   * Phase 5 — message timestamps for a session, used to show when the assistant
+   * last spoke. Returns an empty list on any failure: it is decoration, not
+   * control flow, so it must never be able to fail a command.
+   */
+  async listSessionMessages(sessionId: SessionId): Promise<Array<{ createdAt: number }>> {
     try {
+      const res = await this.request(`/api/session/${sessionId}/message`, { method: 'GET' });
+      if (!res.ok) return [];
+      const data = unwrapData(await res.json());
+      if (!Array.isArray(data)) return [];
+      const out: Array<{ createdAt: number }> = [];
+      for (const row of data) {
+        if (typeof row !== 'object' || row === null) continue;
+        const info = (row as Record<string, unknown>)['info'];
+        if (typeof info !== 'object' || info === null) continue;
+        const time = (info as Record<string, unknown>)['time'];
+        const created =
+          typeof time === 'object' && time !== null ? num((time as Record<string, unknown>)['created']) : undefined;
+        if (created !== undefined) out.push({ createdAt: created });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  async probeContract(): Promise<string> {    try {
       const res = await this.request('/openapi.json', { method: 'GET' });
       if (!res.ok) return 'unknown';
       const doc = (await res.json()) as { info?: { version?: string } };

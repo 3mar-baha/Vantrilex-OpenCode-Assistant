@@ -26,7 +26,16 @@ test('controls expose Arabic tooltips and toggle their pressed state', async ({ 
   await expect(mic).toHaveAttribute('aria-pressed', 'true');
   await mic.click();
   await expect(mic).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByTestId('announce')).not.toHaveText('');
+  // Phase 5 — ZERO CANNED REPLIES. The toggle no longer announces a literal
+  // like 'تم إيقاف الميكروفون': success feedback is whatever line the model
+  // wrote, delivered by the daemon as an `assistant-said` notice. So we assert
+  // the model-supplied line is rendered, and that it is NOT a canned template.
+  const announce = page.getByTestId('announce');
+  const banner = page.getByTestId('notice-banner');
+  await expect(banner).toContainText('كتمت الميكروفون', { timeout: 10_000 });
+  await expect(announce).not.toContainText('تم إيقاف');
+  await expect(banner).not.toContainText('تم إيقاف');
+  await expect(banner).not.toContainText('بنجاح');
 
   const bot = page.getByTestId('bot-toggle');
   await expect(bot).toHaveAttribute('title', /صوت المساعد/);

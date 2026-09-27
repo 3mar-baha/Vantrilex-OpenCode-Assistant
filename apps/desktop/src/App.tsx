@@ -181,7 +181,20 @@ export function App(): JSX.Element {
   // Release the microphone when the shell unmounts (no dangling tracks).
   useEffect(() => () => captureRef.current?.stop(), []);
 
-  const send = (cmd: Parameters<VoxauraBridge['sendCommand']>[0], ok: string, fail: string): void => {
+  /**
+   * Phase 5 — ZERO CANNED REPLIES.
+   *
+   * The success text used to be a literal passed by each call site ('تم تبديل
+   * النموذج', 'تم تنفيذ الأمر بنجاح'), which is exactly why confirmations read
+   * as robotic. There is no success string here any more: the daemon asks the
+   * MODEL to write a line from the situation and publishes it as a
+   * `assistant-said` notice, which is both spoken and displayed.
+   *
+   * Only the FAILURE text remains, and it is a genuine error path where there is
+   * no model to consult — an error is not a conversational reply. Even that is
+   * kept short and non-narrative.
+   */
+  const send = (cmd: Parameters<VoxauraBridge['sendCommand']>[0], fail: string): void => {
     const bridgeClient = bridgeRef.current;
     if (bridgeClient === null) {
       setAnnounce('الخادم غير متصل');
@@ -196,7 +209,9 @@ export function App(): JSX.Element {
         });
         return;
       }
-      setAnnounce(outcome.ok ? ok : fail);
+      // On success the daemon supplies the spoken line; announcing it here
+      // would race it and is not needed.
+      if (!outcome.ok) setAnnounce(fail);
     });
   };
 
@@ -213,12 +228,12 @@ export function App(): JSX.Element {
   const handleSelectPersona = (id: 'kareem' | 'nour'): void => {
     setPersona(id);
     setMatrix(id === 'kareem' ? 3 : 4);
-    send({ id: nextCmdId(), kind: 'setPersona', persona: id }, 'تم تبديل الشخصية', 'تعذّر تبديل الشخصية');
+    send({ id: nextCmdId(), kind: 'setPersona', persona: id }, 'تعذّر تبديل الشخصية');
   };
 
   const handleSelectSession = (id: string): void => {
     dispatchSession({ kind: 'select', id });
-    send({ id: nextCmdId(), kind: 'switchSession', sessionId: id }, 'تم تبديل الجلسة', 'تعذّر تبديل الجلسة');
+    send({ id: nextCmdId(), kind: 'switchSession', sessionId: id }, 'تعذّر تبديل الجلسة');
   };
 
   const promptTarget = (label: string): string | null => {
@@ -233,7 +248,7 @@ export function App(): JSX.Element {
       setAnnounce('اختر جلسة أولاً');
       return;
     }
-    send({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: agentId }, 'تم تعيين الوكيل', 'تعذّر تعيين الوكيل');
+    send({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: agentId }, 'تعذّر تعيين الوكيل');
   };
 
   const handleSwitchAgent = (): void => {
@@ -245,7 +260,7 @@ export function App(): JSX.Element {
     const target = promptTarget('بدّل الوكيل (المعرف):');
     if (target === null) return;
     setAgentModel((s) => ({ ...s, agent: target }));
-    send({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: target }, 'تم تعيين الوكيل', 'تعذّر تعيين الوكيل');
+    send({ id: nextCmdId(), kind: 'setSessionAgent', sessionId: active, agent: target }, 'تعذّر تعيين الوكيل');
   };
 
   const handleSwitchModel = (): void => {
@@ -257,7 +272,7 @@ export function App(): JSX.Element {
     const target = promptTarget('بدّل النموذج (المعرف):');
     if (target === null) return;
     setAgentModel((s) => ({ ...s, model: target }));
-    send({ id: nextCmdId(), kind: 'setSessionModel', sessionId: active, model: target }, 'تم تبديل النموذج', 'تعذّر تبديل النموذج');
+    send({ id: nextCmdId(), kind: 'setSessionModel', sessionId: active, model: target }, 'تعذّر تبديل النموذج');
   };
 
   const toggleUserMute = (): void => {
@@ -298,13 +313,13 @@ export function App(): JSX.Element {
           .catch(() => setAnnounce('تعذّر الوصول إلى الميكروفون'));
       }
     }
-    send({ id: nextCmdId(), kind: 'deafen' }, next ? 'تم صمّ الميكروفون' : 'تم تشغيل الميكروفون', 'تعذّر تغيير حالة الميكروفون');
+    send({ id: nextCmdId(), kind: 'deafen' }, 'تعذّر تغيير حالة الميكروفون');
   };
 
   const toggleBotMute = (): void => {
     const next = !botMuted;
     setBotMuted(next);
-    send({ id: nextCmdId(), kind: 'mute' }, next ? 'تم كتم صوت المساعد' : 'تم تشغيل صوت المساعد', 'تعذّر تغيير حالة الصوت');
+    send({ id: nextCmdId(), kind: 'mute' }, 'تعذّر تغيير حالة الصوت');
   };
 
   // D8: the thread wears the active speaker's gradient. While the assistant
@@ -516,10 +531,10 @@ export function App(): JSX.Element {
             onClick={() => {
               if (live) {
                 setMatrix(0);
-                send({ id: nextCmdId(), kind: 'abort' }, 'تم إيقاف التوليد', 'تعذّر إيقاف التوليد');
+                send({ id: nextCmdId(), kind: 'abort' }, 'تعذّر إيقاف التوليد');
               } else {
                 setMatrix(1);
-                send({ id: nextCmdId(), kind: 'arm' }, 'تمت إعادة التوليد', 'تعذّرت إعادة التوليد');
+                send({ id: nextCmdId(), kind: 'arm' }, 'تعذّرت إعادة التوليد');
               }
             }}
             className={`rounded-[6px] border px-3 py-1 text-xs transition ${
