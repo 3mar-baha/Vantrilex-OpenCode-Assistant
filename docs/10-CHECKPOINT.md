@@ -524,4 +524,16 @@ reachable, so the HUD showed nothing in real use.
 | Tests | root **448** (was 441) · desktop 135 · `cargo test` 26 · E2E 18/18 |
 | Two Phase 1 tests updated | They asserted `limit: null` with no argument — i.e. they pinned the *broken* behaviour. Replaced with tests for the catalog lookup, so the inert state cannot come back |
 
+## v0.6.0 release (voice honesty, process hygiene, OpenCode 360°)
+
+| Item | Evidence |
+|---|---|
+| **Version** | 0.6.0 bumped in `package.json`, `apps/desktop/package.json`, `tauri.conf.json`, `Cargo.toml`, `provision-sidecar.mjs`, `00-PROJECT-GUIDE.md`, both READMEs and `hero-banner.svg` — 10 edits, each asserted to match exactly once |
+| **Installer** | `Voxaura_0.6.0_x64-setup.exe`, **26,162,843 B**, sha256 `87CDF8AFD1B7BDF0128A70C75B198DAE384F6BDEC1B79BF59501230D1D0FA3C3`; embedded `FileVersion`/`ProductVersion` both 0.6.0 |
+| **Sidecar** | re-provisioned, 100.6 MB |
+| Gates at the release version | tsc 0 · eslint 0 · root vitest **448** · desktop vitest **135** · `cargo test` **26** · E2E **18/18** · `cargo build --release` 0 |
+| Stale badges fixed | README badges claimed 309 tests and E2E 15/15; reality is 583 unit + 26 Rust and E2E 18/18. Corrected in both languages |
+| A process note | the first version-bump attempt used a PowerShell nested-array literal that flattened to characters, silently replacing `b`→`a` across eight files (`badge`→`aadge`, `hero-banner`→`hero-aanner`). Caught by `git diff` before it was committed, restored with `git checkout`, and redone in Node with a one-occurrence assertion per edit |
+| Not done | tag, push and public GitHub release — **not performed**; awaiting explicit go-ahead, since a published tag and release are not reversible |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

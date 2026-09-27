@@ -1,5 +1,81 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.6.0 — voice honesty, process hygiene, OpenCode 360° control (2026-09-27)
+
+Five remediation phases closed against a code-first forensic audit
+(`dossier/COMPREHENSIVE_AUDIT_REPORT.md`). Installer:
+`Voxaura_0.6.0_x64-setup.exe`, 26,162,843 B,
+sha256 `87CDF8AFD1B7BDF0128A70C75B198DAE384F6BDEC1B79BF59501230D1D0FA3C3`.
+
+**The assistant was answering itself (D1).** `src/runtime/vad.ts` already
+contained a complete, tested `SileroVad` and `models/silero-vad.onnx` was already
+on disk — nothing in production called it. Every 5 s window of room tone went to
+Whisper, which hallucinated, and the assistant then reasoned about and spoke the
+invented text. The defect was the missing connection, not a missing feature. Now
+wired, plus two further layers: `no_speech_prob` (a `verbose_json` field we were
+already paying for and discarding) and a last-5 repeat dedupe. Threshold chosen by
+measurement over **1067 real frames** of Fish TTS speech: p05 0.0051 / p50 0.9387
+against 0.0006–0.134 for tone and noise, at 1.5 ms per 5 s window.
+
+**Calm, non-robotic speech (D2, D3).** A sanitiser adapted from pipecat strips
+markdown, emoji, bidi controls, Arabic tashkīl and URLs before synthesis, with an
+alphanumeric-preserving contract pinned by test. Against the verified Fish
+`TTSRequest` schema: `latency: normal` (was `balanced`), `chunk_length: 300`,
+`prosody {speed 0.95, volume −2 dB}`, `temperature 0.5`, `repetition_penalty 1.3`.
+
+**Every reply was synthesized twice (D4).** The `speak` hook wrote an MP3 to
+`%TEMP%` that nothing ever played, and the coordinator awaited that dead work
+before planning. Hook removed.
+
+**The thread is a thread (D6–D8).** Five chunky pill bars deleted, top-curve
+`lineWidth` 2.5 → 1.5, amplitude now driven by live mic RMS with asymmetric
+attack/release, and a per-speaker two-stop gradient (user blue→yellow, kareem
+green→yellow, nour purple→pink).
+
+**Process hygiene (D10–D12, L11, L12).** The discarded `AssignProcessToJobObject`
+BOOL now decides whether a child is kept or killed; both child stdout and stderr
+land in append-only files that never degrade silently to `/dev/null`; a
+second-supervisor condition is detected and logged; bring-up returns a typed
+status and the shell retries `in-flight` instead of hanging.
+
+**Latent hardening (L1–L3, L7, L9, D5, L21, L23).** Bounded audio queue with
+drop-oldest and a counter, a 2 MB cache ceiling, a 15-minute `%TEMP%` sweep, a
+truthful `bufferedBytes`, raced timeouts on both provider calls, and a hardened
+command trust boundary (`.strict()` envelope, opaque `ses_` ids, bounded fields).
+
+**Zero canned replies.** Nine literal success strings like `تم تبديل النموذج` were
+passed at the HUD call sites. `send()` no longer has a success slot at all: the
+outcome goes to the conversational model with the full situation — session title,
+model, context percent, target, failure reason — and the model writes the line
+that is both spoken and displayed. If the brain is unavailable the narration is
+skipped; there is deliberately no fallback sentence. Enforced by a source-level
+scan, and the voice-only invariant (no text inputs) is asserted too.
+
+**OpenCode 360°.** Session telemetry distinguishing *window fill* (from
+`/api/session/{id}/context`) from *lifetime spend* (the session row) — confusing
+them makes a gauge climb forever after a compaction. Fuzzy model/agent switching
+where every match tier requires uniqueness, so a heavy task is never switched to
+the wrong model by a guess. A native slash interpreter, an `@` mention resolver
+that validates against `realpath`, and a prompt-optimization seam that falls back
+to the user's own words rather than a template.
+
+### Corrections to earlier claims
+- The Fish `TTSRequest` schema has no `emotion`/`pitch` in `prosody`, and
+  `normalize: true` is a **text** normaliser, not a loudness control. An earlier
+  audit blamed the wrong field.
+- `SileroVad` already existed; the audit missed it, and a Phase 0 recommendation to
+  defer it on dependency grounds was therefore wrong.
+- Skills, models and their context windows **are** exposed over the serve API
+  (`/api/skill`, `/api/model`); a claim that they were not was wrong and had made
+  the context gauge inert until fixed.
+
+Gates: tsc 0 · eslint 0 · root vitest 448 · desktop vitest 135 · `cargo test` 26 ·
+E2E 18/18 · `cargo build --release` 0.
+
+Known gaps: live TTS/STT re-benchmark blocked on OpenRouter quota; WebView2
+microphone permission unverified in a packaged build; the orphan gate was run for
+3 force-kill cycles rather than the 30 the audit specified.
+
 ## v0.5.0 — UX/security overhaul, registry provisioning, live-hardened (2026-09-27)
 
 **Connection truthfulness (UX-1).** The status pill is now driven by the
