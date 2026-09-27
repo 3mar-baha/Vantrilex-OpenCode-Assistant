@@ -1,43 +1,94 @@
 import { useEffect, useRef } from 'react';
 
-// SiriWaveCanvas — sine-flow backdrop plus the 5-bar emblem voiceprint.
-// The curves breathe (lerped speed/amplitude per mode: idle breathes, active
-// speaks); the solid blueprint bars echo assets/icon.svg and scale with the
-// same lerped amplitude, so the mark itself reacts to live audio. Reduced
-// motion (or missing 2D context) renders one static frame.
+// SiriWaveCanvas — a single continuous thread ("خيط"), nothing else.
+//
+// D6/D7/D8. The previous version drew two systems: five sine curves *and* five
+// chunky pill bars, which read as a dual wave. The bars are gone. The curves
+// now take their amplitude from live mic RMS instead of hardcoded idle/active
+// constants, and each curve is stroked along a two-stop gradient so the active
+// speaker is readable at a glance. Reduced motion (or a missing 2D context)
+// renders one static frame.
 export type SiriWaveMode = 'idle' | 'active';
+
+/** Who is speaking, and therefore which gradient the thread wears. */
+export type WaveSpeaker = 'user' | 'kareem' | 'nour';
+
+/**
+ * The required two-stop palettes. `user` is the human at the microphone;
+ * `kareem`/`nour` are the assistant personas.
+ */
+export const SPEAKER_PALETTE: Record<WaveSpeaker, readonly [string, string]> = {
+  user: ['#2563EB', '#EAB308'],
+  kareem: ['#16A34A', '#EAB308'],
+  nour: ['#9333EA', '#EC4899'],
+};
+
+const DEFAULT_PALETTE = SPEAKER_PALETTE.user;
+
+export function speakerPalette(speaker: string | undefined): readonly [string, string] {
+  return speaker !== undefined && speaker in SPEAKER_PALETTE
+    ? SPEAKER_PALETTE[speaker as WaveSpeaker]
+    : DEFAULT_PALETTE;
+}
+
+/**
+ * `#rrggbb` mix; t is clamped. Emits UPPERCASE so the ramp endpoints are
+ * byte-identical to the declared palettes rather than a case-folded variant.
+ */
+export function mixHex(from: string, to: string, t: number): string {
+  const k = Math.max(0, Math.min(1, t));
+  const ch = (hex: string, i: number): number => Number.parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+  const out = [0, 1, 2].map((i) => Math.round(ch(from, i) + (ch(to, i) - ch(from, i)) * k));
+  return `#${out.map((v) => v.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
 
 export interface SiriWaveCanvasProps {
   readonly mode: SiriWaveMode;
+  /** Flat single colour. Ignored when `palette` is supplied. */
   readonly color?: string;
+  /** Two-stop gradient, one colour per end of the curve stack. */
+  readonly palette?: readonly [string, string];
   readonly reducedMotion?: boolean;
-  /** Live input energy 0..1 (mic RMS). Bars breathe with real speech. */
+  /** Live input energy 0..1 (mic RMS). Drives the thread's amplitude. */
   readonly energy?: number;
 }
 
 const WIDTH = 320;
 const HEIGHT = 90;
+const CY = HEIGHT / 2;
 
-// Upstream iOS-classic curve definition (kopiro/siriwave README).
+// Upstream iOS-classic curve definition (Kopiro/siriwave README). The top
+// curve is lineWidth 1.5 upstream; we had 2.5, which is why the thread read as
+// a bar. Opacity carries depth, width does not.
 const CURVES = [
   { attenuation: -2, lineWidth: 1, opacity: 0.1 },
   { attenuation: -6, lineWidth: 1, opacity: 0.2 },
   { attenuation: 4, lineWidth: 1, opacity: 0.4 },
   { attenuation: 2, lineWidth: 1, opacity: 0.6 },
-  { attenuation: 1, lineWidth: 2.5, opacity: 1 },
+  { attenuation: 1, lineWidth: 1.5, opacity: 1 },
 ] as const;
 
 const LERP_SPEED = 0.06;
 
-// Emblem voiceprint: short, medium, tall center, medium, short — relative
-// heights from WaveformEmblem (assets/icon.svg), drawn solid in emblem blue.
-const EMBLEM_BLUE = '#2563eb';
-const BAR_FRACS = [0.43, 0.64, 1, 0.57, 0.36] as const;
-const BAR_W = 22;
-const BAR_GAP = 12;
-const BAR_MAX_H = 64;
+/** Amplitude at silence — a visible resting thread, never a flat line. */
+const IDLE_AMPLITUDE = 0.2;
+/** Amplitude at full-scale speech energy. */
+const ACTIVE_AMPLITUDE = 1;
+/**
+ * Asymmetric smoothing: speech onset must be visible on the next frame, while
+ * release has to fall off calmly. A single lerp constant forces a choice
+ * between a laggy attack and a jittery idle — the reported "flicker".
+ */
+const ATTACK = 0.3;
+const RELEASE = 0.06;
 
-export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = false, energy = 0 }: SiriWaveCanvasProps): JSX.Element {
+export function SiriWaveCanvas({
+  mode,
+  color,
+  palette,
+  reducedMotion = false,
+  energy = 0,
+}: SiriWaveCanvasProps): JSX.Element {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const modeRef = useRef<SiriWaveMode>(mode);
   const energyRef = useRef<number>(energy);
@@ -58,25 +109,33 @@ export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = fals
     if (ctx === null) return;
     ctx.scale(dpr, dpr);
     const reduce =
-      reducedMotion || (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-        ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        : false);
+      reducedMotion ||
+      (typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+    const stops: readonly [string, string] = palette ?? (color !== undefined ? [color, color] : DEFAULT_PALETTE);
 
     let speed = 0.15;
-    let amplitude = 0.35;
+    let amplitude = IDLE_AMPLITUDE * 0.6;
     let phase = 0;
 
     const draw = (): void => {
       const live = modeRef.current;
+      const e = energyRef.current;
       const targetSpeed = live === 'active' ? 0.9 : 0.15;
-      const targetAmp = live === 'active' ? 1 : 0.32;
+      // D7: amplitude is a function of live RMS, not a mode constant. In idle
+      // the thread stays a resting filament and only breathes a little.
+      const targetAmp =
+        live === 'active'
+          ? IDLE_AMPLITUDE + (ACTIVE_AMPLITUDE - IDLE_AMPLITUDE) * e
+          : IDLE_AMPLITUDE * (0.55 + 0.45 * e);
       speed += (targetSpeed - speed) * LERP_SPEED;
-      amplitude += (targetAmp - amplitude) * LERP_SPEED;
+      amplitude += (targetAmp - amplitude) * (targetAmp > amplitude ? ATTACK : RELEASE);
       phase += speed * 0.28;
 
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
-            const cx = WIDTH / 2;
-      const cy = HEIGHT / 2;
+      const cx = WIDTH / 2;
       for (let c = 0; c < CURVES.length; c += 1) {
         const curve = CURVES[c]!;
         ctx.beginPath();
@@ -85,38 +144,17 @@ export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = fals
           // attenuation sign flipping the phase, as in the upstream model.
           const env = 1 / (1 + ((x - cx) / (WIDTH * 0.26)) ** 4);
           const y =
-            cy +
-            Math.sign(curve.attenuation) *
-              env *
-              amplitude *
-              34 *
-              Math.sin(x * 0.021 + phase * (1 + c * 0.22) + c * 1.7);
+            CY +
+            Math.sign(curve.attenuation) * env * amplitude * 34 * Math.sin(x * 0.021 + phase * (1 + c * 0.22) + c * 1.7);
           if (x === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = curve.opacity * 0.45;
+        // D8: one stop at the outer curve, the other at the leading curve.
+        ctx.strokeStyle =
+          CURVES.length === 1 ? stops[0] : mixHex(stops[0], stops[1], c / (CURVES.length - 1));
+        ctx.globalAlpha = curve.opacity;
         ctx.lineWidth = curve.lineWidth;
         ctx.stroke();
-      }
-      // Emblem bars over the flow: heights follow live input energy so the
-      // user can see the mic is picking up sound.
-      ctx.globalAlpha = 0.92;
-      ctx.fillStyle = EMBLEM_BLUE;
-      const drive = Math.max(amplitude, energyRef.current);
-      const span = BAR_FRACS.length * BAR_W + (BAR_FRACS.length - 1) * BAR_GAP;
-      let bx = cx - span / 2;
-      for (const frac of BAR_FRACS) {
-        const h = Math.max(6, frac * BAR_MAX_H * (0.35 + 0.65 * drive));
-        const by = cy - h / 2;
-        if (typeof ctx.roundRect === 'function') {
-          ctx.beginPath();
-          ctx.roundRect(bx, by, BAR_W, h, BAR_W / 2);
-          ctx.fill();
-        } else {
-          ctx.fillRect(bx, by, BAR_W, h);
-        }
-        bx += BAR_W + BAR_GAP;
       }
       ctx.globalAlpha = 1;
     };
@@ -139,7 +177,7 @@ export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = fals
       alive = false;
       cancel(id);
     };
-  }, [color, reducedMotion]);
+  }, [color, palette, reducedMotion]);
 
   return (
     <canvas
@@ -147,7 +185,7 @@ export function SiriWaveCanvas({ mode, color = EMBLEM_BLUE, reducedMotion = fals
       data-testid="siri-wave"
       data-mode={mode}
       role="img"
-      aria-label="الموجة الصوتية — تصور حالة الصوت"
+      aria-label="الموجة الصوتية — خيط يتغيّر مع مستوى صوتك"
       width={WIDTH}
       height={HEIGHT}
     />

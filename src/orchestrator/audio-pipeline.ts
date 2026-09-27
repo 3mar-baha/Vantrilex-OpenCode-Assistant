@@ -1,20 +1,41 @@
 import type { SessionId } from '../common/brands.js';
-import { AudioIngest } from '../voice/ingest.js';
+import { AudioIngest, isLoudWindow } from '../voice/ingest.js';
 
 // Voice capture pipeline (P4): ingest windows → Whisper transcript → brain
-// reply → session dispatch. Two fail-closed rules: an empty transcript spends
-// nothing downstream (silence is free), and without an active session nothing
-// is dispatched (no fabricated prompts). All collaborators are injected so the
-// daemon wires real clients while tests use stubs.
+// reply → session dispatch. Three fail-closed rules: silence is gated before
+// the STT provider (an empty transcript spends nothing downstream, and
+// without an active session nothing is dispatched), and no fabricated prompts.
+//
+// D1 — the silence gate exists because Whisper hallucinates on room tone and
+// the brain then reasons about the invented text, so the assistant answers
+// itself. Three independent layers, each with its own counter so the
+// observability record can attribute a silence to a cause:
+//   1. speech gate   — energy by default; the daemon injects Silero (vad.ts)
+//   2. no_speech_prob — Whisper's own verdict on what we already paid for
+//   3. repeat dedupe — a transcript seen in the last few windows is dropped
 export interface Utterance {
   readonly transcript: string;
   readonly reply: string;
   readonly receipt: string | null;
 }
 
+/** Whisper `verbose_json` exposes no_speech_prob; a bare string means "unknown". */
+export type Transcription = string | { readonly text: string; readonly noSpeechProb?: number };
+
+/** Mirrors whisper.cpp's documented `-vth 0.6` default for a speech gate. */
+export const NO_SPEECH_DROP = 0.6;
+
+/** How many recent transcripts are remembered for the repeat check. */
+const REPEAT_MEMORY = 5;
+
 export interface AudioPipelineDeps {
   readonly ingest?: AudioIngest;
-  transcribe(pcm: Uint8Array): Promise<string>;
+  /**
+   * Replaces the energy gate when present (Silero). `true` transcribes the
+   * window, `false` discards it before the STT provider is called.
+   */
+  speechGate?(window: Uint8Array): Promise<boolean>;
+  transcribe(pcm: Uint8Array): Promise<Transcription>;
   think(transcript: string): Promise<{ reply: string; receipt?: string | null }>;
   /** Optional raw-text fallback. When absent, nothing is ever dispatched implicitly. */
   dispatch?(text: string): Promise<{ receipt: string }>;
@@ -25,6 +46,10 @@ export interface AudioPipelineDeps {
 export class AudioPipeline {
   private readonly ingest: AudioIngest;
   private readonly deps: AudioPipelineDeps;
+  private recent: string[] = [];
+  private gatedCount = 0;
+  private hallucinationCount = 0;
+  private repeatCount = 0;
 
   constructor(deps: AudioPipelineDeps) {
     this.deps = deps;
@@ -39,14 +64,46 @@ export class AudioPipeline {
     return this.ingest.droppedWindows;
   }
 
+  /** Windows discarded by the speech gate before the STT provider. */
+  get gatedWindows(): number {
+    return this.gatedCount;
+  }
+
+  /** Transcripts dropped because Whisper itself reported no speech. */
+  get hallucinationDrops(): number {
+    return this.hallucinationCount;
+  }
+
+  /** Transcripts dropped as a verbatim repeat of a recent utterance. */
+  get repeatDrops(): number {
+    return this.repeatCount;
+  }
+
   reset(): void {
     this.ingest.reset();
+    this.recent = [];
   }
 
   async pushChunk(chunk: Uint8Array): Promise<void> {
     for (const window of this.ingest.push(chunk)) {
-      const transcript = (await this.deps.transcribe(window)).trim();
+      if (!(await this.isSpeech(window))) {
+        this.gatedCount += 1;
+        continue;
+      }
+      const result = await this.deps.transcribe(window);
+      const text = typeof result === 'string' ? result : result.text;
+      const noSpeechProb = typeof result === 'string' ? undefined : result.noSpeechProb;
+      const transcript = text.trim();
       if (transcript.length === 0) continue;
+      if (noSpeechProb !== undefined && noSpeechProb > NO_SPEECH_DROP) {
+        this.hallucinationCount += 1;
+        continue;
+      }
+      if (this.isRepeat(transcript)) {
+        this.repeatCount += 1;
+        continue;
+      }
+      this.remember(transcript);
       const thought = await this.deps.think(transcript);
       // A think-provided receipt means the think stage already dispatched
       // (e.g. the coordinator chain). Raw text is only dispatched when an
@@ -58,4 +115,28 @@ export class AudioPipeline {
       this.deps.onUtterance?.({ transcript, reply: thought.reply, receipt });
     }
   }
+
+  /** An injected detector replaces the energy gate; it never stacks on top. */
+  private async isSpeech(window: Uint8Array): Promise<boolean> {
+    if (this.deps.speechGate !== undefined) return this.deps.speechGate(window);
+    return isLoudWindow(window);
+  }
+
+  /** Punctuation/whitespace/case insensitive so trivial variants still repeat. */
+  private isRepeat(transcript: string): boolean {
+    return this.recent.includes(repeatKey(transcript));
+  }
+
+  private remember(transcript: string): void {
+    this.recent.push(repeatKey(transcript));
+    if (this.recent.length > REPEAT_MEMORY) this.recent.shift();
+  }
+}
+
+function repeatKey(text: string): string {
+  return text
+    .replace(/[؟?!.،,:؛;'"«»()[\]{}\-—–]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }

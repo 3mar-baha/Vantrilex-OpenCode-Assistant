@@ -14,11 +14,23 @@
     "servers": {
       "context7": {
         "type": "local",
-        "command": ["cmd", "/c", "npx", "-y", "@upstash/context7-mcp"]
+        "command": [
+          "cmd",
+          "/c",
+          "npx",
+          "-y",
+          "@upstash/context7-mcp"
+        ]
       },
       "github": {
         "type": "local",
-        "command": ["cmd", "/c", "npx", "-y", "@modelcontextprotocol/server-github"],
+        "command": [
+          "cmd",
+          "/c",
+          "npx",
+          "-y",
+          "@modelcontextprotocol/server-github"
+        ],
         "environment": {
           "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
         }
@@ -47,22 +59,67 @@
       },
       "memory": {
         "type": "local",
-        "command": ["cmd", "/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
+        "command": [
+          "cmd",
+          "/c",
+          "npx",
+          "-y",
+          "@modelcontextprotocol/server-memory"
+        ]
       },
       "sequential-thinking": {
         "type": "local",
-        "command": ["cmd", "/c", "npx", "-y", "@modelcontextprotocol/server-sequential-thinking"]
+        "command": [
+          "cmd",
+          "/c",
+          "npx",
+          "-y",
+          "@modelcontextprotocol/server-sequential-thinking"
+        ]
       }
     }
   },
   "lsp": {
     "typescript": {
-      "command": ["cmd", "/c", "npx", "-y", "typescript-language-server", "--stdio"],
-      "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+      "command": [
+        "cmd",
+        "/c",
+        "npx",
+        "-y",
+        "typescript-language-server",
+        "--stdio"
+      ],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs"
+      ]
     },
     "python": {
-      "command": ["cmd", "/c", "npx", "-y", "-p", "pyright", "pyright-langserver", "--stdio"],
-      "extensions": [".py"]
+      "command": [
+        "cmd",
+        "/c",
+        "npx",
+        "-y",
+        "-p",
+        "pyright",
+        "pyright-langserver",
+        "--stdio"
+      ],
+      "extensions": [
+        ".py"
+      ]
+    },
+    "rust": {
+      "command": [
+        "rust-analyzer"
+      ],
+      "extensions": [
+        ".rs"
+      ]
     }
   },
   "watcher": {

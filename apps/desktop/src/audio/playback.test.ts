@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest';
-import { AudioPlayer } from './playback.js';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { AudioPlayer, createDefaultPlayer, PLAYBACK_GAIN } from './playback.js';
 
 // P4b TDD — the player is a strict FIFO: decode in order, play in order,
 // failures skip the chunk without stalling, empty input is dropped.
@@ -98,5 +98,130 @@ describe('AudioPlayer', () => {
     // The stale drain resolves after the stop: nothing new plays, no second end.
     expect(ended).toEqual(['end']);
     expect(player.playing).toBe(false);
+  });
+});
+
+// D3 — renderer-side headroom and AudioContext lifecycle. The window is
+// reopened repeatedly, so a context that is never closed is a real leak, and a
+// context left 'suspended' is a silently missing first reply.
+describe('AudioPlayer.dispose', () => {
+  test('stops playback and releases the underlying context', () => {
+    const disposed: number[] = [];
+    let ended = 0;
+    const player = new AudioPlayer({
+      decode: async () => 'buf' as unknown as AudioBuffer,
+      sink: { play: () => undefined },
+      onEnd: () => {
+        ended += 1;
+      },
+      dispose: () => void disposed.push(1),
+    });
+    player.enqueue(new Uint8Array([1]));
+    player.dispose();
+    expect(player.playing).toBe(false);
+    expect(ended).toBe(1);
+    expect(disposed).toEqual([1]);
+  });
+
+  test('is safe before anything is enqueued, and idempotent enough not to throw', () => {
+    const player = new AudioPlayer({
+      decode: async () => 'buf' as unknown as AudioBuffer,
+      sink: { play: () => undefined },
+    });
+    expect(() => player.dispose()).not.toThrow();
+  });
+
+  test('dispose() also empties the queue', async () => {
+    const played: string[] = [];
+    const player = new AudioPlayer({
+      decode: async () => {
+        await Promise.resolve();
+        return 'buf' as unknown as AudioBuffer;
+      },
+      sink: { play: (b) => void played.push(b as unknown as string) },
+    });
+    player.enqueue(new Uint8Array([1]));
+    player.enqueue(new Uint8Array([2]));
+    player.dispose();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(played).toEqual([]);
+  });
+});
+
+describe('createDefaultPlayer', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function fakeContext(state: AudioContextState = 'running') {
+    const created: string[] = [];
+    const connected: string[] = [];
+    let closed = 0;
+    let resumed = 0;
+    const ctx = {
+      state,
+      resume: async () => {
+        resumed += 1;
+      },
+      close: async () => {
+        closed += 1;
+      },
+      createGain: () => ({
+        gain: { value: 1 },
+        connect: (d: unknown) => {
+          connected.push('gain');
+          void d;
+        },
+      }),
+      createBufferSource: () => ({
+        buffer: null as AudioBuffer | null,
+        connect: (n: unknown) => {
+          connected.push('source');
+          void n;
+        },
+        start: () => void created.push('start'),
+      }),
+      decodeAudioData: async () => 'decoded' as unknown as AudioBuffer,
+      destination: 'destination',
+    };
+    return {
+      ctx,
+      stats: () => ({ closed, resumed, connected, created }),
+    };
+  }
+
+  test('routes playback through a gain node at the documented headroom', async () => {
+    const f = fakeContext();
+    vi.stubGlobal('AudioContext', function AudioContextStub() {
+      return f.ctx;
+    });
+    const player = createDefaultPlayer();
+    player.enqueue(new Uint8Array([1, 2, 3]));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(f.stats().connected).toContain('gain');
+    expect(PLAYBACK_GAIN).toBeLessThan(1);
+    expect(PLAYBACK_GAIN).toBeGreaterThan(0.5);
+  });
+
+  test('resumes a suspended context before decoding the first chunk', async () => {
+    const f = fakeContext('suspended');
+    vi.stubGlobal('AudioContext', function AudioContextStub() {
+      return f.ctx;
+    });
+    const player = createDefaultPlayer();
+    player.enqueue(new Uint8Array([1]));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(f.stats().resumed).toBeGreaterThan(0);
+  });
+
+  test('dispose() closes the context', async () => {
+    const f = fakeContext();
+    vi.stubGlobal('AudioContext', function AudioContextStub() {
+      return f.ctx;
+    });
+    const player = createDefaultPlayer();
+    player.dispose();
+    expect(f.stats().closed).toBe(1);
   });
 });

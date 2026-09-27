@@ -58,6 +58,21 @@
     "provisionedAgents": 7,
     "provisionedHooks": 4,
     "provisionedPlugins": 5,
-    "memoryServer": "Deferred to implementation phase (candidate: contextforge-mcp persistent memory or zipmem-mcp local-first). Not required for documentation milestone."
+    "memoryServer": "Deferred to implementation phase (candidate: contextforge-mcp persistent memory or zipmem-mcp local-first). Not required for documentation milestone.",
+    "phase0": {
+      "completedAt": "2026-09-27",
+      "addedSkills": [
+        "tdd-workflow",
+        "ui-skills",
+        "prompt-engineering"
+      ],
+      "missingSkills": [],
+      "pluginDescriptors": 12,
+      "missingPluginDescriptors": [],
+      "lsp": [
+        "typescript-language-server",
+        "rust-analyzer"
+      ]
+    }
   }
 }

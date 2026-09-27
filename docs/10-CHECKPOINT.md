@@ -403,4 +403,33 @@ P5 runtime agent orchestration remains deferred.
 | Live | TTS ✅ 2161 ms (first-chunk 1105 ms); STT ✅ 299 ms; OpenRouter ⚠️ account 429 (upstream) |
 | Artifacts | `Voxaura_0.5.0_x64-setup.exe` (SHA recorded in README) |
 
+## Phase 1 remediation — voice cleanliness, thread visualizer, context telemetry
+
+Branch state after the audit (`dossier/COMPREHENSIVE_AUDIT_REPORT.md`) closed D1–D4,
+D6–D9. Every number below is measured, not assumed.
+
+| Item | Evidence |
+|---|---|
+| **D1 speech gate (3 layers)** | Silero VAD **wired** (`src/runtime/vad.ts` already existed with the model on disk and was never called from production — the defect was the missing connection, not a missing feature); `no_speech_prob` surfaced from the `verbose_json` field we already paid for; last-5 repeat dedupe |
+| **D1 measurement** | 1067 real frames of Fish TTS speech (ffmpeg → 16 kHz mono Int16): `p05 0.0051 / p50 0.9387 / p75 0.9861 / max 0.9994`; 851/1067 (79.8 %) ≥ 0.5; synthetic tone+noise 0.0006–0.134. Gate cost **1.5 ms per 5 s window** |
+| **D1 near-miss recorded** | first pass over synthetic 440 Hz tones scored p ≈ 0.0006 and would have silenced the whole voice loop; unit tests stub the ONNX session and returned a fixed 0.9, so they could not have caught it |
+| **D1 gate blind spot fixed** | the repo's live VAD test asserted only `0 ≤ p ≤ 1`; it now asserts non-speech is far below 0.5 and carries the numbers above |
+| **D1 residual risk** | real **room tone** from a live mic is unmeasured (needs a real keyed session). Speech vs non-speech separation is two orders of magnitude wide, but a fan in a quiet room has not been observed on this machine |
+| **D2 sanitiser** | `stripSpeechText()` — pipecat `strip_markdown` chain + Arabic tashkīl/tatweel, emoji, bidi, URLs/paths, fillers, terminal punctuation; alphanumeric-preserving contract pinned by test; applied at the transport boundary so the daemon's direct `fish.synthesize` path cannot bypass it |
+| **D2 rejected on linguistic grounds** | Arabic letter folding (`ى→ي`, `آ→ا`, `أ→ا`) **not implemented**: it turns correct MSA into Egyptian and invents a dialect. Asserted by test so it is not "fixed" back |
+| **D2 regression caught** | removing a trailing emoji/diacritic left `"تمام ."` — a pause the engine reads as hesitation |
+| **D3 calm voice** | `fishRequestBody()` against the verified Fish schema: `latency: normal` (was `balanced`), `chunk_length: 300` (was 200), `prosody {speed 0.95, volume −2 dB, normalize_loudness}`, `temperature 0.5`, `repetition_penalty 1.3` |
+| **D3 audit correction** | `normalize: true` is a **text** normaliser, not a loudness control — the earlier audit blamed the wrong field; the field is deliberately unchanged. `prosody` has no `emotion`/`pitch`, contrary to the Phase 0 guess |
+| **D3 renderer** | one `GainNode` at 0.9 linear; `AudioContext.resume()` on first decode; `AudioPlayer.dispose()` + `onDispose` bridge hook close the context on teardown (not on socket drop, which is followed by a reconnect) |
+| **D4 double synthesis removed** | the `speak` hook wrote an MP3 to `%TEMP%` that nothing played — every utterance was synthesized twice and the dead one was awaited before planning. Hook deleted; `speak` is now detached with a mandatory `.catch`, pinned by a never-settling-promise test |
+| **D4 self-catch** | a first prefetch attempt re-synthesized the next sentence and discarded it, doubling Fish calls — the exact defect being removed. Reverted |
+| **D13** | `setVoicePhase('thinking')` no longer fires per PCM window (10×/s flicker); phase is set at utterance boundaries |
+| **D6 thread only** | the 5 chunky pill bars deleted — asserted as **zero** `fill()`/`roundRect()` calls; top-curve `lineWidth` 2.5 → 1.5 to match upstream |
+| **D7 RMS-driven** | amplitude is a function of live mic RMS with asymmetric smoothing (attack 0.30, release 0.06); tests assert strict monotonicity at energy 0 / 0.25 / 0.5 / 0.75 / 1 and that idle < active at equal energy |
+| **D8 speaker palettes** | per-curve two-stop gradient: user `#2563EB→#EAB308`, kareem `#16A34A→#EAB308`, nour `#9333EA→#EC4899`; ramp endpoints byte-identical to the declared constants |
+| **D9 context telemetry** | `listSessions` keeps `tokens`/`cost`/`projectID`/`time.updated`; `contextUsage()` reads `GET /api/session/{id}/context` and sums `StepFinishPart` tokens; lifetime-spend vs window-fill deliberately distinguished; `percent: null` when the limit is unknown rather than a guess |
+| **D9 native commands** | `compactSession`, `interruptSession`, `revertSession` against the verified endpoints |
+| Gates | `tsc` 0 · `eslint --max-warnings 0` 0 · `oxlint` 0 errors (7 pre-existing warnings, none in changed files) · root vitest **284** (was 222) · desktop vitest **113** (was 95) · E2E **18/18** · `cargo check --no-default-features` 0 |
+| Not done in Phase 1 | live TTS/STT re-benchmark (needs OpenRouter quota), packaged-build mic verification (SEC-7), `main.rs` supervision (D10/D11/D12), prompt-optimisation layer, `events.jsonl` observability |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

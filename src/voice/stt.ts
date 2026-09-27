@@ -22,6 +22,33 @@ export interface Transcript {
   readonly text: string;
   readonly chunkCount: number;
   readonly roundTripMs: number;
+  /**
+   * Whisper's own "this was not speech" confidence, averaged across segments
+   * (`verbose_json` already returns it — we were discarding it). Absent means
+   * the provider did not report it, which is NOT the same as zero.
+   */
+  readonly noSpeechProb?: number;
+}
+
+/** One `verbose_json` segment, as far as the gate cares. */
+export interface WhisperSegment {
+  readonly no_speech_prob?: unknown;
+}
+
+/**
+ * Mean of the well-formed `no_speech_prob` values. Undefined when nothing
+ * usable was reported — callers must treat undefined as "unknown", never 0,
+ * because 0 means "maximally confident speech" and would defeat the gate.
+ */
+export function meanNoSpeechProb(segments: Array<WhisperSegment | undefined> | undefined): number | undefined {
+  if (!Array.isArray(segments) || segments.length === 0) return undefined;
+  const values: number[] = [];
+  for (const seg of segments) {
+    const v = seg?.no_speech_prob;
+    if (typeof v === 'number' && Number.isFinite(v)) values.push(v);
+  }
+  if (values.length === 0) return undefined;
+  return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
 export function chunkPcm(pcm: Uint8Array, startsAtMs = 0): AudioChunk[] {
@@ -48,7 +75,12 @@ export function chunkPcm(pcm: Uint8Array, startsAtMs = 0): AudioChunk[] {
 }
 
 export interface WhisperClient {
-  transcribe(chunk: AudioChunk): Promise<string>;
+  transcribe(chunk: AudioChunk): Promise<WhisperResult | string>;
+}
+
+export interface WhisperResult {
+  readonly text: string;
+  readonly noSpeechProb?: number;
 }
 
 export class GroqWhisperClient implements WhisperClient {
@@ -58,7 +90,7 @@ export class GroqWhisperClient implements WhisperClient {
     this.client = new Groq({ apiKey });
   }
 
-  async transcribe(chunk: AudioChunk): Promise<string> {
+  async transcribe(chunk: AudioChunk): Promise<WhisperResult> {
     const wav = pcmToWav(chunk.bytes);
     const file = new File([Buffer.from(wav)], `chunk-${chunk.index}.wav`, { type: 'audio/wav' });
     const res = await this.client.audio.transcriptions.create({
@@ -67,7 +99,10 @@ export class GroqWhisperClient implements WhisperClient {
       language: 'ar',
       response_format: 'verbose_json',
     });
-    return res.text;
+    const segments = (res as { segments?: unknown }).segments as WhisperSegment[] | undefined;
+    const noSpeechProb = meanNoSpeechProb(segments);
+    // exactOptionalPropertyTypes: omit the key rather than assign undefined.
+    return noSpeechProb === undefined ? { text: res.text } : { text: res.text, noSpeechProb };
   }
 }
 
@@ -103,13 +138,24 @@ export async function transcribeStream(
 ): Promise<Transcript> {
   const chunks = chunkPcm(pcm);
   const texts: string[] = [];
+  const probs: number[] = [];
   for (const chunk of chunks) {
-    texts.push(await client.transcribe(chunk));
+    const res = await client.transcribe(chunk);
+    if (typeof res === 'string') {
+      texts.push(res);
+      continue;
+    }
+    texts.push(res.text);
+    if (res.noSpeechProb !== undefined) probs.push(res.noSpeechProb);
   }
   const text = texts.map((t) => t.trim()).filter((t) => t.length > 0).join(' ');
+  // Max, not mean: one chunk Whisper is sure was noise taints the window, and
+  // a window is only transcribed when the caller decides it is worth one call.
+  const noSpeechProb = probs.length === 0 ? undefined : Math.max(...probs);
   return {
     text,
     chunkCount: chunks.length,
     roundTripMs: Date.parse(nowIso()) - Date.parse(startedAt),
+    ...(noSpeechProb === undefined ? {} : { noSpeechProb }),
   };
 }

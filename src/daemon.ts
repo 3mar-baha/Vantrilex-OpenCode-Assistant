@@ -11,13 +11,15 @@ import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, type ChatFn } from './orchestrator/coordinator.js';
-import { FileAudioOut, FishHttpTransport, SpeechGate, splitSentences, TtsEngine } from './voice/tts.js';
+import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { openRouterChat } from './voice/brain.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, type AcquiredKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
+import { isLoudWindow, bytesToFloat32 } from './voice/ingest.js';
+import { SileroVad, VAD_WINDOW_SAMPLES } from './runtime/vad.js';
 import { writeKeyPools } from './voice/key-store.js';
 
 // Production daemon — the missing composition root. It adopts an already-running
@@ -110,6 +112,36 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   let audio: AudioPipeline | null = null;
   let voicePhase = 'idle';
 
+  // D1 — the speech gate. `SileroVad` (src/runtime/vad.ts) and its ONNX model
+  // were already built and tested, but nothing in production ever called them:
+  // every 5 s window of room tone went straight to Whisper, which hallucinated,
+  // and the assistant then reasoned about and spoke the invented text.
+  //
+  // The load is memoised and the gate is sync-constructible so
+  // `buildVoicePipeline` (and therefore the saveApiKeys rebuild path) stays
+  // synchronous. Fail-closed: a missing or unloadable model falls back to the
+  // RMS energy gate in `ingest.ts`, never to "transcribe everything".
+  let vadLoad: Promise<SileroVad | null> | null = null;
+  const loadVad = (): Promise<SileroVad | null> => {
+    if (vadLoad === null) {
+      const cfg = loadConfig();
+      vadLoad = SileroVad.load(cfg.vad.modelPath, { threshold: cfg.vad.threshold }).catch(() => null);
+    }
+    return vadLoad;
+  };
+
+  const vadGate = async (window: Uint8Array): Promise<boolean> => {
+    const vad = await loadVad();
+    if (vad === null) return isLoudWindow(window);
+    // A 5 s window is 156 Silero frames; any speech frame admits the window.
+    const frames = Math.floor(window.byteLength / 2 / VAD_WINDOW_SAMPLES);
+    for (let f = 0; f < frames; f += 1) {
+      const frame = bytesToFloat32(window, f * VAD_WINDOW_SAMPLES * 2, VAD_WINDOW_SAMPLES);
+      if (await vad.isSpeech(frame)) return true;
+    }
+    return false;
+  };
+
   const setVoicePhase = (phase: 'idle' | 'listening' | 'thinking' | 'speaking', transcript?: string): void => {
     if (phase === voicePhase && transcript === undefined) return;
     voicePhase = phase;
@@ -119,9 +151,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const buildVoicePipeline = (): AudioPipeline | null => {
     try {
       const ring = Keyring.load(vault);
-      const cfg = loadConfig();
       const fish = new FishHttpTransport(ring);
-      const tts = new TtsEngine(cfg.cache, fish, new FileAudioOut());
       const chat: ChatFn = async (model, system, user, options) => {
         const key = ring.acquire('openrouter');
         try {
@@ -138,13 +168,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       };
       const coordinator = new Coordinator({
         chat,
-        speak: async (replyAr) => {
-          await tts
-            .speakSentences(replyAr, activePersona === 'nour' ? 'female-toggle' : 'male-default')
-            .catch((err: unknown) => {
-              ui.notice('tts-failed', `تعذّر توليد الصوت: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
-            });
-        },
+        // D4: deliberately no `speak` hook. It used to route the reply through
+        // TtsEngine + FileAudioOut, which wrote an MP3 to %TEMP% that nothing
+        // ever played — so every utterance was synthesised TWICE (double Fish
+        // quota, ~1-2 s of dead work) and the coordinator awaited it before
+        // planning. The single audible path is `onUtterance` below.
         dispatch: async (text) => {
           const session = activeSession as SessionId;
           return client.promptSession(session, text, { origin: 'voice', actor: 'capture' });
@@ -152,11 +180,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         activeSessionId: () => activeSession,
       });
       return new AudioPipeline({
+        speechGate: vadGate,
         transcribe: async (pcm) => {
-          setVoicePhase('thinking');
+          // D13: the phase moved to 'thinking' on EVERY incoming window, so the
+          // HUD flickered listening→thinking 10×/s. It is now set in `think`,
+          // which runs only for a window that survived the speech gate.
           const key = ring.acquire('groq');
           try {
-            return (await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)))).text;
+            const res = await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)));
+            // D1: surface no_speech_prob so the pipeline can drop a window
+            // Whisper itself believes was not speech.
+            return res.noSpeechProb === undefined
+              ? res.text
+              : { text: res.text, noSpeechProb: res.noSpeechProb };
           } catch (err) {
             ui.notice('stt-failed', `تعذّر تحويل الكلام إلى نص: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
             throw err;
@@ -178,16 +214,22 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         activeSessionId: () => activeSession,
         onUtterance: (utterance) => {
           void (async () => {
-            const text = utterance.reply.trim();
-            if (text.length === 0) {
+            // D2: sanitise here as well as in the transport. The transport is
+            // the last gate, but skipping a symbol-only reply entirely is
+            // cheaper and keeps the speech phase honest.
+            const text = stripSpeechText(utterance.reply);
+            if (!isSpeakable(text)) {
               setVoicePhase('idle');
               return;
             }
-            setVoicePhase('speaking', utterance.reply);
+            setVoicePhase('speaking', text);
+            // Snapshot the persona for the whole utterance: a persona switch
+            // mid-reply would otherwise split one sentence across two voices.
             const voiceId = VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'];
             const gen = speechGate.capture();
+            const sentences = splitSentences(text);
             try {
-              for (const sentence of splitSentences(text)) {
+              for (const sentence of sentences) {
                 if (!speechGate.isCurrent(gen)) return;
                 const mp3 = await fish.synthesize(sentence, voiceId);
                 if (!speechGate.isCurrent(gen)) return;
@@ -215,6 +257,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
     const pipeline = audio;
     ui.onAudio = (pcm) => {
+      // D13: set the phase here, at the single entry point for uplink audio,
+      // and only when it actually changes. The helper already dedupes, so a
+      // steady mic costs zero WS frames.
       setVoicePhase('listening');
       void pipeline.pushChunk(pcm).catch(() => undefined);
     };

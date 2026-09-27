@@ -37,9 +37,56 @@ beforeAll(async () => {
     }
     if (req.method === 'GET' && req.url === '/api/session') {
       json(res, 200, {
-        data: [{ id: 'ses_mock1', agent: 'explore', model: { id: 'muse-spark' } }],
+        data: [
+          {
+            id: 'ses_mock1',
+            agent: 'explore',
+            model: { id: 'muse-spark' },
+            projectID: 'prj_1',
+            cost: 0.0123,
+            tokens: { input: 1200, output: 300, reasoning: 45, cache: { read: 800, write: 10 } },
+            time: { updated: 1_700_000_000_000 },
+          },
+        ],
         cursor: null,
       });
+      return;
+    }
+    // D9: the dedicated context endpoint. Returns the session's messages, whose
+    // StepFinishPart tokens are what actually occupy the window right now.
+    if (req.method === 'GET' && req.url === '/api/session/ses_mock1/context') {
+      json(res, 200, {
+        data: [
+          {
+            info: { id: 'msg_1', role: 'user' },
+            parts: [{ type: 'text', text: 'hi' }],
+          },
+          {
+            info: { id: 'msg_2', role: 'assistant' },
+            parts: [
+              { type: 'step-finish', tokens: { input: 4000, output: 500, reasoning: 100, cache: { read: 2000, write: 5 } } },
+            ],
+          },
+          {
+            info: { id: 'msg_3', role: 'assistant' },
+            parts: [
+              { type: 'step-finish', tokens: { input: 6000, output: 250, reasoning: 0, cache: { read: 1000, write: 0 } } },
+            ],
+          },
+        ],
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/session/ses_mock1/compact') {
+      res.writeHead(204).end();
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/session/ses_mock1/interrupt') {
+      res.writeHead(204).end();
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/session/ses_mock1/revert/stage') {
+      res.writeHead(204).end();
       return;
     }
     if (req.method === 'GET' && req.url === '/openapi.json') {
@@ -329,6 +376,61 @@ describe('ServeClient vs mock serve', () => {
     } finally {
       await new Promise<void>((resolve) => probe.close(() => resolve()));
     }
+  });
+});
+
+// D9 — OpenCode context telemetry. The live API already returns per-session
+// tokens and a dedicated `/context` endpoint; both were being discarded.
+describe('context telemetry (D9)', () => {
+  const client = (): ServeClient => new ServeClient(baseUrl, 'test-password');
+
+  test('listSessions keeps tokens, cost, projectID and updatedAt', async () => {
+    const [row] = await client().listSessions();
+    expect(row).toBeDefined();
+    expect(row!.tokens).toEqual({ input: 1200, output: 300, reasoning: 45, cacheRead: 800, cacheWrite: 10 });
+    expect(row!.cost).toBeCloseTo(0.0123, 6);
+    expect(row!.projectId).toBe('prj_1');
+    expect(row!.updatedAt).toBe(1_700_000_000_000);
+  });
+
+  test('a row without tokens omits the key rather than reporting zeros', async () => {
+    // exactOptionalPropertyTypes: `tokens: undefined` is not assignable, and a
+    // fabricated 0 would read as "this session used no tokens".
+    const [row] = await client().listSessions();
+    expect(row!.tokens).toBeDefined();
+  });
+
+  test('contextUsage sums the window, not the session lifetime', async () => {
+    const usage = await client().contextUsage('ses_mock1' as never, 200_000);
+    // (4000+500+100) + (6000+250+0) = 10 850
+    expect(usage.used).toBe(10_850);
+    expect(usage.byMessage.input).toBe(10_000);
+    expect(usage.byMessage.output).toBe(750);
+    expect(usage.byMessage.reasoning).toBe(100);
+    expect(usage.byMessage.cacheRead).toBe(3_000);
+    expect(usage.messageCount).toBe(2);
+    // The user-only message carries no tokens and must not be counted.
+    expect(usage.percent).toBeCloseTo(5.4, 1);
+    expect(usage.limit).toBe(200_000);
+  });
+
+  test('contextUsage reports percent:null rather than guessing an unknown limit', async () => {
+    const usage = await client().contextUsage('ses_mock1' as never);
+    expect(usage.used).toBe(10_850);
+    expect(usage.limit).toBeNull();
+    expect(usage.percent).toBeNull();
+  });
+
+  test('a zero or negative limit is treated as unknown', async () => {
+    const usage = await client().contextUsage('ses_mock1' as never, 0);
+    expect(usage.percent).toBeNull();
+  });
+
+  test('native session commands hit the real endpoints', async () => {
+    const c = client();
+    await expect(c.compactSession('ses_mock1' as never)).resolves.toEqual({ ok: true });
+    await expect(c.interruptSession('ses_mock1' as never)).resolves.toEqual({ ok: true });
+    await expect(c.revertSession('ses_mock1' as never, 'stage')).resolves.toEqual({ ok: true });
   });
 });
 

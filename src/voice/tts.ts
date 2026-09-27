@@ -15,6 +15,115 @@ export const TTS_FIRST_CHUNK_BUDGET_MS = 800;
 /** Longest single synthesis request: run-ons hard-split on word boundaries. */
 export const MAX_SENTENCE_CHARS = 400;
 
+/**
+ * Conversational interjections stripped from the START of a sentence only.
+ *
+ * Deliberately tiny. A bare `تمام` is a legitimate answer and must survive; it
+ * is listed here only in its comma form. This list is the highest-risk,
+ * lowest-evidence rule in the sanitiser, so it is exported for review rather
+ * than buried in a regex.
+ */
+export const SPEECH_FILLERS = ['يعني', 'طيب', 'يعني،', 'طيب،', 'اوك', 'تمام،'] as const;
+
+const TERMINATORS = '.!?؟!…';
+
+/**
+ * Strip everything with no spoken form (D2). Adapted from
+ * `pipecat-ai/pipecat` `utils/text/transforms/strip_markdown.py`
+ * (BSD-2-Clause), extended for Arabic and for non-Latin script.
+ *
+ * The contract, inherited from that module's docstring: the sanitiser must be
+ * **alphanumeric-preserving** — it removes decoration, never a word. That is
+ * what makes it safe to run on model output that has already been reasoned
+ * over, and it is pinned by test.
+ *
+ * Explicit non-goal: folding Arabic letter variants (أإآٱ→ا, ى→ي, ؤ→و). Those
+ * are phonemic distinctions in MSA — `على` is correct with ى, `آمن` carries a
+ * real madda, `أرد` has a distinct glottal onset. Folding them would invent a
+ * dialect. Under-normalising is safe; over-normalising mispronounces. Only
+ * tashkīl and tatweel — pure orthography — are removed.
+ */
+export function stripSpeechText(input: string): string {
+  let text = input;
+
+  // Fenced code blocks: unpronounceable, removed whole.
+  text = text.replace(/```[\s\S]*?```/g, '');
+  text = text.replace(/~~~[\s\S]*?~~~/g, '');
+  // Inline code: keep the content, drop the delimiter.
+  text = text.replace(/`([^`]+)`/g, '$1');
+  // Link/image: keep the label, drop the target.
+  text = text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');
+  // Emphasis, widest first.
+  text = text.replace(/\*{3}(.+?)\*{3}/g, '$1');
+  text = text.replace(/_{3}(.+?)_{3}/g, '$1');
+  text = text.replace(/\*{2}(.+?)\*{2}/g, '$1');
+  text = text.replace(/_{2}(.+?)_{2}/g, '$1');
+  text = text.replace(/\*(.+?)\*/g, '$1');
+  text = text.replace(/(^|[\s(])_([^_]+)_(?=$|[\s).,،؟!])/g, '$1$2');
+  // Block structure.
+  text = text.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+  text = text.replace(/^\s{0,3}>\s?/gm, '');
+  text = text.replace(/^\s*[-*_]{3,}\s*$/gm, '');
+  // List markers keep the words. `[ \t]*` rather than `\s+` so a tight "-نص"
+  // is still a bullet.
+  text = text.replace(/^\s*[-*+•]+[ \t]*/gm, '');
+  text = text.replace(/^\s*\d{1,3}[.)][ \t]*/gm, '');
+
+  // URLs and bare paths: spelled out letter by letter, never understood.
+  text = text.replace(/\bhttps?:\/\/\S+/gi, '');
+  text = text.replace(/(?<![\p{L}\p{N}])\S*[\p{L}\p{N}]\/[\p{L}\p{N}\-._/]+/gu, '');
+  // Fenced/inline leftovers and stray control characters.
+  text = text.replace(/```/g, '');
+
+  // Emoji and pictograph blocks, plus the regional-indicator pair used by flags.
+  // Combining marks (ZWJ, variation selector, skin-tone keycap) are stripped
+  // below with the other format characters rather than here: a character class
+  // containing combining marks is ambiguous, and `no-misleading-character-class`
+  // is right to complain.
+  text = text.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}]/gu, '');
+  // Bidi controls, zero-width and other invisible format characters. The
+  // combining marks (ZWJ, VS16, keycap) are alternated rather than listed in a
+  // class: a class containing combining marks is ambiguous, and
+  // `no-misleading-character-class` is right to reject it.
+  text = text.replace(/\u200E|\u200F|[\u202A-\u202E\u2066-\u2069\u200B-\u200D\uFEFF]|\uFE0F|\u20E3/g, '');
+  // Arabic orthography only: tashkil (U+064B–U+0652, U+0670) and tatweel.
+  text = text.replace(/[\u064B-\u0652\u0670\u0640]/g, '');
+
+  // Collapse whitespace left behind by every removal above. The second rule is
+  // the one that matters: removing a trailing emoji or a diacritic must not
+  // leave a floating space before the terminator ("تمام 🎉." → "تمام .").
+  text = text
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/[ \t]*\n[ \t]*/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/[ \t]+([.!?؟!…،,:;])/g, '$1')
+    .trim();
+
+  text = stripFillers(text);
+
+  if (!isSpeakable(text)) return '';
+  return /\S$/.test(text) && TERMINATORS.includes(text.slice(-1)) ? text : `${text}.`;
+}
+
+/** Remove leading interjections per line, once each, at a word boundary. */
+function stripFillers(text: string): string {
+  let out = text;
+  for (const filler of SPEECH_FILLERS) {
+    const re = new RegExp(`^${escapeRegex(filler)}\\s*[,،]?\\s*`, 'gm');
+    out = out.replace(re, '');
+  }
+  return out.trim();
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** True when at least one letter or digit survives — the never-synthesize rule. */
+export function isSpeakable(text: string): boolean {
+  return /[\p{L}\p{N}]/u.test(text);
+}
+
 export interface AudioOut {
   play(audio: Uint8Array, voice: VoiceId): Promise<{ startedMs: number }>;
   /** Progressive sink: receives chunks as they synthesize; default callers may omit. */
@@ -110,6 +219,49 @@ export interface FishTransport {
   synthesizeStream?(text: string, fishVoiceId: string): AsyncGenerator<Uint8Array>;
 }
 
+/**
+ * The `TTSRequest` body we send, per the published Fish Audio openapi v1
+ * schema. Exported so the policy is unit-testable without a network call and
+ * reviewable without reading the transport.
+ *
+ * Every field is a deliberate choice against a reported symptom:
+ * - `latency: 'normal'` — docs: "normal: best quality, balanced: reduced
+ *   latency". We were paying latency for a voice that came out shouting.
+ * - `prosody.volume: -2` — dB, negative is quieter. The documented,
+ *   server-side headroom for an over-loud voice.
+ * - `prosody.speed: 0.95` — a shade under normal pace.
+ * - `temperature: 0.5` (default 0.7) — "controls expressiveness"; lower is
+ *   more consistent, which is what a calm, dignified delivery needs.
+ * - `repetition_penalty: 1.3` (default 1.2) — "penalty for repeating audio
+ *   patterns"; the reported symptom was repeated words.
+ * - `chunk_length: 300` (was 200) — the documented default and maximum; fewer
+ *   word-boundary splits inside a clause means less garbling.
+ * - `normalize: true` KEPT — the schema defines this as *text* normalisation
+ *   for number stability, not an audio loudness control. An earlier audit
+ *   blamed it for loudness; that reading was wrong and the field is unchanged.
+ * - `condition_on_previous_chunks: true` — voice consistency across chunks.
+ */
+export function fishRequestBody(text: string, fishVoiceId: string): Record<string, unknown> {
+  return {
+    // Sanitised again here on purpose: this is the last gate before bytes hit
+    // the network, and the daemon's `onUtterance` path calls the transport
+    // directly, bypassing TtsEngine. stripSpeechText is idempotent, so the
+    // engine's earlier pass costs nothing.
+    text: stripSpeechText(text),
+    reference_id: fishVoiceId,
+    format: 'mp3',
+    latency: 'normal',
+    chunk_length: 300,
+    min_chunk_length: 50,
+    normalize: true,
+    temperature: 0.5,
+    top_p: 0.7,
+    repetition_penalty: 1.3,
+    condition_on_previous_chunks: true,
+    prosody: { speed: 0.95, volume: -2, normalize_loudness: true },
+  };
+}
+
 export class FishHttpTransport implements FishTransport {
   constructor(
     private readonly keyring: Keyring,
@@ -142,14 +294,7 @@ export class FishHttpTransport implements FishTransport {
           model: TTS_MODEL,
           Accept: 'audio/mpeg',
         },
-        body: JSON.stringify({
-          text,
-          reference_id: fishVoiceId,
-          format: 'mp3',
-          latency: 'balanced',
-          chunk_length: 200,
-          normalize: true,
-        }),
+        body: JSON.stringify(fishRequestBody(text, fishVoiceId)),
       });
       if (res.status === 429) {
         this.keyring.release(key, false, 429);
@@ -193,14 +338,18 @@ export class TtsEngine {
   }
 
   async speak(text: string, voice: VoiceId): Promise<{ cacheHit: boolean; startedMs: number; firstChunkMs?: number }> {
-    const cached = await this.cache.get(text, voice);
+    // Sanitise before the cache lookup: two text variants of the same reply
+    // must not become two cache entries, nor poison one.
+    const clean = stripSpeechText(text);
+    if (!isSpeakable(clean)) return { cacheHit: false, startedMs: 0, firstChunkMs: 0 };
+    const cached = await this.cache.get(clean, voice);
     if (cached !== null) {
       const { startedMs } = await this.out.play(new Uint8Array(cached), voice);
       return { cacheHit: true, startedMs, firstChunkMs: 0 };
     }
     if (this.transport.synthesizeStream !== undefined && this.out.playStream !== undefined) {
       // Progressive path: first chunk flows to the sink before synthesis completes.
-      const stream = this.transport.synthesizeStream(text, VOICE_IDS[voice]);
+      const stream = this.transport.synthesizeStream(clean, VOICE_IDS[voice]);
       const started = Date.now();
       let firstChunkMs = -1;
       const collected: Uint8Array[] = [];
@@ -219,11 +368,11 @@ export class TtsEngine {
         audio.set(part, offset);
         offset += part.byteLength;
       }
-      await this.cache.set(text, voice, audio);
+      await this.cache.set(clean, voice, audio);
       return { cacheHit: false, startedMs, firstChunkMs };
     }
-    const audio = await this.transport.synthesize(text, VOICE_IDS[voice]);
-    await this.cache.set(text, voice, audio);
+    const audio = await this.transport.synthesize(clean, VOICE_IDS[voice]);
+    await this.cache.set(clean, voice, audio);
     const { startedMs } = await this.out.play(audio, voice);
     return { cacheHit: false, startedMs };
   }
@@ -244,8 +393,11 @@ export class TtsEngine {
     voice: VoiceId,
   ): Promise<{ cacheHit: boolean; startedMs: number; firstChunkMs?: number; sentences: number }> {
     const started = Date.now();
-    const sentences = splitSentences(text);
-    const cached = await this.cache.get(text, voice);
+    // Sanitise once, then split: sanitising per sentence would re-add terminal
+    // punctuation that splitSentences is entitled to consume.
+    const clean = stripSpeechText(text);
+    const sentences = splitSentences(clean);
+    const cached = await this.cache.get(clean, voice);
     if (cached !== null) {
       const { startedMs } = await this.out.play(new Uint8Array(cached), voice);
       return { cacheHit: true, startedMs, firstChunkMs: 0, sentences: sentences.length };
@@ -268,7 +420,7 @@ export class TtsEngine {
       combined.set(part, offset);
       offset += part.byteLength;
     }
-    await this.cache.set(text, voice, combined);
+    await this.cache.set(clean, voice, combined);
     return { cacheHit: false, startedMs: Date.now() - started, firstChunkMs, sentences: sentences.length };
   }
 }

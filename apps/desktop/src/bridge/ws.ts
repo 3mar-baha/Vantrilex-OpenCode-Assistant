@@ -178,6 +178,13 @@ export interface BridgeOptions {
   /** Fired when a hello arrives with a lower seq — the daemon restarted. */
   readonly onGap?: () => void;
   readonly onClose?: () => void;
+  /**
+   * Fired once when the bridge is torn down for good (component unmount).
+   * Distinct from `onClose`, which fires on every socket drop and is followed
+   * by a reconnect — releasing the AudioContext on that would cut off speech
+   * mid-reply.
+   */
+  readonly onDispose?: () => void;
 }
 
 /** Adapt a native browser WebSocket to the SocketLike surface (binary included). */
@@ -292,8 +299,14 @@ export class VoxauraBridge {
   }
 
   dispose(): void {
+    // Terminal teardown: release the AudioContext and anything else the shell
+    // owns. `onDispose` fires only on the first transition so a double dispose
+    // cannot double-free; `onClose` is deliberately NOT used here, because that
+    // one fires on every socket drop and is followed by a reconnect.
+    const first = !this.disposed;
     this.disposed = true;
     this.attempt = 0;
+    if (first) this.opts.onDispose?.();
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;

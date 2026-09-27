@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { VoxauraBridge } from './bridge/ws.js';
 import { WaveformEmblem } from './components/brand/WaveformEmblem.js';
-import { SiriWaveCanvas } from './components/waveform/SiriWaveCanvas.js';
+import { SiriWaveCanvas, SPEAKER_PALETTE, type WaveSpeaker } from './components/waveform/SiriWaveCanvas.js';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { ConfirmPortal } from './components/portals/ConfirmPortal.js';
@@ -129,6 +129,12 @@ export function App(): JSX.Element {
             }
           }
           playerRef.current.enqueue(bytes);
+        },
+        // D3: release the AudioContext on unmount. The window can be reopened
+        // many times per session; an un-closed context is a real leak.
+        onDispose: () => {
+          playerRef.current?.dispose();
+          playerRef.current = null;
         },
         onClose: () => setBridge((s) => (s === 'live' ? 'degraded' : s)),
         onRefusal: () => setBridge('refused'),
@@ -297,6 +303,11 @@ export function App(): JSX.Element {
     send({ id: nextCmdId(), kind: 'mute' }, next ? 'تم كتم صوت المساعد' : 'تم تشغيل صوت المساعد', 'تعذّر تغيير حالة الصوت');
   };
 
+  // D8: the thread wears the active speaker's gradient. While the assistant
+  // speaks it takes the persona's palette; otherwise the thread belongs to the
+  // human at the microphone.
+  const waveSpeaker: WaveSpeaker = speaking || voicePhase === 'speaking' ? (persona === 'nour' ? 'nour' : 'kareem') : 'user';
+
   const statusPill =
     bridge !== 'live'
       ? { text: '● غير متصل', state: 'offline' }
@@ -428,7 +439,11 @@ export function App(): JSX.Element {
         </div>
 
         <main className="flex flex-col items-center gap-4 px-4 py-5">
-          <SiriWaveCanvas mode={live ? 'active' : 'idle'} color="#2563eb" energy={userMuted ? 0 : micEnergy} />
+          <SiriWaveCanvas
+        mode={live ? 'active' : 'idle'}
+        palette={SPEAKER_PALETTE[waveSpeaker]}
+        energy={userMuted ? 0 : micEnergy}
+      />
           <div className="flex items-center gap-3" data-testid="control-row">
             <button
               data-testid="mic-toggle"

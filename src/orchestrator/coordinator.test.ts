@@ -26,6 +26,58 @@ describe('coordinator chain', () => {
     expect(COORDINATOR_MODEL).toBe('nvidia/nemotron-3-ultra-550b-a55b:free');
   });
 
+  test('D4: a hung speak must not block planning or dispatch', async () => {
+    // The regression: `await speak(...)` serialized every turn behind a Fish
+    // round-trip, so a slow or hung TTS put seconds of dead air in front of
+    // the plan. speak is now detached — it must never gate the chain.
+    let speakStarted = false;
+    const never = new Promise<void>(() => undefined);
+    const dispatched: string[] = [];
+    const coordinator = new Coordinator({
+      chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+      speak: () => {
+        speakStarted = true;
+        return never;
+      },
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'msg_hang' };
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+    // If speak were awaited this would never settle.
+    const result = await coordinator.run('show me sessions', { taskId: 'm_hang' });
+    expect(speakStarted).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.receipt).toBe('msg_hang');
+    expect(dispatched).toHaveLength(1);
+  });
+
+  test('D4: a rejected speak is swallowed, never an unhandled rejection', async () => {
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]): void => void errors.push(args[0]);
+    try {
+      const coordinator = new Coordinator({
+        chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+        speak: async () => {
+          throw new Error('fish down');
+        },
+        dispatch: async () => ({ receipt: 'msg_ok' }),
+        activeSessionId: () => 'ses_a' as never,
+      });
+      const result = await coordinator.run('show me sessions', { taskId: 'm_reject' });
+      expect(result.ok).toBe(true);
+      // Let the detached rejection settle before asserting it was reported.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(errors).toHaveLength(1);
+      expect(String(errors[0])).toContain('coordinator-speak-failed');
+      expect(String(errors[0])).not.toContain('api_key');
+    } finally {
+      console.error = original;
+    }
+  });
+
   test('full mission: speak first, then dispatch handoff with receipt', async () => {
     const order: string[] = [];
     const dispatched: string[] = [];

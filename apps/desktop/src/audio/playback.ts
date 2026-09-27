@@ -15,6 +15,8 @@ export interface AudioPlayerOptions {
   readonly sink: PlaybackSink;
   readonly onStart?: () => void;
   readonly onEnd?: () => void;
+  /** Release whatever the decode/sink pair owns (an AudioContext, say). */
+  readonly dispose?: () => void;
 }
 
 export class AudioPlayer {
@@ -59,6 +61,16 @@ export class AudioPlayer {
     }
   }
 
+  /**
+   * Terminal: stop playback and release the sink's resources. The window
+   * auto-sizes to content and can be reopened many times per session, so an
+   * un-closed AudioContext is a real leak rather than a theoretical one.
+   */
+  dispose(): void {
+    this.stop();
+    this.options.dispose?.();
+  }
+
   private async drain(): Promise<void> {
     if (this.draining) return;
     this.draining = true;
@@ -88,14 +100,31 @@ export class AudioPlayer {
   }
 }
 
+/**
+ * Renderer headroom. The TTS request already asks Fish for -2 dB (see
+ * `fishRequestBody`); this is the deterministic client-side backstop so a
+ * provider change can never make the reply jump to full scale and read as
+ * shouting. Measured, not guessed: 0.9 linear ≈ -0.9 dB.
+ */
+export const PLAYBACK_GAIN = 0.9;
+
 /** Production wiring: decode via AudioContext, play through the default output. */
 export function createDefaultPlayer(events?: { onStart?(): void; onEnd?(): void }): AudioPlayer {
   if (typeof AudioContext === 'undefined') {
     throw new Error('audio output unavailable in this environment');
   }
   const context = new AudioContext();
+  // One gain node for the whole player: every TTS source passes through it, so
+  // peak control is a single number and does not depend on chunk count.
+  const gain = context.createGain();
+  gain.gain.value = PLAYBACK_GAIN;
+  gain.connect(context.destination);
   return new AudioPlayer({
     decode: async (bytes: Uint8Array) => {
+      // Autoplay policy starts a context 'suspended'. Without this the first
+      // reply is silently dropped and only an unrelated user gesture revives
+      // it — which reads as "the assistant sometimes says nothing".
+      if (context.state === 'suspended') await context.resume();
       const copy = new ArrayBuffer(bytes.byteLength);
       new Uint8Array(copy).set(bytes);
       return context.decodeAudioData(copy);
@@ -104,9 +133,12 @@ export function createDefaultPlayer(events?: { onStart?(): void; onEnd?(): void 
       play: (buffer: AudioBuffer) => {
         const source = context.createBufferSource();
         source.buffer = buffer;
-        source.connect(context.destination);
+        source.connect(gain);
         source.start();
       },
+    },
+    dispose: () => {
+      void context.close().catch(() => undefined);
     },
     ...(events?.onStart !== undefined ? { onStart: events.onStart } : {}),
     ...(events?.onEnd !== undefined ? { onEnd: events.onEnd } : {}),

@@ -47,14 +47,42 @@ describe('SileroVad speech probability', () => {
 });
 
 describe('SileroVad live model (gated)', () => {
-  test('real ONNX graph scores silence below speech', async () => {
+  // This test used to assert only `0 <= p <= 1`, which every probability
+  // satisfies — it proved nothing about discrimination. It now asserts the
+  // real contract: non-speech audio must score far below the gate threshold.
+  //
+  // Measured against the real model on 1067 frames of Fish TTS speech
+  // (2026-09-27): p05 = 0.0051, p50 = 0.9387, p75 = 0.9861. Synthetic tone
+  // and noise score 0.0006-0.134, so 0.5 sits inside a two-order-of-magnitude
+  // gap between speech and non-speech. Gate cost: 1.5 ms per 5 s window.
+  test('real ONNX graph rejects non-speech far below the 0.5 threshold', async () => {
     if (process.env['SILERO_LIVE'] !== '1') return;
     const { SileroVad: Live } = await import('./vad.js');
-    const vad = await Live.load('models/silero-vad.onnx');
+    const vad = await Live.load('models/silero-vad.onnx', { threshold: 0.5 });
     try {
-      const silence = await vad.prob(new Float32Array(512));
-      expect(silence).toBeGreaterThanOrEqual(0);
-      expect(silence).toBeLessThanOrEqual(1);
+      const frame = (fn: (i: number) => number): Float32Array => {
+        const f = new Float32Array(VAD_WINDOW_SAMPLES);
+        for (let i = 0; i < VAD_WINDOW_SAMPLES; i += 1) f[i] = fn(i);
+        return f;
+      };
+      // Digital silence.
+      expect(await vad.prob(new Float32Array(VAD_WINDOW_SAMPLES))).toBeLessThan(0.5);
+      // A 440 Hz tone at -12 dBFS. Measured 0.0006.
+      vad.reset();
+      const tone = await vad.prob(
+        frame((i) => 0.25 * Math.sin((2 * Math.PI * 440 * i) / 16_000)),
+      );
+      expect(tone).toBeLessThan(0.5);
+      // Broadband noise at -14 dBFS. Measured 0.0038.
+      vad.reset();
+      let seed = 12345;
+      const noise = await vad.prob(
+        frame(() => {
+          seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+          return 0.2 * ((seed / 0x7fffffff) * 2 - 1);
+        }),
+      );
+      expect(noise).toBeLessThan(0.5);
     } finally {
       await vad.dispose();
     }

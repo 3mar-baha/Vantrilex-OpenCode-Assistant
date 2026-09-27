@@ -175,8 +175,23 @@ export class Coordinator {
       return { ok: false, receipt: null, detail: intakeTransportFailed ? 'intake-failed' : 'intake-invalid' };
     }
 
-    // Fast verbal response first — the user hears back before planning lands.
-    await this.deps.speak?.(intake.reply_ar);
+    // Fast verbal response, kicked off but NOT awaited.
+    //
+    // D4: awaiting here serialized the whole turn behind a Fish round-trip —
+    // every utterance paid the full synthesis latency in dead air before
+    // planning even started. It is also fire-and-forget by design: the audible
+    // reply is the daemon's `onUtterance` path, so nothing here blocks on it.
+    // The catch is mandatory: an unhandled rejection in a detached promise
+    // takes down the daemon process, not one turn. No transcript or key
+    // material is logged — only the failure class and message.
+    void this.deps.speak?.(intake.reply_ar)?.catch((err: unknown) => {
+      console.error(
+        JSON.stringify({
+          evt: 'coordinator-speak-failed',
+          error: err instanceof Error ? err.message : 'unknown',
+        }),
+      );
+    });
 
     let planRaw: string | null = null;
     try {

@@ -14,6 +14,15 @@ export interface OrchestratorConfig {
   };
   readonly cache: AudioCacheConfig;
   readonly capture: { readonly mode: 'push-to-talk' | 'wake-word'; readonly micDefault: 'armed' | 'disarmed' };
+  /**
+   * D1 speech gate. `model` points at the Silero ONNX graph; when the file is
+   * absent the daemon falls back to the RMS energy gate rather than disabling
+   * gating (fail-closed toward silence, never toward transcribing room tone).
+   */
+  readonly vad: {
+    readonly modelPath: string;
+    readonly threshold: number;
+  };
   readonly briefings: 'bluf' | 'full';
   readonly quietHours: string;
   readonly muteOnCall: boolean;
@@ -30,6 +39,8 @@ const ConfigSchema = z.object({
   QUIET_HOURS: z.string().default('22:00-07:00'),
   MUTE_ON_CALL: z.enum(['on', 'off']).default('on'),
   MIC_DEFAULT: z.enum(['armed', 'disarmed']).default('armed'),
+  VAD_MODEL_PATH: z.string().default('models/silero-vad.onnx'),
+  VAD_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
@@ -50,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
       maxEntryBytes: 4 * 1024 * 1024,
     },
     capture: { mode: parsed.CAPTURE_MODE, micDefault: parsed.MIC_DEFAULT },
+    vad: { modelPath: parsed.VAD_MODEL_PATH, threshold: parsed.VAD_THRESHOLD },
     briefings: parsed.BRIEFINGS,
     quietHours: parsed.QUIET_HOURS,
     muteOnCall: parsed.MUTE_ON_CALL === 'on',

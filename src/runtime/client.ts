@@ -15,12 +15,59 @@ export function basicAuth(password: string): string {
   return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
 }
 
-/** Internal session contract (id, agent, model, state) — normalized from /api/session. */
+/**
+ * Per-session token accounting, normalized from `/api/session`.
+ *
+ * D9: the live API already returns this object and we were discarding it, so
+ * the HUD had no context visibility at all. `input`/`output`/`reasoning` are
+ * lifetime spend for the session; `cache.read`/`cache.write` are reported
+ * separately because cached reads are billed differently and must not be
+ * summed into a raw prompt total.
+ */
+export interface SessionTokens {
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+}
+
+/** Internal session contract — normalized from /api/session. */
 export interface SessionInfo {
   readonly sessionId: string;
   readonly state: string;
   readonly agent?: string;
   readonly model?: string;
+  readonly projectId?: string;
+  readonly cost?: number;
+  readonly tokens?: SessionTokens;
+  readonly updatedAt?: number;
+}
+
+/** A single message's token use, from a `StepFinishPart` in the context payload. */
+export interface MessageTokens {
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+}
+
+/**
+ * Window occupancy for a session.
+ *
+ * `used` is the true current context fill and is NOT the session's lifetime
+ * `SessionInfo.tokens` — summing the two is the classic mistake, and would
+ * report a bar that keeps climbing after a `/compact`. `limit` is the model's
+ * context window; without it we report `percent: null` rather than guessing.
+ */
+export interface ContextUsage {
+  readonly sessionId: SessionId;
+  readonly used: number;
+  readonly limit: number | null;
+  readonly percent: number | null;
+  readonly byMessage: MessageTokens;
+  readonly messageCount: number;
 }
 
 /** /api/session list/get envelope: { data: row | rows, cursor? }. */
@@ -45,6 +92,55 @@ function sessionState(row: Record<string, unknown>): string {
   return 'idle';
 }
 
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+/** `{input,output,reasoning,cache:{read,write}}` as delivered by /api/session. */
+function normalizeTokens(raw: unknown): SessionTokens | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const cache = (typeof r['cache'] === 'object' && r['cache'] !== null ? r['cache'] : {}) as Record<string, unknown>;
+  return {
+    input: num(r['input']) ?? 0,
+    output: num(r['output']) ?? 0,
+    reasoning: num(r['reasoning']) ?? 0,
+    cacheRead: num(cache['read']) ?? 0,
+    cacheWrite: num(cache['write']) ?? 0,
+  };
+}
+
+/** A step-finish part inside a message from `/api/session/{id}/context`. */
+function messageTokens(message: unknown): MessageTokens | null {
+  if (typeof message !== 'object' || message === null) return null;
+  const parts = (message as Record<string, unknown>)['parts'];
+  if (!Array.isArray(parts)) return null;
+  let input = 0;
+  let output = 0;
+  let reasoning = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let seen = false;
+  for (const part of parts) {
+    if (typeof part !== 'object' || part === null) continue;
+    const tokens = (part as Record<string, unknown>)['tokens'];
+    if (typeof tokens !== 'object' || tokens === null) continue;
+    const t = tokens as Record<string, unknown>;
+    const cache = (typeof t['cache'] === 'object' && t['cache'] !== null ? t['cache'] : {}) as Record<string, unknown>;
+    const i = num(t['input']);
+    const o = num(t['output']);
+    const rr = num(t['reasoning']);
+    if (i === undefined && o === undefined && rr === undefined) continue;
+    seen = true;
+    input += i ?? 0;
+    output += o ?? 0;
+    reasoning += rr ?? 0;
+    cacheRead += num(cache['read']) ?? 0;
+    cacheWrite += num(cache['write']) ?? 0;
+  }
+  return seen ? { input, output, reasoning, cacheRead, cacheWrite } : null;
+}
+
 function normalizeSessionRow(row: unknown): SessionInfo | null {
   if (typeof row !== 'object' || row === null) return null;
   const r = row as Record<string, unknown>;
@@ -59,11 +155,21 @@ function normalizeSessionRow(row: unknown): SessionInfo | null {
         ? modelRaw
         : undefined;
   const state = sessionState(r);
+  const projectId = typeof r['projectID'] === 'string' ? (r['projectID'] as string) : undefined;
+  const cost = num(r['cost']);
+  const tokens = normalizeTokens(r['tokens']);
+  const time = r['time'];
+  const updatedAt =
+    typeof time === 'object' && time !== null ? num((time as Record<string, unknown>)['updated']) : undefined;
   return {
     sessionId: id,
     state,
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(projectId !== undefined ? { projectId } : {}),
+    ...(cost !== undefined ? { cost } : {}),
+    ...(tokens !== undefined ? { tokens } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
   };
 }
 
@@ -350,13 +456,90 @@ export class ServeClient {
     return out;
   }
 
-  async listSessions(): Promise<SessionInfo[]> {    const res = await this.request('/api/session', { method: 'GET' });
+  async listSessions(): Promise<SessionInfo[]> {
+    const res = await this.request('/api/session', { method: 'GET' });
     if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.list failed with HTTP ${res.status}`);
     const data = unwrapData(await res.json());
     if (!Array.isArray(data)) return [];
     return data
       .map((row) => normalizeSessionRow(row))
       .filter((row): row is SessionInfo => row !== null);
+  }
+
+  /**
+   * True current context-window occupancy for one session (D9).
+   *
+   * Uses the dedicated `/api/session/{id}/context` endpoint, which returns the
+   * session's messages; summing their `StepFinishPart` tokens gives what is
+   * actually occupying the window right now. This is deliberately NOT the
+   * session row's lifetime `tokens` — a compaction resets the former and
+   * leaves the latter untouched, so using the row would make the gauge climb
+   * forever.
+   *
+   * `limit` comes from the models.dev catalog; when it is unknown we return
+   * `percent: null` rather than dividing by a guess.
+   */
+  async contextUsage(sessionId: SessionId, limit?: number): Promise<ContextUsage> {
+    const res = await this.request(`/api/session/${sessionId}/context`, { method: 'GET' });
+    if (!res.ok) {
+      throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.context failed with HTTP ${res.status}`);
+    }
+    const data = unwrapData(await res.json());
+    const messages = Array.isArray(data) ? data : [];
+    // Mutable accumulator; the public shape stays readonly.
+    const acc = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+    let counted = 0;
+    for (const message of messages) {
+      const t = messageTokens(message);
+      if (t === null) continue;
+      acc.input += t.input;
+      acc.output += t.output;
+      acc.reasoning += t.reasoning;
+      acc.cacheRead += t.cacheRead;
+      acc.cacheWrite += t.cacheWrite;
+      counted += 1;
+    }
+    const byMessage: MessageTokens = { ...acc };
+    const used = byMessage.input + byMessage.output + byMessage.reasoning;
+    const known = typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? limit : null;
+    return {
+      sessionId,
+      used,
+      limit: known,
+      percent: known === null ? null : Math.round((used / known) * 1000) / 10,
+      byMessage,
+      messageCount: counted,
+    };
+  }
+
+  /** Native `/compact` — real compaction, not a prompt asking the model to forget. */
+  async compactSession(sessionId: SessionId): Promise<{ ok: true }> {
+    await this.control(
+      'POST',
+      `/api/session/${sessionId}/compact`,
+      {},
+      randomUUID(),
+      'session.compact',
+    );
+    return { ok: true };
+  }
+
+  /** Native abort — the correct barge-in primitive. */
+  async interruptSession(sessionId: SessionId): Promise<{ ok: true }> {
+    await this.control('POST', `/api/session/${sessionId}/interrupt`, {}, randomUUID(), 'session.interrupt');
+    return { ok: true };
+  }
+
+  /** Three-phase revert (`/undo`). */
+  async revertSession(sessionId: SessionId, phase: 'stage' | 'commit' | 'clear'): Promise<{ ok: true }> {
+    await this.control(
+      'POST',
+      `/api/session/${sessionId}/revert/${phase}`,
+      {},
+      randomUUID(),
+      `session.revert.${phase}`,
+    );
+    return { ok: true };
   }
 
   async probeContract(): Promise<string> {
