@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.0"><img src="https://img.shields.io/badge/download-Voxaura_0.6.2_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
+  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.0"><img src="https://img.shields.io/badge/download-Voxaura_0.7.0_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
 </p>
 
 ## ما هو Voxaura؟
@@ -70,7 +70,7 @@ OpenCode v2. يستقبل الأوامر صوتياً بالعربية عبر ك
   الطبقات وكائن Job في Windows (`KILL_ON_JOB_CLOSE`) — قتل التطبيق قسراً
   يجمع كل العمليات الفرعية، صفر عمليات يتيمة.
 - **المثبت المستقل**: حزمة NSIS (الإصدار
-  [v0.6.2](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.6.2))
+  [v0.7.0](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.0))
   تحمل `node.exe` والجانب التشغيلي — لا يحتاج المستخدم النهائي Node أو npm.
   Windows فقط؛ macOS/Linux مؤجلة حتى استقرار Windows الكامل.
 - **الخزينة**: AES-256-GCM محلي (`vault/keyring.dat`)، صفر أسرار في السجلات
