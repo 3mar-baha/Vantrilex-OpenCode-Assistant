@@ -46,6 +46,11 @@ function nextCmdId(): string {
 export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewProps): JSX.Element {
   const [tab, setTab] = useState<TabId>('models');
   const [persona, setPersona] = useState<'kareem' | 'nour'>(initialPersona);
+  // L22: lets the hello/notice callbacks compare against the live value
+  // without depending on `persona`, which would tear down and re-create the
+  // bridge on every change and drop the connection mid-flight.
+  const personaRef = useRef(persona);
+  personaRef.current = persona;
   const [modelTarget, setModelTarget] = useState('');
   const [copied, setCopied] = useState(false);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
@@ -60,7 +65,21 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
       const b = new VoxauraBridge({
       token,
       contractVersion: '3.1.0',
-      onHello: () => undefined,
+      onHello: (h) => {
+        // L22: adopt the daemon persona on connect. This window opens with
+        // initialPersona defaulting to kareem, so without this it showed the
+        // wrong persona whenever the HUD had already changed it.
+        if (h.persona !== undefined && h.persona !== personaRef.current) {
+          setPersona(h.persona);
+        }
+      },
+      onNotice: (n) => {
+        // L22: follow a persona change made in the HUD. Local state ONLY —
+        // sending back would bounce the change between the two windows.
+        if (n.code === 'persona-changed' && (n.detail === 'kareem' || n.detail === 'nour')) {
+          if (n.detail !== personaRef.current) setPersona(n.detail);
+        }
+      },
       onEvent: () => undefined,
       onClose: () => undefined,
       onRefusal: () => undefined,

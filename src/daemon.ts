@@ -221,7 +221,20 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     },
     activeSessionId: () => activeSession,
     setPersona: (persona) => {
+      // L22: the HUD and the settings window each kept their own persona state,
+      // so a change made in one left the other showing — and speaking — the
+      // previous persona. The daemon is the single source: it announces the
+      // change and both surfaces follow.
+      //
+      // The equality guard is the echo-loop defence. A surface that re-sends
+      // `setPersona` on receiving `persona-changed` would make the daemon
+      // re-announce, and the two would trade updates indefinitely. Returning
+      // early on an unchanged persona makes that loop unrepresentable rather
+      // than merely unlikely.
+      if (activePersona === persona) return;
       activePersona = persona;
+      ui.setPersona(persona);
+      ui.notice('persona-changed', persona, 'info');
     },
     onAbort: () => speechGate.abort(),
     saveKeys: {

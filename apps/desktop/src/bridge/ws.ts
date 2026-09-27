@@ -16,6 +16,12 @@ export interface HelloMsg {
   readonly servePort: number;
   readonly layaReady: boolean;
   readonly seq: number;
+  /**
+   * L22: the daemon's current persona. Optional because the field was added
+   * after the contract shipped — a daemon that predates it simply omits it and
+   * the shell keeps whatever persona it already had.
+   */
+  readonly persona?: 'kareem' | 'nour';
 }
 
 export interface EventMsg {

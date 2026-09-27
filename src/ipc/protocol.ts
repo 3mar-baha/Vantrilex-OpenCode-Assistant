@@ -308,6 +308,13 @@ export const HelloFrameSchema = z.object({
   servePort: z.literal(SERVE_PORT),
   layaReady: z.boolean(),
   seq: z.number().int().nonnegative(),
+  /**
+   * L22: the daemon's current persona, so a shell that connects (or reconnects)
+   * after a change is not left showing the default. Optional and additive: an
+   * older shell ignores it, and a shell that sees no persona simply keeps
+   * whatever it already had.
+   */
+  persona: z.enum(['kareem', 'nour']).optional(),
 });
 export type HelloFrame = z.infer<typeof HelloFrameSchema>;
 

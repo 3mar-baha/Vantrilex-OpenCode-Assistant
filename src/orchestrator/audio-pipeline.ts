@@ -58,6 +58,19 @@ export class AudioPipeline {
   private hallucinationCount = 0;
   private repeatCount = 0;
   private sttTimeouts = 0;
+  /**
+   * L6: bumped by every `reset()`. `pushChunk` captures it on entry and
+   * re-checks after each await.
+   *
+   * `reset()` used to clear the ingest buffer and the repeat memory and
+   * nothing else, so a `pushChunk` already parked on `transcribe` or `think`
+   * carried on and dispatched a turn belonging to the utterance the user just
+   * interrupted. On barge-in that is the stale reply the SpeechGate is built to
+   * prevent, arriving after the abort that was supposed to stop it — the window
+   * is already in the provider queue and cannot be recalled, only ignored on
+   * the way back out.
+   */
+  private generation = 0;
 
   constructor(deps: AudioPipelineDeps) {
     this.deps = deps;
@@ -95,15 +108,26 @@ export class AudioPipeline {
   reset(): void {
     this.ingest.reset();
     this.recent = [];
+    // L6: abandon whatever is in flight. The generation is the only thing that
+    // can stop an already-dispatched provider call from coming back as a turn.
+    this.generation += 1;
   }
 
   async pushChunk(chunk: Uint8Array): Promise<void> {
+    const generation = this.generation;
     for (const window of this.ingest.push(chunk)) {
+      if (generation !== this.generation) return;
       if (!(await this.isSpeech(window))) {
+        // Checked before counting: a window that belongs to an abandoned
+        // utterance must not appear in this one's diagnostics.
+        if (generation !== this.generation) return;
         this.gatedCount += 1;
         continue;
       }
       const result = await this.transcribeWindow(window);
+      // The window is already gone from the provider's perspective. Dropping it
+      // here is what keeps an interrupted utterance from being dispatched.
+      if (generation !== this.generation) return;
       // A timed-out window is dropped, not thrown: the loop must keep flowing.
       if (result === null) continue;
       const text = typeof result === 'string' ? result : result.text;
@@ -120,6 +144,9 @@ export class AudioPipeline {
       }
       this.remember(transcript);
       const thought = await this.deps.think(transcript);
+      // The reply for an abandoned utterance must never be spoken or shown,
+      // even though the planning call has already been paid for.
+      if (generation !== this.generation) return;
       // A think-provided receipt means the think stage already dispatched
       // (e.g. the coordinator chain). Raw text is only dispatched when an
       // explicit fallback exists — never implicitly.
@@ -127,6 +154,9 @@ export class AudioPipeline {
       if (receipt === null && this.deps.dispatch !== undefined && this.deps.activeSessionId() !== undefined) {
         receipt = (await this.deps.dispatch(transcript)).receipt;
       }
+      // dispatch() is awaited too, so a reset during it strands a receipt
+      // nobody will announce. Dropping it is correct: the next turn is live.
+      if (generation !== this.generation) return;
       this.deps.onUtterance?.({ transcript, reply: thought.reply, receipt });
     }
   }

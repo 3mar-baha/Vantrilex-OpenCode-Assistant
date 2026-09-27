@@ -46,6 +46,8 @@ export interface UiServerOptions {
   readonly contractVersion: string;
   readonly port?: number;
   readonly pingIntervalMs?: number;
+  /** L22: current persona, echoed in hello so a reconnecting shell is not stale. */
+  readonly persona?: 'kareem' | 'nour';
 }
 
 interface Conn {
@@ -97,6 +99,8 @@ export class UiServer {
   private readonly token: string;
   private readonly contractVersion: string;
   private readonly pingIntervalMs: number;
+  /** L22: read at connect time, so a late shell gets the live persona. */
+  private persona: 'kareem' | 'nour' | undefined;
   private server: Server | null = null;
   private readonly conns = new Set<Conn>();
   private seq = 0;
@@ -113,10 +117,20 @@ export class UiServer {
     this.token = options.token;
     this.contractVersion = options.contractVersion;
     this.pingIntervalMs = options.pingIntervalMs ?? PING_INTERVAL_MS;
+    this.persona = options.persona;
   }
 
   get listening(): boolean {
     return this.server?.listening ?? false;
+  }
+
+  /**
+   * L22: record a persona change so the NEXT connection is told. Existing
+   * connections get the `persona-changed` notice instead; this is only the
+   * snapshot a late or reconnecting shell reads from `hello`.
+   */
+  setPersona(persona: 'kareem' | 'nour'): void {
+    this.persona = persona;
   }
 
   get connectionCount(): number {
@@ -366,6 +380,9 @@ export class UiServer {
       servePort: SERVE_PORT,
       layaReady: true,
       seq: this.seq,
+      // L22: the daemon is the single source for persona, so a shell that
+      // connects after a change must be told, not left on the default.
+      ...(this.persona !== undefined ? { persona: this.persona } : {}),
     });
     socket.write(encodeTextFrame(JSON.stringify(hello)));
 

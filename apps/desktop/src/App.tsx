@@ -101,8 +101,28 @@ export function App(): JSX.Element {
           lastFrameAt.current = Date.now();
           setBridge((s) => (s === 'refused' ? s : 'live'));
         },
-        onHello: () => setBridge('live'),
-        onNotice: (n) => setNotice({ code: n.code, detail: n.detail, level: n.level }),
+        onHello: (h) => {
+          setBridge('live');
+          // L22: the daemon is the source of truth for persona. A shell that
+          // connects (or reconnects) after a change adopts it here instead of
+          // sitting on the `kareem` default.
+          if (h.persona !== undefined && h.persona !== personaRef.current) {
+            setPersona(h.persona);
+          }
+        },
+        onNotice: (n) => {
+          setNotice({ code: n.code, detail: n.detail, level: n.level });
+          // L22: follow a persona change made in the settings window.
+          //
+          // This handler sets local state and NOTHING else. It must not send
+          // `setPersona` back: the daemon already applied it, and re-sending
+          // would bounce the change between the two surfaces. The daemon's
+          // equality guard makes that loop a no-op, but the correct behaviour
+          // is to not start it — see the guard in daemon.ts.
+          if (n.code === 'persona-changed' && (n.detail === 'kareem' || n.detail === 'nour')) {
+            if (n.detail !== personaRef.current) setPersona(n.detail);
+          }
+        },
         onVoice: (v) => {
           setVoicePhase(v.phase);
           if (v.transcript !== undefined && v.transcript.length > 0) setLastTranscript(v.transcript);
