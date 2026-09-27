@@ -1,4 +1,5 @@
 import { nowIso } from '../common/brands.js';
+import { httpStatusOf } from '../common/errors.js';
 import { decryptPool, type FileVault, KEY_POOLS, type KeyPool } from './vault.js';
 
 // Lock-free keyring — docs/20, ADR-005. Slot assignment is a wait-free atomic
@@ -115,4 +116,63 @@ export class Keyring {
     for (const buf of this.cached.values()) buf.fill(0);
     this.cached.clear();
   }
+}
+
+/**
+ * L17: acquire a key, run one provider call with it, and release it with the
+ * truth about how that call went.
+ *
+ * Every call site used to release with an unconditional true in a finally
+ * block, which reported success no matter how the call went. release() only
+ * advances the pool on 429/401/403, so an unconditional true meant a rejected
+ * key was never rotated: the daemon kept paying for the same dead credential
+ * and the user saw voice simply stop, with no signal that the key was the
+ * cause. A key that is present but invalid is indistinguishable from a healthy
+ * one until the first utterance - this function is what ends that.
+ *
+ * Status recovery is httpStatusOf, which returns undefined for anything it does
+ * not recognise. That is deliberate: an unrecognised failure must not advance
+ * the pool, or a transient 5xx would burn a valid key. Rotation is driven only
+ * by an explicit auth rejection or a rate limit.
+ */
+export async function withKey<T>(
+  ring: Keyring,
+  pool: KeyPool,
+  use: (key: AcquiredKey) => Promise<T>,
+): Promise<T> {
+  const key = ring.acquire(pool);
+  try {
+    const out = await use(key);
+    ring.release(key, true);
+    return out;
+  } catch (err) {
+    const before = ring.rolloverLog.length;
+    ring.release(key, false, httpStatusOf(err));
+    // L16: mark the error when the release actually moved to a DIFFERENT key, so
+    // the caller can tag its telemetry row `remediationAttempted: 'KeyAdvanced'`.
+    // `KeyAdvanced` was in the schema with no producer, so a rotation was
+    // invisible: the key changed and nothing recorded that it had.
+    //
+    // `from !== to` rather than "the log grew": forceAdvance also fires for a
+    // single-key pool, where it burns the remaining slots and logs K1 -> K1.
+    // That is a real event but it is not remediation, and claiming otherwise
+    // would put `KeyAdvanced` on a row for a failure that changed nothing.
+    const entry = ring.rolloverLog[before];
+    if (entry !== undefined && entry.from !== entry.to && typeof err === 'object' && err !== null) {
+      Object.defineProperty(err, ADVANCED, { value: true, enumerable: false, configurable: true });
+    }
+    throw err;
+  }
+}
+
+/** Non-enumerable so the marker never reaches a JSON log line or a diff. */
+const ADVANCED = Symbol('voxaura.keyAdvanced');
+
+/**
+ * Did this failure rotate the key pool? True only when `withKey` released the
+ * key with a 429/401/403 — a timeout or a 5xx leaves the pool alone and reports
+ * false, which is the honest answer: nothing was remediated.
+ */
+export function keyAdvanced(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as Record<symbol, unknown>)[ADVANCED] === true;
 }

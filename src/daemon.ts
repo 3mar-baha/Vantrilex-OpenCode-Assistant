@@ -21,7 +21,7 @@ import { mentionSummary, resolveMentions } from './orchestrator/mentions.js';
 import { isActionableInstruction, optimizePrompt } from './orchestrator/prompt-optimizer.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
-import { Keyring, type AcquiredKey } from './voice/keyring.js';
+import { Keyring, keyAdvanced, withKey, type AcquiredKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
 import { bytesToFloat32, isLoudWindow } from './voice/ingest.js';
 // NOT imported statically. `runtime/vad.js` pulls in `onnxruntime-node`, a
@@ -130,9 +130,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // outcome.
   const narratorChat: NarratorChat = async (model, system, user, options) => {
     const ring = Keyring.load(vault);
-    const key = ring.acquire('openrouter');
-    try {
-      return openRouterChat(
+    // L17: released with the real outcome, so a 401/403 from OpenRouter rotates
+    // the pool instead of silently reusing the rejected key.
+    return withKey(ring, 'openrouter', (key) =>
+      openRouterChat(
         keyMaterial(key),
         model,
         system,
@@ -151,10 +152,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           reasoning: { effort: 'none' },
           ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
         },
-      );
-    } finally {
-      ring.release(key, true);
-    }
+      ),
+    );
   };
 
   const narrateOutcome = (action: string, outcomeOk: boolean, errorDetail?: string, target?: string): void => {
@@ -330,20 +329,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     try {
       const ring = Keyring.load(vault);
       const fish = new FishHttpTransport(ring);
-      const chat: ChatFn = async (model, system, user, options) => {
-        const key = ring.acquire('openrouter');
-        try {
-          return await openRouterChat(keyMaterial(key), model, system, user, fetch, {
-            ...(options?.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
-            ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
-            ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-            ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-            ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
-          });
-        } finally {
-          ring.release(key, true);
-        }
-      };
+        const chat: ChatFn = async (model, system, user, options) => {
+          return withKey(ring, 'openrouter', (key) =>
+            openRouterChat(keyMaterial(key), model, system, user, fetch, {
+              ...(options?.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
+              ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+              ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+              ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+              ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
+            }),
+          );
+        };
       const coordinator = new Coordinator({
         chat,
         // D4: deliberately no `speak` hook. It used to route the reply through
@@ -363,29 +359,35 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           // D13: the phase moved to 'thinking' on EVERY incoming window, so the
           // HUD flickered listening→thinking 10×/s. It is now set in `think`,
           // which runs only for a window that survived the speech gate.
-          const key = ring.acquire('groq');
+          // L17: a Groq 401/403 now advances the pool. Previously this reported
+          // success on every path, so a revoked key stayed in use and STT simply
+          // stopped producing text with nothing to distinguish it from silence.
           const t0 = Date.now();
-          try {
-            const res = await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)));
-            record({ subsystem: 'STT', status: 'OK', latencyMs: Date.now() - t0 });
-            // D1: surface no_speech_prob so the pipeline can drop a window
-            // Whisper itself believes was not speech.
-            return res.noSpeechProb === undefined
-              ? res.text
-              : { text: res.text, noSpeechProb: res.noSpeechProb };
-          } catch (err) {
-            record({
-              subsystem: 'STT',
-              status: 'ERROR',
-              latencyMs: Date.now() - t0,
-              errorCode: 'STT_FAILED',
-              sanitizedErrorClass: classify(err),
-            });
-            ui.notice('stt-failed', `تعذّر تحويل الكلام إلى نص: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
-            throw err;
-          } finally {
-            ring.release(key, true);
-          }
+          return withKey(ring, 'groq', async (key) => {
+            try {
+              const res = await transcribeStream(pcm, new GroqWhisperClient(keyMaterial(key)));
+              record({ subsystem: 'STT', status: 'OK', latencyMs: Date.now() - t0 });
+              // D1: surface no_speech_prob so the pipeline can drop a window
+              // Whisper itself believes was not speech.
+              return res.noSpeechProb === undefined
+                ? res.text
+                : { text: res.text, noSpeechProb: res.noSpeechProb };
+            } catch (err) {
+              record({
+                subsystem: 'STT',
+                status: 'ERROR',
+                latencyMs: Date.now() - t0,
+                errorCode: 'STT_FAILED',
+                sanitizedErrorClass: classify(err),
+    // L16: a revoked key is not just a failure, it is a failure the keyring
+    // recovered from by advancing the pool. Recording that is the difference
+    // between "STT is broken" and "the key rotated, the next try may work".
+    remediationAttempted: keyAdvanced(err) ? 'KeyAdvanced' : 'None',
+              });
+              ui.notice('stt-failed', `تعذّر تحويل الكلام إلى نص: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
+              throw err;
+            }
+          });
         },
         think: async (transcript) => {
           setVoicePhase('thinking', transcript);
@@ -490,22 +492,18 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           if (isActionableInstruction(spoken)) {
             const tOpt = Date.now();
             try {
-              const key = ring.acquire('openrouter');
-              try {
-                task = await optimizePrompt(
-                  spoken,
-                  (model, system, user) =>
-                    openRouterChat(keyMaterial(key), model, system, user, fetch, {
-                      reasoning: { effort: 'none' },
-                      timeoutMs: OPTIMIZER_TIMEOUT_MS,
-                    }),
-                  INTAKE_MODEL,
-                  {},
+                task = await withKey(ring, 'openrouter', (key) =>
+                  optimizePrompt(
+                    spoken,
+                    (model, system, user) =>
+                      openRouterChat(keyMaterial(key), model, system, user, fetch, {
+                        reasoning: { effort: 'none' },
+                        timeoutMs: OPTIMIZER_TIMEOUT_MS,
+                      }),
+                    INTAKE_MODEL,
+                    {},
+                  ),
                 );
-                record({ subsystem: 'BRAIN', status: 'OK', latencyMs: Date.now() - tOpt, remediationAttempted: 'None' });
-              } finally {
-                ring.release(key, true);
-              }
             } catch (err) {
               // Graceful fallback is the USER'S OWN WORDS, never a template:
               // optimizePrompt already returns the utterance on failure, and a
@@ -517,6 +515,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
                 latencyMs: Date.now() - tOpt,
                 errorCode: 'BRAIN_TIMEOUT',
                 sanitizedErrorClass: classify(err),
+    remediationAttempted: keyAdvanced(err) ? 'KeyAdvanced' : 'None',
               });
             }
           }
@@ -537,6 +536,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               latencyMs: Date.now() - t0,
               errorCode: 'BRAIN_FAILED',
               sanitizedErrorClass: classify(err),
+    remediationAttempted: keyAdvanced(err) ? 'KeyAdvanced' : 'None',
             });
             ui.notice('brain-failed', `تعذّر توليد الرد: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
             throw err;

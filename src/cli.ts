@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import { loadConfig } from './common/index.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
-import { Keyring } from './voice/keyring.js';
+import { readKeyPools, vaultKeyStatus } from './voice/key-store.js';
+import { Keyring, withKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
 import { OpenRouterBrainClient, requiresConfirmation } from './voice/brain.js';
 import { ensureVault, resolveVaultRoot } from './memory/vault.js';
@@ -23,11 +24,17 @@ async function doctor(): Promise<number> {
     const set = (process.env[name] ?? '').length > 0;
     console.log(`${set ? 'ok  ' : 'miss'} ${name} ${set ? '(set, value hidden)' : '(unset)'}`);
   }
+  // L16: env presence is NOT key availability. The vault is the single
+  // credential source (docs/12 I-5), and a normal installed run has every pool
+  // unset in env. Reporting `miss` for all three there described a working app
+  // as broken. The vault counts are the truth; env is secondary.
+  const verdict = vaultKeyStatus(readKeyPools(new FileVault(VAULT_PATH)));
+  for (const line of verdict.lines) console.log(line);
   const password = process.env.OPENCODE_SERVER_PASSWORD ?? '';
   const alive = password.length > 0 && (await probeHealth(cfg.serve.port, password));
   console.log(`${alive ? 'ok  ' : 'miss'} serve 127.0.0.1:${cfg.serve.port} ${alive ? '(healthy)' : '(unreachable)'}`);
   console.log(`info voice=${cfg.voice.default} briefings=${cfg.briefings} mic=${cfg.capture.micDefault}`);
-  return alive ? 0 : 1;
+  return alive && verdict.ok ? 0 : 1;
 }
 
 function loadDotEnvLocal(): void {
@@ -72,13 +79,6 @@ async function liveLoop(): Promise<number> {
     const vault = new FileVault(VAULT_PATH);
     const ring = Keyring.load(vault);
     try {
-      const groqKey = ring.acquire('groq');
-      const groqApiKey = Buffer.from(groqKey.material).toString('utf8');
-      ring.release(groqKey, true);
-      const fishKey = ring.acquire('fish');
-      const fishApiKey = Buffer.from(fishKey.material).toString('utf8');
-      void fishApiKey;
-      ring.release(fishKey, true);
 
       // 1. Fish TTS of the Ammani test phrase (uses keyring internally).
       const cfg = loadFullConfig();
@@ -95,24 +95,25 @@ async function liveLoop(): Promise<number> {
       report['tts_sentences'] = first.sentences;
 
       // 2. Whisper STT round-trip on a generated 1s silent PCM (latency probe).
-      const whisper = new GroqWhisperClient(groqApiKey);
       const silent = new Uint8Array(16_000 * 2);
       const sttStart = Date.now();
-      const transcript = await transcribeStream(silent, whisper);
+      // L17: the key is held across the call and released with its real status,
+      // so a revoked Groq key advances the pool instead of being retried.
+      const transcript = await withKey(ring, 'groq', (key) =>
+        transcribeStream(silent, new GroqWhisperClient(Buffer.from(key.material).toString('utf8'))),
+      );
       report['stt_ms'] = Date.now() - sttStart;
       report['stt_chunks'] = transcript.chunkCount;
       report['stt_text_len'] = transcript.text.length;
 
       // 3. Brain round-trip via OpenRouter (fixed digestive prompt; latency + budget verdict).
       // Key from the vault pool — the single source; fail-closed when absent.
-      const orKey = ring.acquire('openrouter');
-      const openrouterApiKey = Buffer.from(orKey.material).toString('utf8');
-      ring.release(orKey, true);
-      const brain = new OpenRouterBrainClient(openrouterApiKey);
       const brainStart = Date.now();
-      const { output, elapsedMs, goldenBreached } = await brain.respond(
-        'اختبار حي: التيستات خضرا',
-        'live verification session',
+      const { output, elapsedMs, goldenBreached } = await withKey(ring, 'openrouter', (key) =>
+        new OpenRouterBrainClient(Buffer.from(key.material).toString('utf8')).respond(
+          'اختبار حي: التيستات خضرا',
+          'live verification session',
+        ),
       );
       void brainStart;
       report['brain_ms'] = elapsedMs;
