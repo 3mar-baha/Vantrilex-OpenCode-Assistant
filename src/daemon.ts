@@ -16,6 +16,7 @@ import { openRouterChat } from './voice/brain.js';
 import { narrate, NARRATOR_MODEL, type NarratorChat } from './orchestrator/narrator.js';
 import { OpenCodeBridge } from './runtime/opencode-bridge.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
+import { describeSlashCommands, parseSlashCommand, slashCommandError } from './orchestrator/slash.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, type AcquiredKey } from './voice/keyring.js';
@@ -368,6 +369,50 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         think: async (transcript) => {
           setVoicePhase('thinking', transcript);
           const t0 = Date.now();
+          // A spoken `/command` is handled natively and NEVER reaches a model.
+          // Forwarding `/rm -rf /` as prose to a planning agent is how a typo
+          // becomes an incident. The HUD is voice-only, so a slash arrives here
+          // as a transcript rather than as a WS command — which is exactly why
+          // this seam is the daemon and not the command router.
+          const slash = parseSlashCommand(transcript);
+          if (slash !== null) {
+            const invalid = slashCommandError(transcript);
+            if (invalid !== null) {
+              ui.notice('slash-invalid', invalid, 'warn');
+              record({ subsystem: 'BRAIN', status: 'DEGRADED', latencyMs: Date.now() - t0, errorCode: 'CONFIG_INVALID' });
+              return { reply: invalid };
+            }
+            if (slash.name === 'help') {
+              const help = describeSlashCommands().join(' · ');
+              ui.notice('slash-help', help, 'info');
+              return { reply: help };
+            }
+            if (slash.name === 'compact') {
+              if (activeSession === undefined) {
+                const msg = 'ما في جلسة نشطة — ما في شي نضغطه';
+                ui.notice('slash-no-session', msg, 'warn');
+                return { reply: msg };
+              }
+              await client.compactSession(activeSession);
+              record({ subsystem: 'BRAIN', status: 'OK', latencyMs: Date.now() - t0 });
+              return { reply: 'ضغطنا الجلسة، نافذة السياق خفّت' };
+            }
+            if (slash.name === 'new') {
+              const created = await client.createSession(options.directory ?? process.cwd());
+              activeSession = created.sessionId;
+              await publishSessions();
+              record({ subsystem: 'BRAIN', status: 'OK', latencyMs: Date.now() - t0 });
+              // ServeClient exposes no rename endpoint, so a trailing argument is
+              // acknowledged but NOT persisted. Saying otherwise would be a lie
+              // the user discovers on the next session list.
+              const suffix = slash.args.length > 0 ? ` — ${slash.args.slice(0, 60)}` : '';
+              return { reply: `فتحنا جلسة جديدة${suffix}` };
+            }
+            // Unreachable: slashCommandError rejects an unknown name first.
+            const msg = 'أمر غير معروف';
+            ui.notice('slash-invalid', msg, 'warn');
+            return { reply: msg };
+          }
           try {
             const mission = await coordinator.run(transcript);
             record({ subsystem: 'BRAIN', status: 'OK', latencyMs: Date.now() - t0 });
