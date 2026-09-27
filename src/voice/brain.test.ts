@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { OpenRouterBrainClient, BRAIN_OPENROUTER_MODEL, openRouterChat } from './brain.js';
+import {
+  OpenRouterBrainClient,
+  BRAIN_OPENROUTER_MODEL,
+  openRouterChat,
+  normalizeBrainJson,
+} from './brain.js';
 
 // OpenRouter brain routing TDD — Bearer endpoint, project-default slug,
 // strict JSON contract, retry semantics identical to the Groq path.
@@ -109,8 +114,7 @@ describe('OpenRouterBrainClient', () => {
     await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_TIMEOUT' });
   });
 
-  test('the four rejection causes are four different codes', async () => {
-    const codes = new Set<string>();
+  test('the four rejection causes are four different codes', async () => {    const codes = new Set<string>();
     for (const [status, expected] of [
       [401, 'BRAIN_AUTH'],
       [429, 'RATE_LIMITED'],
@@ -125,6 +129,75 @@ describe('OpenRouterBrainClient', () => {
       }
     }
     expect(codes.size).toBe(3);
+  });
+});
+
+// Measured live on 2026-09-27 against the real free Nemotron model: the same
+// prompt returned `"intent": "followUp"` on one call and a nested intent OBJECT
+// on the next. A zod `.default()` does not rescue a wrong-typed value, so the
+// object form failed the parse and the voice loop produced silence. These pin
+// the recovery, using the exact shape the live model emitted.
+describe('brain output normalization tolerates a non-deterministic model', () => {
+  const liveObjectIntent = {
+    intent: { name: 'answer', confidence: 1.0, slots: { topic: 'arithmetic' } },
+    reply: 'أربع — 2+2=4',
+  };
+
+  test('recovers a reply when intent arrives as an object', () => {
+    const out = normalizeBrainJson(liveObjectIntent);
+    expect(out).not.toBeNull();
+    expect(out?.reply).toBe('أربع — 2+2=4');
+  });
+
+  test('an unrecognised intent degrades to followUp rather than failing', () => {
+    // Losing the intent is recoverable; losing the reply means the user hears
+    // nothing, which is not.
+    const out = normalizeBrainJson({ intent: { name: 'answer' }, reply: 'حاضر' });
+    expect(out?.intent).toBe('followUp');
+  });
+
+  test('a recognisable intent inside the object is honoured', () => {
+    const out = normalizeBrainJson({ intent: { name: 'control' }, reply: 'تمام' });
+    expect(out?.intent).toBe('control');
+  });
+
+  test('intent is matched case-insensitively', () => {
+    expect(normalizeBrainJson({ intent: 'NewSession', reply: 'x' })?.intent).toBe('newSession');
+    expect(normalizeBrainJson({ intent: { name: 'FOLLOWUP' }, reply: 'x' })?.intent).toBe('followUp');
+  });
+
+  test('a bogus control value degrades to none, never to an unsafe action', () => {
+    // `control` drives approve/cancel. An unrecognised value must not be able
+    // to resolve to something that acts.
+    const out = normalizeBrainJson({ intent: 'followUp', control: 'DELETE_EVERYTHING', reply: 'x' });
+    expect(out?.control).toBe('none');
+  });
+
+  test('a valid control value survives the loose path', () => {
+    expect(normalizeBrainJson({ intent: { name: 'control' }, control: 'approve', reply: 'x' })?.control).toBe('approve');
+  });
+
+  test('still returns null when there is genuinely no reply to speak', () => {
+    // The fix must not turn "nothing salvageable" into an empty spoken line.
+    expect(normalizeBrainJson({ intent: { name: 'answer' } })).toBeNull();
+    expect(normalizeBrainJson({ intent: 'followUp', outcome: '', identity: '' })).toBeNull();
+  });
+
+  test('the exact live shape no longer costs the user their reply', () => {
+    // End-to-end through the client, with the model returning the object form.
+    const c = new OpenRouterBrainClient(
+      'k',
+      undefined,
+      mockFetch([
+        {
+          status: 200,
+          body: { choices: [{ message: { content: JSON.stringify(liveObjectIntent) } }] },
+        },
+      ]),
+    );
+    return expect(c.respond('hi', 'ctx')).resolves.toMatchObject({
+      output: { reply: 'أربع — 2+2=4' },
+    });
   });
 });
 

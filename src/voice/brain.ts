@@ -20,24 +20,64 @@ export type BrainOutput = z.infer<typeof BrainOutputSchema>;
  * Normalize near-miss shapes (e.g. {intent, outcome, identity, nextAction})
  * into the canonical contract. Returns null when nothing salvageable exists —
  * the caller then takes the fallback briefing path (never raw speech).
+ *
+ * The `intent` field is deliberately tolerant because the free OpenRouter models
+ * are non-deterministic: measured live on 2026-09-27, the same model and prompt
+ * returned `"intent": "followUp"` on one call and
+ * `"intent": {"name": "answer", "confidence": 1.0, "slots": {...}}` on the next.
+ * A zod `.default()` does not help here — it only rescues `undefined`, not a
+ * wrong-typed value — so the object form failed the whole parse and the voice
+ * loop fell through to `BRAIN_REJECTED`, i.e. silence. Since one malformed field
+ * must not cost the user their reply, a recognisable intent is recovered and an
+ * unrecognised one degrades to `followUp` rather than failing.
  */
+const INTENT_VALUES = ['newSession', 'followUp', 'control'] as const;
+
+function coerceIntent(raw: unknown): (typeof INTENT_VALUES)[number] {
+  const candidate =
+    typeof raw === 'string'
+      ? raw
+      : typeof raw === 'object' && raw !== null && typeof (raw as Record<string, unknown>)['name'] === 'string'
+        ? ((raw as Record<string, unknown>)['name'] as string)
+        : '';
+  // Case-insensitive match, but always return the CANONICAL camelCase value:
+  // lowercasing the candidate and comparing it against camelCase members would
+  // never match anything.
+  const wanted = candidate.trim().toLowerCase();
+  const hit = INTENT_VALUES.find((v) => v.toLowerCase() === wanted);
+  return hit ?? 'followUp';
+}
+
 export function normalizeBrainJson(raw: unknown): BrainOutput | null {
   const exact = BrainOutputSchema.safeParse(raw);
   if (exact.success) return exact.data;
   if (typeof raw !== 'object' || raw === null) return null;
   const obj = raw as Record<string, unknown>;
-  const loose = z.object({
-    intent: z.enum(['newSession', 'followUp', 'control']).default('followUp'),
-    reply: z.string().optional(),
-    outcome: z.string().optional(),
-    identity: z.string().optional(),
-    nextAction: z.string().optional(),
-  }).safeParse(obj);
+  // `intent` is intentionally `unknown`: it must not be able to fail this parse.
+  const loose = z
+    .object({
+      intent: z.unknown().optional(),
+      control: z.unknown().optional(),
+      reply: z.string().optional(),
+      outcome: z.string().optional(),
+      identity: z.string().optional(),
+      nextAction: z.string().optional(),
+    })
+    .safeParse(obj);
   if (!loose.success) return null;
   const parts = [loose.data.identity, loose.data.outcome, loose.data.reply, loose.data.nextAction]
     .filter((p): p is string => typeof p === 'string' && p.length > 0);
   if (parts.length === 0) return null;
-  return BrainOutputSchema.parse({ intent: loose.data.intent, reply: parts.join('. ').slice(0, 1200) });
+  const control =
+    typeof loose.data.control === 'string' &&
+    ['approve', 'cancel', 'repeat', 'switchVoice', 'none'].includes(loose.data.control)
+      ? (loose.data.control as 'none')
+      : 'none';
+  return BrainOutputSchema.parse({
+    intent: coerceIntent(loose.data.intent),
+    control,
+    reply: parts.join('. ').slice(0, 1200),
+  });
 }
 
 const HIGH_STAKES_VERBS = ['destroy', 'delete', 'drop', 'force-push', 'force push', 'deploy', 'rm -rf', 'rm -rf '];
