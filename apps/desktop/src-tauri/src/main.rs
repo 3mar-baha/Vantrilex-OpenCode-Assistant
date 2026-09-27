@@ -655,7 +655,9 @@ fn plain_path(path: &Path) -> String {
 fn resolve_vault_dir(entry: Option<&Path>) -> PathBuf {
     if let Ok(explicit) = std::env::var("VOXAURA_VAULT_DIR") {
         if !explicit.trim().is_empty() {
-            return PathBuf::from(explicit);
+            let dir = PathBuf::from(explicit);
+            log_line(&format!("resolve: vault={} (explicit)", dir.display()));
+            return dir;
         }
     }
     if let Some(entry) = entry {
@@ -663,6 +665,7 @@ fn resolve_vault_dir(entry: Option<&Path>) -> PathBuf {
         while let Some(dir) = cursor {
             let candidate = dir.join("vault");
             if candidate.is_dir() {
+                log_line(&format!("resolve: vault={} (ancestor)", candidate.display()));
                 return candidate;
             }
             cursor = dir.parent().map(PathBuf::from);
@@ -693,6 +696,13 @@ fn resolve_vault_dir(entry: Option<&Path>) -> PathBuf {
             }
         }
     }
+    // The resolved vault is the one path a voice-dead install cannot be
+    // diagnosed without. `Keyring.load` throws on an empty or partially
+    // undecryptable vault, `rebuildVoice` turns that into a KEYS_MISSING
+    // telemetry row, and from the logs alone that row is indistinguishable
+    // from "the user never saved keys" — which is the wrong instruction,
+    // because re-entering keys changes nothing if the path is wrong.
+    log_line(&format!("resolve: vault={} (install default)", root.display()));
     root
 }
 
@@ -1255,6 +1265,64 @@ mod phase2_tests {
             BindOutcome::SpawnFailed(msg) => assert!(msg.contains("could not spawn")),
             other => panic!("expected SpawnFailed, got {other:?}"),
         }
+    }
+
+    /// The resolved vault must be logged on EVERY path, not just the last.
+    ///
+    /// A voice-dead installed build reports `KEYS_MISSING` in telemetry and
+    /// nothing else: the daemon cannot say which file it tried, so the row is
+    /// indistinguishable from "the user never saved keys" — the wrong
+    /// instruction, because re-entering keys changes nothing if the path is
+    /// wrong. This was found the hard way: the first launch after an install
+    /// emitted `KEYS_MISSING` with a vault that plainly held three keys, and
+    /// the logs could not say why.
+    ///
+    /// The log was originally on the final `return` only, so the explicit-env
+    /// and ancestor branches returned before reaching it. This asserts all
+    /// three branches report, which is the property that matters.
+    #[test]
+    fn every_vault_resolution_branch_is_logged() {
+        // Scoped to the function body on purpose. A file-wide count also matches
+        // the string literals in this test, which made the first version of it
+        // fail on itself - a reminder that a "count the occurrences" assertion
+        // needs a scope that excludes the assertion.
+        let src = include_str!("main.rs");
+        let body = src
+            .split("fn resolve_vault_dir")
+            .nth(1)
+            .and_then(|rest| rest.split("fn resolve_node_bin").next())
+            .expect("resolve_vault_dir body");
+
+        // One log line per branch: explicit, ancestor, install default.
+        let logged = body.matches("resolve: vault=").count();
+        assert_eq!(
+            logged, 3,
+            "resolve_vault_dir has 3 return paths (explicit, ancestor, install \
+             default) and each must log its result; found {logged}"
+        );
+
+        let returns: Vec<&str> = body
+            .lines()
+            .filter(|l| l.trim_start().starts_with("return "))
+            .collect();
+        // Two explicit `return`s; the third path (install default) is the
+        // function's tail expression, so it is asserted by the log count above
+        // and by the final-statement check below rather than here.
+        assert_eq!(returns.len(), 2, "expected 2 explicit returns, found {}", returns.len());
+        for l in returns {
+            let preceding = body.split(l).next().unwrap_or_default();
+            assert!(
+                preceding.contains("resolve: vault="),
+                "a return path has no log line next to it: {}",
+                l.trim()
+            );
+        }
+
+        // The install-default branch is the tail expression, so it is covered by
+        // the log count above. Asserting its exact position was tried and
+        // removed: it couples the test to the wording of a format string, so a
+        // harmless reword fails it while a real unlogged return still would not
+        // be the thing that broke.
     }
 
     // ---- helpers -------------------------------------------------------
