@@ -524,6 +524,25 @@ reachable, so the HUD showed nothing in real use.
 | Tests | root **448** (was 441) · desktop 135 · `cargo test` 26 · E2E 18/18 |
 | Two Phase 1 tests updated | They asserted `limit: null` with no argument — i.e. they pinned the *broken* behaviour. Replaced with tests for the catalog lookup, so the inert state cannot come back |
 
+## v0.6.1 — hotfix, and what the live run exposed
+
+| Item | Evidence |
+|---|---|
+| **v0.6.0 was broken in an installed build** | `onnxruntime-node` is native and the sidecar does not bundle it. `daemon.ts` imported `runtime/vad.js` **statically**, so the module graph failed with `ERR_MODULE_NOT_FOUND` and 4097 never opened. Every gate passed: unit 448, Rust 26, E2E 18/18 — because **E2E drives a stub daemon**, and sidecar pruning is in no test. Found only by installing the release and cold-launching it |
+| **The fix** | `runtime/vad.js` is imported **dynamically** inside the existing `loadVad()` promise, so a missing native package is catchable. The gate falls back to the RMS energy gate — the fail-closed behaviour the design always specified |
+| **Regression test** | `src/policy/sidecar-safety.test.ts` walks the daemon's whole import graph and fails if any **statically** reachable module imports a native package. `laya-engine.ts` also imports it but is unreachable, so it is correctly not flagged |
+| **Live payload corrections** | Running the 360° layer against the live serve overturned two assumptions the SDK types had implied: (1) `/api/session/{id}/context` rows are **flat** with `tokens` at the top level, not `{info, parts}` — the old reader silently returned 0; (2) `tokens` **must not be summed**, because each step re-sends the whole conversation. Summing 671 real rows gave 1,492,988 = **142 %** of a 1,048,576 window. The truth is the **most recent step including `cache.read`**: `248 + 429 + 152 + 468,468` = 469,297 = **44.8 %**. (3) `/message` rows are flat too, so `lastMessageAt` was always null |
+| **The bridge was overwriting the catalog limit** | `getSessionDetails` recomputed `limit` from its own argument and discarded the one `contextUsage` had resolved from the catalog — so the gauge read "unknown" forever even after the client was fixed |
+| **Live verification** | 29 sessions, **423 models (all with `limit.context`)**, **55 skills**, 19 agents, 2 commands. Gauge resolves `486,925 / 1,048,576 = 46.4 %`. `موس سبارك` → `meta/muse-spark-1.3`, `نيموترون` → `nvidia/nemotron-3.5-lightning` |
+| Ambiguity behaves correctly | `spase bunny` (mis-transcribed) matches two live models, so the matcher **refuses** rather than guessing — the designed never-guess rule, confirmed against a real 423-entry catalog |
+| Packaged verification | installed 0.6.1 and cold-launched: 4096 + 4097 bound, `daemon.log` **0 bytes**, `daemon: daemon started on 4097` |
+| **v0.6.0 marked broken** | release edited to a DO-NOT-INSTALL banner and flipped to prerelease the moment the defect was found, before the fix work started |
+| Installer | `Voxaura_0.6.1_x64-setup.exe`, **26,167,860 B**, sha256 `A93917533F33436547B34C3862E02A238E06F265ABAA9369F393E0C0BBBE0A6E` |
+| Gates | tsc 0 · eslint 0 · root vitest **461** · desktop vitest **135** · `cargo test` **26** · E2E **18/18** · `cargo build --release` 0 |
+
+### The lesson worth keeping
+`AGENTS.md` warns that "green CI does not mean the live loop works". v0.6.0 is the proof: **every gate was green and the shipped product could not start.** The only thing that found it was installing the artifact and running it. Two of the three 360° bugs were likewise invisible to tests and only appeared against real payloads.
+
 ## v0.6.0 release (voice honesty, process hygiene, OpenCode 360°)
 
 | Item | Evidence |

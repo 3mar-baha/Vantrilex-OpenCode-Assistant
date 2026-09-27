@@ -26,10 +26,14 @@ export interface SessionTokensView {
   readonly cache: { readonly read: number; readonly write: number };
   /** True current context occupancy, from the context endpoint. */
   readonly windowFill: number;
-  /** The model's context window, or null when unknown. */
+  /** The largest single step the window has held. */
   readonly windowMax: number | null;
   /** 0..100, or null when the window is unknown. Never guessed. */
   readonly percent: number | null;
+  /** Peak occupancy seen, from the same source as `windowFill`. */
+  readonly peak: number;
+  /** Steps carrying token accounting. */
+  readonly messageCount: number;
 }
 
 export interface SessionDetails {
@@ -109,18 +113,23 @@ export class OpenCodeBridge {
 
     // Window fill comes from the context endpoint. A failure here must not lose
     // the rest of the telemetry, so it degrades to "unknown", not "throw".
-    let windowFill = 0;
+    let usage: Awaited<ReturnType<ServeClient['contextUsage']>> | null = null;
     try {
-      const usage = await this.client.contextUsage(sessionId, windowMax);
-      windowFill = usage.used;
+      usage = await this.client.contextUsage(sessionId, windowMax);
     } catch {
-      // Telemetry is decoration here: a failure must not lose the rest.
-      windowFill = 0;
+      usage = null;
     }
+    const windowFill = usage?.used ?? 0;
+    const messageCount = usage?.messageCount ?? 0;
+    const peak = usage?.peak ?? 0;
 
-    const limit =
-      typeof windowMax === 'number' && Number.isFinite(windowMax) && windowMax > 0 ? Math.round(windowMax) : null;
-    const percent = limit === null ? null : Math.max(0, Math.min(100, (windowFill / limit) * 100));
+    // Use the limit `contextUsage` resolved. It already falls back to the model
+    // catalog when the caller passed nothing — recomputing it here from the
+    // argument alone silently discarded that and left the gauge showing
+    // "unknown" forever. Caught by running against the live serve.
+    const limit = usage?.limit ?? null;
+    const percent =
+      limit === null ? null : Math.max(0, Math.min(100, (windowFill / limit) * 100));
 
     const lastMessageAt = await this.lastMessageAt(sessionId);
 
@@ -138,6 +147,8 @@ export class OpenCodeBridge {
         windowFill,
         windowMax: limit,
         percent: percent === null ? null : Math.round(percent * 10) / 10,
+        peak,
+        messageCount,
       },
       createdAt: row.createdAt ?? null,
       lastMessageAt,

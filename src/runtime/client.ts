@@ -60,18 +60,33 @@ export interface MessageTokens {
 /**
  * Window occupancy for a session.
  *
- * `used` is the true current context fill and is NOT the session's lifetime
- * `SessionInfo.tokens` — summing the two is the classic mistake, and would
- * report a bar that keeps climbing after a `/compact`. `limit` is the model's
- * context window; without it we report `percent: null` rather than guessing.
+ * Measured against a LIVE serve on 2026-09-27, which corrected two assumptions
+ * this type was originally built on:
+ *
+ *  1. The `/context` rows are NOT `{info, parts}` — they are flat
+ *     `{type, id, time, status, model, summary, recent, cost, tokens}`, with
+ *     `tokens` at the TOP level. Reading `parts[].tokens` silently yields zero.
+ *  2. `tokens` MUST NOT be summed across rows. Each assistant step re-sends the
+ *     whole conversation, so per-step `input` is cumulative. Summing 671
+ *     assistant rows produced 1,492,988 tokens = 142 % of a 1,048,576 window.
+ *
+ * The true CURRENT window is the most recent step's own accounting, and
+ * `cache.read` counts: a cached read still occupies the context, which is the
+ * entire point of prompt caching. For a measured session the last step was
+ * `input 248 + output 429 + reasoning 152 + cache.read 468468` = 469,297, i.e.
+ * 44.8 % of the window — while the naive sum said 142 % and ignoring the cache
+ * said 0.08 %.
  */
 export interface ContextUsage {
   readonly sessionId: SessionId;
+  /** Tokens currently occupying the window. */
   readonly used: number;
   readonly limit: number | null;
   readonly percent: number | null;
   readonly byMessage: MessageTokens;
   readonly messageCount: number;
+  /** The largest single step seen — what the window has actually held. */
+  readonly peak: number;
 }
 
 /** /api/session list/get envelope: { data: row | rows, cursor? }. */
@@ -114,35 +129,54 @@ function normalizeTokens(raw: unknown): SessionTokens | undefined {
   };
 }
 
-/** A step-finish part inside a message from `/api/session/{id}/context`. */
-function messageTokens(message: unknown): MessageTokens | null {
-  if (typeof message !== 'object' || message === null) return null;
-  const parts = (message as Record<string, unknown>)['parts'];
-  if (!Array.isArray(parts)) return null;
-  let input = 0;
-  let output = 0;
-  let reasoning = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let seen = false;
-  for (const part of parts) {
-    if (typeof part !== 'object' || part === null) continue;
-    const tokens = (part as Record<string, unknown>)['tokens'];
-    if (typeof tokens !== 'object' || tokens === null) continue;
-    const t = tokens as Record<string, unknown>;
-    const cache = (typeof t['cache'] === 'object' && t['cache'] !== null ? t['cache'] : {}) as Record<string, unknown>;
-    const i = num(t['input']);
-    const o = num(t['output']);
-    const rr = num(t['reasoning']);
-    if (i === undefined && o === undefined && rr === undefined) continue;
-    seen = true;
-    input += i ?? 0;
-    output += o ?? 0;
-    reasoning += rr ?? 0;
-    cacheRead += num(cache['read']) ?? 0;
-    cacheWrite += num(cache['write']) ?? 0;
+/**
+ * One row's window contribution.
+ *
+ * The live `/context` payload is flat — `tokens` sits at the TOP level of the
+ * row, not under `parts`. Both layouts are accepted because the shape has
+ * already changed once and a silent zero is the worst possible failure here.
+ */
+function rowTokens(row: unknown): MessageTokens | null {
+  if (typeof row !== 'object' || row === null) return null;
+  const r = row as Record<string, unknown>;
+  let raw: Record<string, unknown> | undefined;
+  const direct = r['tokens'];
+  if (typeof direct === 'object' && direct !== null) {
+    raw = direct as Record<string, unknown>;
+  } else {
+    // Legacy `{info, parts}` layout, still accepted so a shape change cannot
+    // silently zero the gauge.
+    const parts = r['parts'];
+    if (Array.isArray(parts)) {
+      for (const p of parts) {
+        if (typeof p !== 'object' || p === null) continue;
+        const t = (p as Record<string, unknown>)['tokens'];
+        if (typeof t === 'object' && t !== null) {
+          raw = t as Record<string, unknown>;
+          break;
+        }
+      }
+    }
   }
-  return seen ? { input, output, reasoning, cacheRead, cacheWrite } : null;
+  if (raw === undefined) return null;
+  const t = raw;
+  const cache = (typeof t['cache'] === 'object' && t['cache'] !== null ? t['cache'] : {}) as Record<string, unknown>;
+  const input = num(t['input']);
+  const output = num(t['output']);
+  const reasoning = num(t['reasoning']);
+  if (input === undefined && output === undefined && reasoning === undefined) return null;
+  return {
+    input: input ?? 0,
+    output: output ?? 0,
+    reasoning: reasoning ?? 0,
+    cacheRead: num(cache['read']) ?? 0,
+    cacheWrite: num(cache['write']) ?? 0,
+  };
+}
+
+/** Tokens a single step occupies in the window. Cached reads still occupy it. */
+function stepWindowFill(t: MessageTokens): number {
+  return t.input + t.output + t.reasoning + t.cacheRead + t.cacheWrite;
 }
 
 function normalizeSessionRow(row: unknown): SessionInfo | null {
@@ -493,22 +527,33 @@ export class ServeClient {
       throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.context failed with HTTP ${res.status}`);
     }
     const data = unwrapData(await res.json());
-    const messages = Array.isArray(data) ? data : [];
-    // Mutable accumulator; the public shape stays readonly.
-    const acc = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+    const rows = Array.isArray(data) ? data : [];
+
+    // CURRENT window = the most recent step's own accounting. Summing across
+    // rows is wrong: every step re-sends the whole conversation, so per-step
+    // `input` is cumulative and a sum measures the session, not the window.
     let counted = 0;
-    for (const message of messages) {
-      const t = messageTokens(message);
+    let current: MessageTokens | null = null;
+    let peak = 0;
+    // Mutable roll-up; `MessageTokens` itself is readonly by design.
+    const acc = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+    for (const row of rows) {
+      const t = rowTokens(row);
       if (t === null) continue;
+      counted += 1;
+      current = t;
+      const fill = stepWindowFill(t);
+      if (fill > peak) peak = fill;
+      // `byMessage` is a lifetime roll-up and is labelled as such; it is NOT
+      // the window, and nothing should render it as one.
       acc.input += t.input;
       acc.output += t.output;
       acc.reasoning += t.reasoning;
       acc.cacheRead += t.cacheRead;
       acc.cacheWrite += t.cacheWrite;
-      counted += 1;
     }
     const byMessage: MessageTokens = { ...acc };
-    const used = byMessage.input + byMessage.output + byMessage.reasoning;
+    const used = current === null ? 0 : stepWindowFill(current);
     // An explicit limit wins. Otherwise resolve it from the model catalog: the
     // session row carries only {id, providerID, variant}, so `limit.context` in
     // the catalog is the ONLY verified source for a session's context window.
@@ -532,6 +577,7 @@ export class ServeClient {
       percent: known === null ? null : Math.round((used / known) * 1000) / 10,
       byMessage,
       messageCount: counted,
+      peak,
     };
   }
 
@@ -660,9 +706,12 @@ export class ServeClient {
       const out: Array<{ createdAt: number }> = [];
       for (const row of data) {
         if (typeof row !== 'object' || row === null) continue;
-        const info = (row as Record<string, unknown>)['info'];
-        if (typeof info !== 'object' || info === null) continue;
-        const time = (info as Record<string, unknown>)['time'];
+        const r = row as Record<string, unknown>;
+        // Measured live: rows are FLAT `{id, time, type, content}`, with no
+        // `info` wrapper. Reading `row.info` returned nothing, so the "last
+        // message" timestamp was always null.
+        const info = typeof r['info'] === 'object' && r['info'] !== null ? (r['info'] as Record<string, unknown>) : r;
+        const time = info['time'];
         const created =
           typeof time === 'object' && time !== null ? num((time as Record<string, unknown>)['created']) : undefined;
         if (created !== undefined) out.push({ createdAt: created });

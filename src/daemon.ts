@@ -21,8 +21,20 @@ import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, type AcquiredKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
-import { isLoudWindow, bytesToFloat32 } from './voice/ingest.js';
-import { SileroVad, VAD_WINDOW_SAMPLES } from './runtime/vad.js';
+import { bytesToFloat32, isLoudWindow } from './voice/ingest.js';
+// NOT imported statically. `runtime/vad.js` pulls in `onnxruntime-node`, a
+// native module the sidecar does not bundle, so a static import made a missing
+// package a hard module-load failure: the daemon died with ERR_MODULE_NOT_FOUND
+// and never bound 4097. Found by cold-launching the real installer, not by the
+// gates. The dynamic import below degrades to the RMS energy gate instead, which
+// is the fail-closed behaviour the design always intended.
+// VAD_WINDOW_SAMPLES is a plain constant (512), mirrored here to keep the frame
+// geometry local and avoid loading the module just to read a number.
+const VAD_WINDOW_SAMPLES = 512;
+type SileroVadLike = {
+  isSpeech(window: Float32Array): Promise<boolean>;
+  reset(): void;
+};
 import { writeKeyPools } from './voice/key-store.js';
 
 // Production daemon — the missing composition root. It adopts an already-running
@@ -210,11 +222,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // `buildVoicePipeline` (and therefore the saveApiKeys rebuild path) stays
   // synchronous. Fail-closed: a missing or unloadable model falls back to the
   // RMS energy gate in `ingest.ts`, never to "transcribe everything".
-  let vadLoad: Promise<SileroVad | null> | null = null;
-  const loadVad = (): Promise<SileroVad | null> => {
+  let vadLoad: Promise<SileroVadLike | null> | null = null;
+  const loadVad = (): Promise<SileroVadLike | null> => {
     if (vadLoad === null) {
       const cfg = loadConfig();
-      vadLoad = SileroVad.load(cfg.vad.modelPath, { threshold: cfg.vad.threshold }).catch(() => null);
+      // The import itself can fail (missing native package in the sidecar), so
+      // it lives inside the promise where `.catch` can actually see it.
+      vadLoad = import('./runtime/vad.js')
+        .then((m) => m.SileroVad.load(cfg.vad.modelPath, { threshold: cfg.vad.threshold }) as Promise<SileroVadLike>)
+        .catch(() => null);
     }
     return vadLoad;
   };

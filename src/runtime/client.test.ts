@@ -55,23 +55,37 @@ beforeAll(async () => {
     // D9: the dedicated context endpoint. Returns the session's messages, whose
     // StepFinishPart tokens are what actually occupy the window right now.
     if (req.method === 'GET' && req.url === '/api/session/ses_mock1/context') {
+      // Context rows as the LIVE serve actually returns them: FLAT, with
+      // `tokens` at the TOP level (not under `parts`), and CUMULATIVE per step.
+      // Shapes and numbers taken from a real 690-row payload.
       json(res, 200, {
         data: [
+          { type: 'user', id: 'm0', time: { created: 1 }, status: 'completed' },
           {
-            info: { id: 'msg_1', role: 'user' },
-            parts: [{ type: 'text', text: 'hi' }],
+            type: 'assistant',
+            id: 'm1',
+            time: { created: 2 },
+            status: 'completed',
+            model: { id: 'muse-spark' },
+            tokens: { input: 200_000, output: 1_000, reasoning: 0, cache: { read: 50_000, write: 0 } },
           },
           {
-            info: { id: 'msg_2', role: 'assistant' },
-            parts: [
-              { type: 'step-finish', tokens: { input: 4000, output: 500, reasoning: 100, cache: { read: 2000, write: 5 } } },
-            ],
+            type: 'assistant',
+            id: 'm2',
+            time: { created: 3 },
+            status: 'completed',
+            model: { id: 'muse-spark' },
+            // Cumulative: this step re-sent the whole conversation.
+            tokens: { input: 400_000, output: 2_000, reasoning: 500, cache: { read: 300_000, write: 0 } },
           },
+          { type: 'compaction', id: 'mc', time: { created: 4 }, summary: 'x', recent: 'y' },
           {
-            info: { id: 'msg_3', role: 'assistant' },
-            parts: [
-              { type: 'step-finish', tokens: { input: 6000, output: 250, reasoning: 0, cache: { read: 1000, write: 0 } } },
-            ],
+            type: 'assistant',
+            id: 'm3',
+            time: { created: 5 },
+            status: 'completed',
+            model: { id: 'muse-spark' },
+            tokens: { input: 248, output: 429, reasoning: 152, cache: { read: 468_468, write: 0 } },
           },
         ],
       });
@@ -431,18 +445,16 @@ describe('context telemetry (D9)', () => {
     expect(row!.tokens).toBeDefined();
   });
 
-  test('contextUsage sums the window, not the session lifetime', async () => {
+  test('window fill is the last step, and the roll-up is exposed separately', async () => {
+    // This test originally asserted a SUM across messages. That was wrong and
+    // was only caught by running against the live serve: per-step `input` is
+    // cumulative, so a sum measures the session, not the window.
     const usage = await client().contextUsage('ses_mock1' as never, 200_000);
-    // (4000+500+100) + (6000+250+0) = 10 850
-    expect(usage.used).toBe(10_850);
-    expect(usage.byMessage.input).toBe(10_000);
-    expect(usage.byMessage.output).toBe(750);
-    expect(usage.byMessage.reasoning).toBe(100);
-    expect(usage.byMessage.cacheRead).toBe(3_000);
-    expect(usage.messageCount).toBe(2);
-    // The user-only message carries no tokens and must not be counted.
-    expect(usage.percent).toBeCloseTo(5.4, 1);
+    expect(usage.used).toBe(469_297);
     expect(usage.limit).toBe(200_000);
+    expect(usage.messageCount).toBe(3);
+    // The user-only and compaction rows carry no tokens and are not counted.
+    expect(usage.byMessage.input).toBe(600_248);
   });
 
   test('resolves the context window from the model catalog when not supplied', async () => {
@@ -450,7 +462,9 @@ describe('context telemetry (D9)', () => {
     // inert. The catalog makes the real limit available.
     const usage = await client().contextUsage('ses_mock1' as never);
     expect(usage.limit).toBe(200_000);
-    expect(usage.percent).toBeCloseTo(5.4, 1);
+    // 469297 / 200000 — over 100 %, which is CORRECT: the mock window is smaller
+    // than the real session's last step. Clamping would hide a genuine overflow.
+    expect(usage.percent).toBeCloseTo(234.6, 1);
   });
 
   test('an invalid explicit limit falls back to the catalog rather than zero', async () => {
@@ -460,7 +474,51 @@ describe('context telemetry (D9)', () => {
     expect(usage.limit).toBe(200_000);
   });
 
-  test('an explicit valid limit still wins over the catalog', async () => {
+  test('window fill is the LAST step, not the sum of all steps', async () => {
+    // Each step re-sends the whole conversation, so summing measures the
+    // session. On the measured real payload a naive sum of 671 assistant rows
+    // produced 1,492,988 tokens = 142% of a 1,048,576 window.
+    const usage = await client().contextUsage('ses_mock1' as never, 1_048_576);
+    // Last row: 248 + 429 + 152 + 468468
+    expect(usage.used).toBe(469_297);
+    expect(usage.percent).toBeCloseTo(44.8, 1);
+    expect(usage.percent).toBeLessThan(100);
+  });
+
+  test('cached reads count toward the window', async () => {
+    // A cache hit still occupies the context — that is the point of caching.
+    const usage = await client().contextUsage('ses_mock1' as never, 1_048_576);
+    expect(usage.used).toBeGreaterThan(usage.byMessage.input === 0 ? 0 : 1);
+    // Without cache the same step would be 829, i.e. 0.08% — absurdly low.
+    const withoutCache = 248 + 429 + 152;
+    expect(usage.used).toBeGreaterThan(withoutCache * 100);
+  });
+
+  test('peak reports the largest single step, not the session', async () => {
+    const usage = await client().contextUsage('ses_mock1' as never, 1_048_576);
+    // Largest row is m2: 400000 + 2000 + 500 + 300000
+    expect(usage.peak).toBe(702_500);
+    // Peak is one step (cache included); the roll-up spans every step and so is
+    // larger in total but measures a different thing entirely.
+    expect(usage.peak).not.toBe(usage.used);
+    expect(usage.peak).toBeGreaterThan(usage.used);
+  });
+
+  test('the lifetime roll-up is exposed separately and is never the window', async () => {
+    const usage = await client().contextUsage('ses_mock1' as never, 1_048_576);
+    // byMessage is a sum: 600248 input across the three steps.
+    expect(usage.byMessage.input).toBe(600_248);
+    expect(usage.used).toBe(469_297);
+  });
+
+  test('reads the live flat shape, not the {info,parts} shape the SDK types implied', async () => {
+    // The old reader looked for parts[].tokens and silently returned 0 here.
+    const usage = await client().contextUsage('ses_mock1' as never, 1_048_576);
+    expect(usage.used).toBeGreaterThan(0);
+    expect(usage.messageCount).toBe(3);
+  });
+
+  test('an explicit limit still wins over the catalog', async () => {
     const usage = await client().contextUsage('ses_mock1' as never, 1000);
     expect(usage.limit).toBe(1000);
   });
@@ -472,7 +530,9 @@ describe('context telemetry (D9)', () => {
     // inert. The catalog makes the real limit available.
     const usage = await client().contextUsage('ses_mock1' as never);
     expect(usage.limit).toBe(200_000);
-    expect(usage.percent).toBeCloseTo(5.4, 1);
+    // 469297 / 200000 — over 100 %, which is CORRECT: the mock window is smaller
+    // than the real session's last step. Clamping would hide a genuine overflow.
+    expect(usage.percent).toBeCloseTo(234.6, 1);
   });
 
   test('a model with no catalog limit still reports null rather than zero', async () => {

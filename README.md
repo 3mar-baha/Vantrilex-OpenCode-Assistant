@@ -9,7 +9,7 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-583%20unit%20%2B%2026%20rust-brightgreen" alt="Tests" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.6.0-blueviolet" alt="Version" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.6.1-blueviolet" alt="Version" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/tauri-v2%20%7C%20rust-stable-orange" alt="Tauri" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22-339933" alt="Node" /></a>
   <a href="docs/RAG-ORCHESTRATOR-INTEGRATION.md"><img src="https://img.shields.io/badge/opencode-v2%20native-7c3aed" alt="OpenCode" /></a>
@@ -254,7 +254,7 @@ Win32 Job Object with `KILL_ON_JOB_CLOSE`: force-killing the app reaps every
 child, zero orphaned processes.
 
 **Self-contained installer.** The NSIS setup
-([v0.6.0 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.6.0))
+([v0.6.1 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.6.1))
 bundles `node.exe` plus the pruned runtime sidecar — end users need no
 Node, npm, or repo checkout. Windows is the only supported target;
 macOS/Linux are deferred until Windows is long-term stable.
@@ -447,8 +447,8 @@ with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.
 VsDevCmd environment for the bundle build). `scripts/provision-sidecar.mjs`
 assembles `node.exe` + compiled `dist/` + pruned runtime deps (~100 MB) as
 Tauri bundle resources, and the NSIS installer ships it all. Current:
-`Voxaura_0.6.0_x64-setup.exe`, 26,162,843 B, sha256
-`87CDF8AFD1B7BDF0128A70C75B198DAE384F6BDEC1B79BF59501230D1D0FA3C3` —
+`Voxaura_0.6.1_x64-setup.exe`, 26,167,860 B, sha256
+`A93917533F33436547B34C3862E02A238E06F265ABAA9369F393E0C0BBBE0A6E` —
 verify with `Get-FileHash -Algorithm SHA256`. All setups are published with
 SHA-256 checksums on the
 [releases page](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases).

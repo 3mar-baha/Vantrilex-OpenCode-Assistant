@@ -1,5 +1,44 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.6.1 — hotfix: the packaged daemon could not start (2026-09-27)
+
+**v0.6.0 is broken; do not install it.** `onnxruntime-node` is a native module the
+sidecar does not bundle, and `daemon.ts` imported `runtime/vad.js` statically, so the
+module graph failed to load with `ERR_MODULE_NOT_FOUND` and the daemon never bound 4097.
+**Every gate passed** — unit 448, Rust 26, E2E 18/18 — because E2E drives a *stub*
+daemon and sidecar pruning is in no test. It was found only by installing the release and
+cold-launching it.
+
+### Fixed
+- `runtime/vad.js` is now imported **dynamically** inside the existing `loadVad()` promise,
+  so a missing native package is catchable rather than fatal. The speech gate falls back
+  to the RMS energy gate — the fail-closed behaviour the design always specified.
+- A new regression test walks the daemon's entire import graph and fails if any module
+  **statically** reachable from `daemon.ts` imports a native package.
+
+### Live-payload corrections (360° layer, verified against a running serve)
+- `/api/session/{id}/context` rows are **flat** — `{type, id, time, status, model,
+  summary, recent, cost, tokens}` — with `tokens` at the top level, not `{info, parts}`.
+  The old reader looked for `parts[].tokens` and silently returned zero.
+- `tokens` **must not be summed** across rows. Each assistant step re-sends the whole
+  conversation, so per-step `input` is cumulative; summing 671 real rows produced
+  1,492,988 tokens = **142 %** of a 1,048,576 window. The true current window is the most
+  recent step, and `cache.read` counts — a cached read still occupies the context. On a
+  real session: `248 + 429 + 152 + 468,468` = 469,297 = **44.8 %**.
+- `/api/session/{id}/message` rows are flat too, so `lastMessageAt` was always null.
+- `getSessionDetails` recomputed `limit` from its own argument and discarded the value
+  `contextUsage` had resolved from the model catalog, so the gauge read "unknown" forever.
+
+Verified live: 29 sessions, 423 models (all carrying `limit.context`), 55 skills, 19
+agents; the gauge resolves 486,925 / 1,048,576 = 46.4 %.
+
+Installer: `Voxaura_0.6.1_x64-setup.exe`, 26,167,860 B,
+sha256 `A93917533F33436547B34C3862E02A238E06F265ABAA9369F393E0C0BBBE0A6E`.
+Verified by installing and cold-launching: 4096 + 4097 bound, `daemon.log` empty.
+
+Gates: tsc 0 · eslint 0 · root vitest 461 · desktop vitest 135 · `cargo test` 26 ·
+E2E 18/18 · `cargo build --release` 0.
+
 ## v0.6.0 — voice honesty, process hygiene, OpenCode 360° control (2026-09-27)
 
 Five remediation phases closed against a code-first forensic audit

@@ -54,7 +54,13 @@ beforeAll(async () => {
       return;
     }
     if (url === '/api/session/ses_a/message' && req.method === 'GET') {
-      json(res, 200, { data: [{ info: { id: 'm2', role: 'assistant', time: { created: 1_700_000_400_000 } } }] });
+      // Live shape: FLAT rows, no `info` wrapper.
+      json(res, 200, {
+        data: [
+          { id: 'm1', type: 'user', time: { created: 1_700_000_100_000 } },
+          { id: 'm2', type: 'assistant', time: { created: 1_700_000_400_000 } },
+        ],
+      });
       return;
     }
     if (url.startsWith('/api/agent') && req.method === 'GET') {
@@ -114,12 +120,24 @@ describe('OpenCodeBridge.getSessionDetails', () => {
     expect(d.lastMessageAt).toBe(1_700_000_400_000);
   });
 
-  test('windowFill comes from the CONTEXT endpoint, not the session row', async () => {
+  test('reads the live flat message shape, not the {info} wrapper', async () => {
+    // The wrapper the SDK types implied does not exist on the real serve; the
+    // old reader returned null and the timestamp was always missing.
     const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
-    // Context: 400000 + 60000 + 20000 = 480_000 window fill.
-    // Row:     120000 + 30000 + 9000  = 159_000 lifetime spend.
-    // Mixing them up is the bug this test exists to prevent.
-    expect(d.tokens.windowFill).toBe(480_000);
+    expect(d.lastMessageAt).toBe(1_700_000_400_000);
+  });
+
+  test('reports peak alongside the current fill', async () => {
+    const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
+    expect(d.tokens.peak).toBeGreaterThan(0);
+    expect(d.tokens.messageCount).toBeGreaterThan(0);
+  });
+
+  test('windowFill is the LAST step including cache, not a sum', async () => {
+    const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
+    // Last step in the mock: 400000 + 60000 + 20000 + cache.read 200000 + write 2000
+    expect(d.tokens.windowFill).toBe(682_000);
+    // Row: 120000 + 30000 + 9000 is lifetime spend and is a DIFFERENT number.
     expect(d.tokens.input).toBe(120_000);
     expect(d.tokens.output).toBe(30_000);
     expect(d.tokens.cache.read).toBe(80_000);
