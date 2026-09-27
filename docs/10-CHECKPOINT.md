@@ -508,4 +508,20 @@ decode, one `GainNode` at 0.9) and were not redone.
 | Compilation | `cargo build --release` **0**, `voxaura.exe` 8,518,656 B, no warnings |
 | Honest limits | (1) `getEnvironmentStatus` reports skills/plugins/MCP as empty because the OpenCode config is not exposed over the serve API — inventing them would be a lie. (2) Arbitrary Arabic→Latin transliteration of agent ids is **not** supported (no dictionary); the alias table covers the model roster, and refusals are tested. (3) The narrator is wired for **command** outcomes; the intake path (`reply_ar`) is situational via the SITUATION block but its live quality needs a real OpenRouter key to hear. (4) No live TTS/STT re-benchmark — quota still exhausted |
 
+## Phase 5 follow-up — making the context gauge actually work
+
+I shipped a gauge that rendered nothing. The frame, schema, command and component
+all existed; **nothing ever requested telemetry**, and no model context window was
+reachable, so the HUD showed nothing in real use.
+
+| Finding | Evidence |
+|---|---|
+| **A correction to Phase 5** | I stated skills/plugins were "not exposed over the serve API". **That was wrong.** The verified endpoint inventory contains `/api/skill`, `/api/model`, `/api/provider`, `/api/health`. `ModelV2Info` carries `limit: {context, output}` and `SkillV2Info` carries `{name, description, slash, location}` |
+| **Where the context window actually lives** | NOT on the session row — `Session.model` is only `{id, providerID, variant}`. The window is `limit.context` in `/api/model`. `contextUsage` now resolves the session's model and looks it up, so the caller no longer has to know the number |
+| **Invalid limits fall back, not to zero** | `limit: 0` from a buggy caller now falls through to the catalog. Zero would render as a permanently empty gauge; falling back to the truth is the honest recovery |
+| **The gauge is now fed** | `App.tsx` requests `sessionContext` on the active-session change and every 15 s, because a window fills while you watch it |
+| **Skills are real** | `getEnvironmentStatus()` returns actual skills from `/api/skill` plus the `slash` subset, so `@skill` mentions resolve against what is installed rather than a hardcoded list |
+| Tests | root **448** (was 441) · desktop 135 · `cargo test` 26 · E2E 18/18 |
+| Two Phase 1 tests updated | They asserted `limit: null` with no argument — i.e. they pinned the *broken* behaviour. Replaced with tests for the catalog lookup, so the inert state cannot come back |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

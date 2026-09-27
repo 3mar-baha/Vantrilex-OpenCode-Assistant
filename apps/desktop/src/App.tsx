@@ -322,6 +322,29 @@ export function App(): JSX.Element {
     send({ id: nextCmdId(), kind: 'mute' }, 'تعذّر تغيير حالة الصوت');
   };
 
+  /**
+   * Phase 5 follow-up — feed the context gauge.
+   *
+   * The frame, the schema, the command and the gauge component all existed, but
+   * nothing ever REQUESTED telemetry, so the gauge rendered nothing at all. It
+   * is requested on the active-session change and on a slow interval, because
+   * a window fills up while you are looking at it.
+   */
+  useEffect(() => {
+    if (bridge !== 'live' || activeSession === null || activeSession === undefined) return;
+    let cancelled = false;
+    const request = (): void => {
+      if (cancelled) return;
+      void bridgeRef.current?.sendCommandDetailed({ id: nextCmdId(), kind: 'sessionContext' });
+    };
+    request();
+    const timer = window.setInterval(request, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [bridge, activeSession]);
+
   // D8: the thread wears the active speaker's gradient. While the assistant
   // speaks it takes the persona's palette; otherwise the thread belongs to the
   // human at the microphone.

@@ -80,8 +80,7 @@ beforeAll(async () => {
     if (req.method === 'POST' && req.url === '/api/session/ses_mock1/compact') {
       res.writeHead(204).end();
       return;
-    }
-    if (req.method === 'POST' && req.url === '/api/session/ses_mock1/interrupt') {
+    }    if (req.method === 'POST' && req.url === '/api/session/ses_mock1/interrupt') {
       res.writeHead(204).end();
       return;
     }
@@ -91,6 +90,38 @@ beforeAll(async () => {
     }
     if (req.method === 'GET' && req.url === '/openapi.json') {
       json(res, 200, { info: { version: '2.9.9-mock' } });
+      return;
+    }
+    // Phase 5 follow-up: the model catalog carries `limit.context`, which is
+    // the ONLY verified source for a session's context window. The session row
+    // itself carries just {id, providerID, variant}.
+    if (req.method === 'GET' && req.url === '/api/session/ses_mock1') {
+      json(res, 200, {
+        data: {
+          id: 'ses_mock1',
+          agent: 'explore',
+          // Phase 5: the session row carries only {id, providerID, variant} —
+          // no context limit. It has to come from the model catalog.
+          model: { id: 'muse-spark', providerID: 'openai', variant: undefined },
+          state: 'running',
+          time: { created: 1, updated: 2 },
+        },
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url.startsWith('/api/model')) {
+      json(res, 200, {
+        data: [
+          { id: 'muse-spark', providerID: 'openai', name: 'Muse Spark', limit: { context: 200_000, output: 8_000 } },
+          { id: 'tiny', providerID: 'openai', name: 'Tiny' },
+        ],
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url.startsWith('/api/skill')) {
+      json(res, 200, {
+        data: [{ name: 'mission-handoff', description: 'handoff envelope', slash: true, location: '.opencode', content: 'x' }],
+      });
       return;
     }
     json(res, 404, { error: 'not found' });
@@ -414,16 +445,56 @@ describe('context telemetry (D9)', () => {
     expect(usage.limit).toBe(200_000);
   });
 
-  test('contextUsage reports percent:null rather than guessing an unknown limit', async () => {
+  test('resolves the context window from the model catalog when not supplied', async () => {
+    // The Phase 1 behaviour was `null` here, which is exactly why the gauge was
+    // inert. The catalog makes the real limit available.
     const usage = await client().contextUsage('ses_mock1' as never);
-    expect(usage.used).toBe(10_850);
-    expect(usage.limit).toBeNull();
-    expect(usage.percent).toBeNull();
+    expect(usage.limit).toBe(200_000);
+    expect(usage.percent).toBeCloseTo(5.4, 1);
   });
 
-  test('a zero or negative limit is treated as unknown', async () => {
+  test('an invalid explicit limit falls back to the catalog rather than zero', async () => {
+    // 0 is a bug in the caller, not an answer. Falling back to the catalog is
+    // the truthful recovery; reporting 0 would render a permanently empty gauge.
     const usage = await client().contextUsage('ses_mock1' as never, 0);
-    expect(usage.percent).toBeNull();
+    expect(usage.limit).toBe(200_000);
+  });
+
+  test('an explicit valid limit still wins over the catalog', async () => {
+    const usage = await client().contextUsage('ses_mock1' as never, 1000);
+    expect(usage.limit).toBe(1000);
+  });
+
+  // The context window is NOT on the session row ({id, providerID, variant}
+  // only) — it lives in the model catalog. Without this the gauge is inert.
+  test('resolves the context window from the model catalog when not supplied', async () => {
+    // The Phase 1 behaviour was `null` here, which is exactly why the gauge was
+    // inert. The catalog makes the real limit available.
+    const usage = await client().contextUsage('ses_mock1' as never);
+    expect(usage.limit).toBe(200_000);
+    expect(usage.percent).toBeCloseTo(5.4, 1);
+  });
+
+  test('a model with no catalog limit still reports null rather than zero', async () => {
+    // "Unknown" is a real answer; zero would render as a permanently empty gauge.
+    const res = await client().request('/api/model', { method: 'GET' });
+    expect(res.ok).toBe(true);
+    const models = await client().listModels();
+    expect(models.find((m) => m.id === 'tiny')?.contextWindow).toBeNull();
+  });
+
+  test('listModels returns ids and context limits, skipping malformed rows', async () => {
+    const models = await client().listModels();
+    const muse = models.find((m) => m.id === 'muse-spark');
+    expect(muse?.contextWindow).toBe(200_000);
+    // A row with no limit is still listed, with null — "unknown", not zero.
+    expect(models.find((m) => m.id === 'tiny')?.contextWindow).toBeNull();
+  });
+
+  test('listSkills returns names and whether they are slash-invocable', async () => {
+    const skills = await client().listSkills();
+    expect(skills.map((s) => s.name)).toContain('mission-handoff');
+    expect(skills[0]?.slash).toBe(true);
   });
 
   test('native session commands hit the real endpoints', async () => {

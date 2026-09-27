@@ -509,7 +509,22 @@ export class ServeClient {
     }
     const byMessage: MessageTokens = { ...acc };
     const used = byMessage.input + byMessage.output + byMessage.reasoning;
-    const known = typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? limit : null;
+    // An explicit limit wins. Otherwise resolve it from the model catalog: the
+    // session row carries only {id, providerID, variant}, so `limit.context` in
+    // the catalog is the ONLY verified source for a session's context window.
+    // Without this the gauge is inert and permanently reads "unknown".
+    let known = typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.round(limit) : null;
+    if (known === null) {
+      try {
+        const modelId = await this.modelForSession(sessionId);
+        if (modelId !== null) {
+          const catalog = await this.listModels();
+          known = catalog.find((m) => m.id === modelId)?.contextWindow ?? null;
+        }
+      } catch {
+        known = null;
+      }
+    }
     return {
       sessionId,
       used,
@@ -518,6 +533,69 @@ export class ServeClient {
       byMessage,
       messageCount: counted,
     };
+  }
+
+  /** The session's current model id, or null. Best effort by design. */
+  private async modelForSession(sessionId: SessionId): Promise<string | null> {
+    const res = await this.request(`/api/session/${sessionId}`, { method: 'GET' });
+    if (!res.ok) return null;
+    const row = unwrapData(await res.json());
+    if (typeof row !== 'object' || row === null) return null;
+    const model = (row as Record<string, unknown>)['model'];
+    if (typeof model === 'string') return model;
+    if (typeof model === 'object' && model !== null) {
+      const id = (model as Record<string, unknown>)['id'];
+      if (typeof id === 'string') return id;
+    }
+    return null;
+  }
+
+  /**
+   * The model catalog — the only verified source of `limit.context`.
+   *
+   * A row without a limit is reported with `contextWindow: null`. "Unknown" is
+   * a real answer here; zero would be a lie that renders as an empty gauge.
+   */
+  async listModels(): Promise<Array<{ id: string; name: string; contextWindow: number | null }>> {
+    const res = await this.request('/api/model', { method: 'GET' });
+    if (!res.ok) return [];
+    const data = unwrapData(await res.json());
+    if (!Array.isArray(data)) return [];
+    const out: Array<{ id: string; name: string; contextWindow: number | null }> = [];
+    for (const row of data) {
+      if (typeof row !== 'object' || row === null) continue;
+      const r = row as Record<string, unknown>;
+      const id = r['id'];
+      if (typeof id !== 'string' || id.length === 0) continue;
+      const limit = r['limit'];
+      const ctx =
+        typeof limit === 'object' && limit !== null ? num((limit as Record<string, unknown>)['context']) : undefined;
+      const name = typeof r['name'] === 'string' ? (r['name'] as string) : id;
+      out.push({ id, name, contextWindow: ctx !== undefined && ctx > 0 ? ctx : null });
+    }
+    return out;
+  }
+
+  /**
+   * Installed skills, with the `slash` flag marking the ones invocable as a
+   * slash command. This is what makes `@skill` mentions real rather than a
+   * hardcoded list.
+   */
+  async listSkills(): Promise<Array<{ name: string; description: string | null; slash: boolean }>> {
+    const res = await this.request('/api/skill', { method: 'GET' });
+    if (!res.ok) return [];
+    const data = unwrapData(await res.json());
+    if (!Array.isArray(data)) return [];
+    const out: Array<{ name: string; description: string | null; slash: boolean }> = [];
+    for (const row of data) {
+      if (typeof row !== 'object' || row === null) continue;
+      const r = row as Record<string, unknown>;
+      const name = r['name'];
+      if (typeof name !== 'string' || name.length === 0) continue;
+      const description = typeof r['description'] === 'string' ? (r['description'] as string) : null;
+      out.push({ name, description, slash: r['slash'] === true });
+    }
+    return out;
   }
 
   /** Native `/compact` — real compaction, not a prompt asking the model to forget. */

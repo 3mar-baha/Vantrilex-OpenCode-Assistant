@@ -56,7 +56,13 @@ export interface CommandInfoView {
 export interface EnvironmentStatus {
   readonly agents: readonly AgentInfoView[];
   readonly commands: readonly CommandInfoView[];
+  /** Installed skills, from `/api/skill`. */
   readonly skills: readonly string[];
+  /** The subset invocable as a slash command. */
+  readonly slashSkills: readonly string[];
+  /** Model catalog, including each model's context window. */
+  readonly models: ReadonlyArray<{ readonly id: string; readonly name: string; readonly contextWindow: number | null }>;
+  /** Plugins are not exposed over the serve API; kept for shape stability. */
   readonly plugins: readonly string[];
   /** Present for shape stability; serve exposes no health endpoint per server. */
   readonly mcpServers: readonly { readonly name: string; readonly status: 'unknown' }[];
@@ -193,18 +199,26 @@ export class OpenCodeBridge {
 
   /** Everything the assistant can see about its own environment, in one call. */
   async getEnvironmentStatus(): Promise<EnvironmentStatus> {
-    const [agents, commands] = await Promise.all([
+    // Skills and models ARE exposed over the serve API (`/api/skill`,
+    // `/api/model`) — an earlier revision reported them empty on the belief
+    // that the config was not reachable. That belief was wrong and would have
+    // made `@skill` mentions and the context limit permanently unavailable.
+    const [agents, commands, skills, models] = await Promise.all([
       this.listAgents().catch(() => [] as AgentInfoView[]),
       this.listCommands().catch(() => [] as CommandInfoView[]),
+      this.client.listSkills().catch(() => [] as Array<{ name: string; description: string | null; slash: boolean }>),
+      this.client.listModels().catch(() => [] as Array<{ id: string; name: string; contextWindow: number | null }>),
     ]);
     return {
       agents,
       commands,
-      // Skills and plugins live in the OpenCode config, not in the serve API.
-      // Reported as empty rather than invented, so a consumer can tell the
-      // difference between "none" and "we did not look".
-      skills: [],
+      skills: skills.map((s) => s.name),
+      slashSkills: skills.filter((s) => s.slash).map((s) => s.name),
+      models,
       plugins: [],
+      // No MCP health endpoint exists on serve, so this stays empty rather than
+      // inventing a status. "We did not look" must be distinguishable from
+      // "there are none".
       mcpServers: [],
     };
   }

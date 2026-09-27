@@ -61,6 +61,16 @@ beforeAll(async () => {
       json(res, 200, { data: [{ id: 'explore', name: 'Explore' }, { id: 'build', name: 'Build' }] });
       return;
     }
+    if (url.startsWith('/api/model') && req.method === 'GET') {
+      json(res, 200, {
+        data: [{ id: 'muse-spark', providerID: 'openai', name: 'Muse Spark', limit: { context: 200_000, output: 8_000 } }],
+      });
+      return;
+    }
+    if (url.startsWith('/api/skill') && req.method === 'GET') {
+      json(res, 200, { data: [{ name: 'mission-handoff', description: 'd', slash: true, location: '.opencode', content: 'x' }] });
+      return;
+    }
     if (url === '/api/command' && req.method === 'GET') {
       json(res, 200, { data: [{ name: 'compact' }, { name: 'undo' }] });
       return;
@@ -183,6 +193,20 @@ describe('OpenCodeBridge.getEnvironmentStatus', () => {
     expect(Array.isArray(env.skills)).toBe(true);
     expect(Array.isArray(env.plugins)).toBe(true);
     expect(Array.isArray(env.mcpServers)).toBe(true);
+  });
+
+  test('reports REAL skills from /api/skill, not an empty list', async () => {
+    // An earlier revision returned [] claiming the config was unreachable.
+    // That was wrong, and it made @skill mentions permanently unavailable.
+    const env = await bridge().getEnvironmentStatus();
+    expect(env.skills).toContain('mission-handoff');
+    expect(env.slashSkills).toContain('mission-handoff');
+  });
+
+  test('reports the model catalog with its context windows', async () => {
+    const env = await bridge().getEnvironmentStatus();
+    expect(env.models.map((m) => m.id)).toContain('muse-spark');
+    expect(env.models.find((m) => m.id === 'muse-spark')?.contextWindow).toBe(200_000);
   });
 
   test('never leaks a credential into the environment report', async () => {
