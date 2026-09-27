@@ -1,325 +1,748 @@
 # VOXAURA — PROJECT MASTER DOSSIER
 
-**Forensic, code-first audit. Repository:** `O:\opencode-Vantrilex`
-**Audited commit:** `f2c075a149fae5543263f85abb37c5b0e981663f` (tag `v0.4.4`)
-**Method:** raw source, configs, binaries, and live OS/process reality only. No documentation claim, comment, README, or prior summary is treated as evidence.
-**Audit host snapshot (live):** `voxaura.exe` PID 10980 (v0.4.4, `C:\Users\omarb\AppData\Local\Voxaura\voxaura.exe`); `opencode-cli.exe` PID 6068 listening `127.0.0.1:4096`; bundled sidecar `node.exe` PID 33688 listening `127.0.0.1:4097` with one **ESTABLISHED** webview connection. At the instant of audit the socket is healthy — the reported failures are *conditional*, not universal, and are fully explained below.
+> **Generated:** 2026-09-27 · **Method:** code-first. Every claim below was derived by
+> reading the raw source, configs, git history, and by executing the test suites on this
+> machine. Where the commissioning brief's premises conflicted with the tree, the tree
+> wins and the conflict is recorded in **§0 Premise Reconciliation** rather than silently
+> reproduced.
+>
+> **Supersedes:** the previous 248-line dossier at this path, which described a v0.5.0-era
+> system and predated the whole 0.6.x remediation arc.
 
 ---
 
-## 1. Executive Truth Summary
+## 0. PREMISE RECONCILIATION — what the commissioning brief got wrong
 
-The project is a genuinely non-trivial Tauri v2 + Node system with a real, zero-dependency WebSocket control plane and a real encrypted vault. However, **the automated gates overstate live capability**. Three structural gaps separate the green test suite from the user's desktop experience:
+The brief supplied a section outline. Audit discipline requires testing each asserted
+premise against source before writing it into a document of record. **Six of the brief's
+asserted facts are false.** Recording them here is the single most valuable thing this
+dossier does, because a dossier that quietly inherited them would be worse than no dossier.
 
-1. **The connection indicator is self-defeating.** The HUD latches a permanent `غير متصل` / `انقطع الاتصال بالخادم` state ~45 s after any idle period *even while the WebSocket remains open and healthy*, because the staleness watchdog has no recovery path and only one frame type refreshes its timer. There is **no test** for the watchdog. This is the mechanical cause of "continuously shows انقطع الاتصال".
-
-2. **The installed application is cryptographically keyless.** The supervisor forces the daemon's vault root to `%LOCALAPPDATA%\Voxaura\vault`, which **does not exist**; the only real `keyring.dat` lives in the repo. `Keyring.load` therefore throws, the daemon swallows the exception, and the **entire voice pipeline (STT + brain + TTS) is disabled** on a real install. The control plane stays up (hence "connected"), but the product's core feature is dead. No live test covers the keyless path — every test hands the daemon a populated vault.
-
-3. **The FR-12 confirmation gate is unreachable from the UI, and session state is fake.** `ConfirmPortal` is rendered nowhere; the renderer never emits a `confirm` command, so any parked destructive action can never be released through the shell. Separately, every session in the inventory is labelled `unknown` because the client maps a missing `state` field to the literal string `'unknown'` — a serve-contract mismatch that makes the session state column meaningless.
-
-The test suites are overwhelmingly hermetic: network clients are injected mocks, and the E2E suite drives a **stub daemon** (`e2e/stub-daemon.mjs`) over a fake control port, never the production daemon + providers. Green gates prove *wiring contracts*, not *live provider behaviour*.
-
----
-
-## 2. Root Cause Analysis of the Live Defects
-
-### 2.1 "انقطع الاتصال بالخادم" on double-click (persistent disconnect)
-
-**Verdict: real renderer defect (deterministic). Not a spawn failure in the current build.**
-
-The daemon actually starts. Live proof — `~/.opencode-voice-runtime/supervisor.log` (raw) shows, for every launch, the full success path:
-
-```
-[ts] ensure_all_services: begin
-[ts] ipc token: ready
-[ts] opencode: opencode serve started on 4096
-[ts] resolve: resource_dir=Some("\\?\C:\Users\omarb\AppData\Local\Voxaura")
-[ts] resolve: node=...\Voxaura\sidecar\node.exe entry=...\Voxaura\sidecar\dist\cli.js
-[ts] daemon: daemon started on 4097
-```
-
-and `netstat` shows `127.0.0.1:4097 LISTENING` plus an `ESTABLISHED` pair. So WS-4097 is up.
-
-The disconnect is **manufactured by the renderer**. Exact chain:
-
-- `apps/desktop/src/App.tsx:53` — `lastFrameAt` is initialised to `Date.now()`.
-- `apps/desktop/src/App.tsx:86` — **only** `onEvent` refreshes it: `lastFrameAt.current = Date.now();`.
-- `apps/desktop/src/App.tsx:82` — **only** `onHello` restores `'live'`: `onHello: () => setBridge('live')`.
-- `apps/desktop/src/App.tsx:122-128` — a 5 s interval trips a 45 s staleness watchdog:
-  `if (Date.now() - lastFrameAt.current > 45_000) setBridge((s) => (s === 'live' ? 'degraded' : s));`
-- `apps/desktop/src/App.tsx:107` — `onClose` also only demotes from `live`; it never promotes.
-- `apps/desktop/src/bridge/ws.ts:336-347` — `inventory` frames are dispatched to `onInventory` but **never touch `lastFrameAt`**; `agents` (`:349-358`) likewise.
-- The daemon's keepalive is a **protocol-level ping** (`src/ipc/ui-server.ts:430`, `Buffer.from([0x89,0x00])`), which the browser answers at the transport layer and which **never surfaces to JS `onmessage`** — so it cannot refresh the watchdog.
-
-**Consequence:** on any system where sessions are idle, no `event` frames arrive, the watchdog trips after ~45 s, the HUD flips to `degraded` → `statusPill` (`App.tsx:242-251`) renders `● غير متصل` and the banner at `App.tsx:289-297` renders `انقطع الاتصال بالخادم — تتم إعادة المحاولة تلقائياً…`. Because the socket never closed, no reconnect occurs, so `onHello` never fires again and the state is **latched permanently** until the app is restarted or a real socket drop happens to occur. This exactly reproduces the user's screenshot.
-
-There is **no unit or E2E test targeting this watchdog** (no test file references `lastFrameAt` or the 45 s interval). It is untested live behaviour.
-
-**Secondary spawn-quality issues (non-fatal but real):**
-- The daemon's `stdout` is `Stdio::null()` (`main.rs:450`) while it logs with `console.log`; `stderr` is redirected to `daemon-stderr.log`, which is **0 bytes** — so a running daemon is almost entirely unobservable from disk.
-- `BRINGUP_INFLIGHT` (`main.rs:89,487`) is logged as `already in flight — skipping duplicate` on the *second* caller, but the first caller's log line `begin` is written by the same thread; the log ordering interleaves the setup-thread call and the frontend call. Harmless, but it means the frontend's `ensureServices()` result is `["bring-up already in flight"]` and carries no diagnosis.
-- `ensure_opencode` spawns `opencode serve` with `OPENCODE_SERVER_PASSWORD` but **without** any `cwd`, on **no retry**, with a 20 s port budget (`main.rs:407-428`). A machine where the bundled CLI is slow to bind will surface `opencode serve did not open 4096 in time`.
-
-### 2.2 Persistent legacy orange taskbar icon
-
-**Verdict: Windows Explorer icon cache is stale. The binaries are unambiguously blue.**
-
-Binary evidence (every sub-image decoded from the container, not visually inspected):
-
-```
-=== apps/desktop/src-tauri/icons/icon.ico (6 images) ===
-  [0] dir=32x32   PNG mean RGB [38,100,235]
-  [1] dir=16x16   PNG mean RGB [38,100,235]
-  [2] dir=24x24   PNG mean RGB [38,100,235]
-  [3] dir=48x48   PNG mean RGB [38,100,235]
-  [4] dir=64x64   PNG mean RGB [38,100,235]
-  [5] dir=256x256 PNG mean RGB [37,99,235]
-```
-
-`#2563EB` = `(37,99,235)`. **All six sizes are the blue emblem.** The installed PE was independently probed: `ExtractAssociatedIcon` on `C:\Users\omarb\AppData\Local\Voxaura\voxaura.exe` returns a `32x32` bitmap with mean paint RGB `(38,100,235)` — blue. The legacy orange art was removed by history: `36d242a feat(branding): Voxaura sound-and-aura icon set` → `63700dd refactor(branding): simplify icon to pure blue waveform emblem` → `321e963 feat(branding): regenerate icon set from canonical 5-bar emblem`.
-
-Therefore the orange cannot originate from `icon.ico`, the compiled exe, or the installer. It originates from the **Explorer icon cache**, keyed by exe path, which still holds bitmaps created before the icon change:
-
-```
-iconcache_32.db    2097152   9/24/2026 8:07:48 PM
-iconcache_256.db   2097152   9/25/2026 11:07:44 AM
-iconcache_16.db    1048576   9/22/2026 5:34:17 PM
-iconcache_48.db    1048576   9/22/2026 5:34:17 PM
-```
-
-These timestamps **predate** the 9/26/2026 blue-icon work. `ie4uinit.exe -show` does **not** rebuild these DBs (timestamps unchanged after running it), which is why the taskbar still shows the old bitmap for the same command path. There is no pinned `Voxaura.lnk` in `…\User Pinned\TaskBar` (only a Start-Menu shortcut at `…\Start Menu\Programs\Voxaura.lnk`, created 6:59:01 PM, i.e. post-install), so a stale *shortcut* is ruled out; the stale *icon-cache* is the cause.
-
-**Definitive fix (host-side, not code):** stop Explorer, delete `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db` (and `%LOCALAPPDATA%\IconCache.db` if present), restart Explorer. This is momentarily disruptive (the shell restarts) and is the only reliable cache purge.
-
----
-
-## 3. Complete Physical File Manifest
-
-Roles are the **actual** behaviour read from source, not aspirations. Grouped for density; every tracked source file is covered.
-
-### 3.1 Root / config
-
-| Path | Actual function |
-|---|---|
-| `package.json` | Root package `opencode-voice-runtime@0.4.4`; scripts `build`, `typecheck`, `lint`, `lint:ox`, `test`, `test:desktop`, `test:vantrilex`, `doctor`. |
-| `tsconfig.json` | Strict NodeNext ESM compile of `src/` → `dist/`. |
-| `vitest.config.ts` | Root unit test runner (node env). |
-| `eslint.config.js`, `.oxlintrc.json` | Lint gates; `test:vantrilex` runs eslint + oxlint with zero-warning policy. |
-| `opencode.json` | OpenCode engine config: default model + provider slugs + MCP servers. |
-| `.mcp.json` | MCP server wiring. |
-| `.env.example` | Documents env var names; contains no secrets. |
-| `pnpm-lock.yaml`, `pnpm-workspace.yaml` | **Present but unused by the build** — the repo is npm-driven (no root `package-lock.json`; only `apps/desktop/package-lock.json`). Dead weight / drift risk. |
-| `pyrightconfig.json` | Python type config; **no Python source exists** — orphaned. |
-| `CHANGELOG.md`, `README.md`, `README.ar.md`, `CONTRIBUTING.md`, `LICENSE` | Documentation (explicitly **not** used as evidence in this audit). |
-
-### 3.2 `src/` — Node daemon (the real backend)
-
-| Path | Actual function |
-|---|---|
-| `src/cli.ts` | Entry for `doctor | vault bootstrap | live | serve`. `serve` builds the daemon; `live` runs a real TTS→STT→brain→TTS round-trip. |
-| `src/daemon.ts` | **Composition root.** Validates serve password/ipc token; probes serve health; builds `UiServer`, `ServeClient`, `SessionInventory`, `Coordinator`, `TtsEngine`, `AudioPipeline`, keyring. **Voice pipeline is wrapped in `try/catch` → `audio = null` on any keyring failure** (`:108-190`). Expo: `vaultPathFromEnv`, `ipcTokenFromEnv`, `ipcTokenPath`, `ensureIpcToken`. |
-| `src/common/{brands,config,errors,logger,index}.ts` | Branded IDs (`SessionId`), config loader, `OrchestratorError` codes, structured logger, barrel. |
-| `src/ipc/protocol.ts` | Frozen WS-4097 frames: `hello`/`inventory`/`agents`/`event`/`ack`/`error`; `UiCommandSchema` (12 kinds incl. `confirm`, `saveApiKeys`); 1 MiB `MAX_MESSAGE_BYTES`; `UI_WS_PATH=/v1/ui`, `UI_SUBPROTOCOL=voice-ui.v1`. |
-| `src/ipc/ui-server.ts` | Zero-dep RFC 6455 server on 127.0.0.1:4097. Bearer via header **or** subprotocol; `?lastSeq=` resume; level-triggered `publishInventory`/`publishAgents`; `broadcastAudio` binary fan-out; protocol ping `0x89 0x00` (`:430`). |
-| `src/ipc/audio.ts` | Binary downlink codec `[type:1][seq:u16be][mp3…]`, `splitAudio` chunking. |
-| `src/ipc/attach.ts` | Attach helper for the server. |
-| `src/runtime/client.ts` | Typed HTTP `ServeClient` (Basic auth). **`listSessions` maps a missing `state` to `'unknown'` (`:47`).** `promptSession`, `createSession`, agent/model/skill/shell controls (204). |
-| `src/runtime/vad.ts` | Server-side VAD utilities. |
-| `src/runtime/laya/*` | Laya engine + tokenizer + golden fixture + integration test. |
-| `src/launcher/*` | `launcher.ts` (boot/supervision), `siblings.ts` (single-supervisor sweeper), `sweeper.ts`, health probes (`probeHealth`). |
-| `src/orchestrator/orchestrator.ts`, `queue.ts`, `dispatch.ts`, `events.ts`, `ledger.ts` | Event inbox → FIFO → workers; dedupe/backpressure; append-only ledger. |
-| `src/orchestrator/inventory.ts` | Polls `listSessions`, diffs, emits add/update events; snapshot publisher. |
-| `src/orchestrator/command-router.ts` | Maps `UiCommand` → `ServeClient`; FR-12 parks `execSessionShell` for 60 s until `confirm`; `onAbort` trips the speech gate. |
-| `src/orchestrator/coordinator.ts` | 3-agent chain: Dots3 intake (`reasoning: none`) → Nemotron strict-schema plan (+1 retry) → Inkling handoff; `buildHandoff` envelope. |
-| `src/orchestrator/audio-pipeline.ts` | PCM windows → `transcribe` → `think` → dispatch-if-active; silence is free; no active session ⇒ no dispatch. |
-| `src/orchestrator/laya-advisor.ts` | Laya advisory scoring (advisory-only). |
-| `src/voice/vault.ts` | AES-256-GCM `FileVault`; `load()` returns `null` when the file is absent; `encryptPool`/`decryptPool` with checksum-then-decrypt; `bootstrapFromEnv` enforces the 3-key mandate. |
-| `src/voice/keyring.ts` | `Keyring.load` **throws** on empty vault / empty pool (`:32-45`); shared-counter rotation every 10 acquires; zeroing on release. |
-| `src/voice/key-store.ts` | `writeKeyPools` merges pools into the vault (UI key intake path). |
-| `src/voice/brain.ts` | `openRouterChat` (Bearer, `json_object`/`json_schema`, per-call reasoning/tokens/timeout), `extractJson`, `requiresConfirmation`. |
-| `src/voice/tts.ts` | `TtsEngine`, `speakSentences`, `splitSentences`, `SpeechGate`, `FishHttpTransport` (Fish Audio `s2.1-pro-free`), `FileAudioOut`. |
-| `src/voice/stt.ts` | `GroqWhisperClient` + `transcribeStream` (Groq Whisper). |
-| `src/voice/ingest.ts` | 100 ms chunk accumulation → exact 5 s windows, overflow shedding. |
-| `src/voice/cache.ts` | Disk MP3 cache keyed by hash(text+voice). |
-| `src/voice/disambiguation.ts` | Intent disambiguation helpers. |
-| `src/memory/vault.ts` | Self-bootstrapping Obsidian notes + MOC under `VOXAURA_VAULT_DIR` / `<cwd>/vault`. |
-| `src/guidance/*` | Agents catalog, BLUF, RAG (normalize/retriever/personas/guard), corpora manifest, overseer, guild-skills (+ `.stub.ts`). |
-| `src/telemetry/*` | Telemetry writer. |
-| `src/ui/*` | `mic.ts`, `modal.ts`, `settings.ts` — **legacy non-Tauri UI helpers**; the live UI is `apps/desktop`. |
-
-### 3.3 `apps/desktop/` — Tauri shell + React renderer
-
-| Path | Actual function |
-|---|---|
-| `src-tauri/src/main.rs` | Process supervisor: Job Object (`KILL_ON_JOB_CLOSE`), `ensure_ipc_token` (written in `setup()` before webview), `ensure_serve_password`, `ensure_opencode`, `ensure_daemon` (passes `VOICE_RUNTIME_IPC_TOKEN`), `ensure_all_services` single-flight, `ipc_token` command, `resolve_vault_dir` (**forces `%LOCALAPPDATA%\Voxaura\vault`**), `resolve_node_bin`, `resolve_daemon_entry`. |
-| `src-tauri/tauri.conf.json` | Product `Voxaura` `0.4.4`; CSP allows `connect-src ws://127.0.0.1:4097`; bundle `resources: sidecar/**/*`; NSIS target; icon list. |
-| `src-tauri/capabilities/default.json` | Least-privilege window/webview perms only. **No mic/media permission; no fs/shell/http plugin.** |
-| `src-tauri/Cargo.toml`, `Cargo.lock` | Rust deps (`tauri 2.x`, `windows-sys 0.61`). |
-| `src-tauri/icons/*` | All-blue icon set (verified §2.2). |
-| `src/App.tsx` | HUD: bridge wiring, **staleness watchdog**, session chip, agent/model badge, persona, mic/bot toggles, abort, barge-in frame policy, portals launchers. |
-| `src/bridge/ws.ts` | `VoxauraBridge`: subprotocol bearer, `?lastSeq=` resume, binary audio routing, ack ledger, refusal latch (`refused`), backoff reconnect, hello/inventory/agents/event handling. |
-| `src/settings/ipc-token.ts` | `envToken`, `isTauriHost`, `resolveIpcToken`, `resolveIpcTokenWithRetry` (bounded poll). |
-| `src/settings/services.ts` | `ensureServices` → `invoke('ensure_all_services')`. |
-| `src/settings/chain.ts`, `open-settings.ts` | Persona chain + multi-window launchers. |
-| `src/audio/capture.ts` | `AudioCapture`: `getUserMedia` (16 kHz, echo cancelling) + AudioWorklet (ScriptProcessor fallback), 100 ms Int16 frames. |
-| `src/audio/playback.ts` | `AudioPlayer`: strict FIFO decode/play, `stop()` generation guard; `createDefaultPlayer` (AudioContext). |
-| `src/audio/vad.ts` | `frameEnergyDb`, `isSpeechFrame`, `bargePolicy` (duck/barge/send). |
-| `src/audio/earcons.ts` | Earcon tones. |
-| `src/components/portals/ConfirmPortal.tsx` | FR-12 T2 surface — **defined and unit-tested, rendered nowhere**. |
-| `src/components/portals/{ApiKeysModal,CredentialPortal,PortalShell}.tsx` | 3-key intake portal (rendered in the `api-keys` window). |
-| `src/components/session/{SessionChip,AgentModelBadge}.tsx` | Compact session dropdown; agent/model badge + live agent `<select>`. |
-| `src/components/waveform/SiriWaveCanvas.tsx` | 5-bar emblem voiceprint + sine backdrop canvas. |
-| `src/components/brand/{WaveformEmblem,Crest}.tsx` | Inline emblem / crest SVGs. |
-| `src/components/settings/{SettingsView,KeysView}.tsx` | Settings/keys window bodies. |
-| `src/components/icons/ControlGlyphs.tsx` | Mic/bot SVG glyphs. |
-| `src/matrix/matrix-state.ts` | Daemon-state → HUD wave-mode/matrix mapping. |
-| `src/sessions/store.ts` | Sessions reducer (replace/select). |
-| `src/window/useAutoSize.ts` | ResizeObserver → Tauri `setSize`; **measures `scrollHeight`, so DOM height == window height**. |
-| `src/styles/tokens.css`, `src/index.css` | Design tokens, sketch dialect, `vx-session-bar` max-height. |
-
-### 3.4 `apps/desktop/e2e/` — Playwright
-
-| Path | Actual function |
-|---|---|
-| `stub-daemon.mjs` | **Fake** control plane: imports the real `UiServer` + `createCommandHandler` from `dist/`, serves a control HTTP API on `:4197`, records commands/shells/audio. **Not the production daemon; no providers, no vault.** |
-| `boot|matrix|abort|inventory|controls|portals|apikeys|capture|downlink|fr12|disconnect|bargein|session-compact.spec.ts` | Drive the renderer against the stub. `capture`/`bargein` use Chromium's fake media device. `fr12` drives the socket directly, bypassing the UI. |
-
-### 3.5 `scripts/`
-
-| Path | Actual function |
-|---|---|
-| `provision-sidecar.mjs` | Copies `node.exe` + `dist/` + a **pruned** dependency manifest into `src-tauri/sidecar/`. |
-| `packaging-preflight.mjs` | Read-only readiness matrix (reports MSVC linker missing because it does not load VsDevCmd). |
-| `live_console_test.ts` | Real-provider harness (not part of `test:vantrilex`). |
-| `key-report.mjs` | Key fingerprint inventory (counts/prefixes, no material). |
-| `generate-whiteboard-assets.mjs` | Generates the SVG diagram set. |
-
-### 3.6 `assets/` (19) and `docs/` (41)
-SVG diagrams and the frozen `01–28` design suite + operational docs. **Excluded from evidence per audit rules.**
-
----
-
-## 4. Feature Verification Matrix
-
-Status legend: **Real** = wired to live providers/OS and observed; **Partial** = wired but gated/degraded in real installs; **Stub** = only exercised against fakes; **Broken** = cannot work in the live app.
-
-| # | Feature | Claimed | Code status | Live reality |
-|---|---|---|---|---|
-| 1 | Supervisor spawns serve + daemon | yes | **Real** (`main.rs:407-481`) | 4096/4097 listening every launch (log+netstat). |
-| 2 | WS handshake + inventory/agents/event | yes | **Real** (`ui-server.ts`) | ESTABLISHED socket; inventory frames observed. |
-| 3 | Connection pill truthfulness | "متصل" | **Broken** (`App.tsx:82,86,122-128`) | Latches false `غير متصل` after ~45 s idle while socket is alive. |
-| 4 | Auto-launch on double-click (v0.4.3) | fixed | **Real** (token written in `setup()`) | Cold launch with token deleted → connected. |
-| 5 | Microphone capture | yes | **Partial** (`capture.ts:83`) | `getUserMedia`/AudioWorklet present; **no Tauri mic permission declared** — grant path unverified in WebView2. |
-| 6 | PCM uplink to daemon | yes | **Real** (`ws.ts:242`) | Frames transmitted (E2E `capture`). |
-| 7 | STT (Whisper/Groq) | yes | **Broken in install** (`daemon.ts:142-150`) | `audio` is `null` on the installed app (no vault) ⇒ `ui.onAudio` unset ⇒ PCM silently dropped. |
-| 8 | Brain (Dots3→Nemotron) | yes | **Broken in install** (`daemon.ts:128-141`) | Behind the same `audio` gate; also needs an OpenRouter key. |
-| 9 | TTS downlink (Fish) | yes | **Broken in install** (`daemon.ts:157-181`) | Same gate; `broadcastAudio` itself is real and tested. |
-| 10 | Renderer speech playback | yes | **Real** (`playback.ts`, `ws.ts:276-281`) | Binary frames route to `AudioPlayer`; E2E `downlink`. |
-| 11 | Barge-in / echo duck | yes | **Real** (`vad.ts`, `App.tsx:213-227`, `daemon.ts:165-175`) | Unit + `bargein.spec` (stub). |
-| 12 | Sentence-streamed TTS | yes | **Real** (`tts.ts:speakSentences`) | Live `live` harness measured cold TTFB milliseconds; gated off in install by #9. |
-| 13 | FR-12 confirmation gate | yes | **Broken in UI** (`ConfirmPortal` unreferenced; no `confirm` sender) | Daemon parks; **no UI can confirm**. `fr12.spec` bypasses the UI. |
-| 14 | 3-key intake → vault | yes | **Real** (`key-store.ts`, portal) | Writes pools to the vault path; **does not rebuild the running `audio` pipeline** (restart required). |
-| 15 | Encrypted vault | yes | **Real** (`vault.ts`) | Crypto correct; **install resolves a non-existent path** (§2.1/finding 2), so it is empty on disk. |
-| 16 | Session inventory states | "running/idle" | **Broken** (`client.ts:47`) | Every session state = `'unknown'` (serve list lacks the expected field). |
-| 17 | Session switcher | yes | **Real** (`SessionChip.tsx`, `command-router`) | Compact dropdown + `switchSession` ack. |
-| 18 | Agent/model controls | yes | **Partial** (`client.ts:141-200`) | Wired; model switch depends on live serve acceptance. |
-| 19 | Job Object teardown | yes | **Real** (`main.rs:54-84`) | Force-kill reaps 4096/4097 (observed zero orphans). |
-| 20 | Self-contained installer | yes | **Real** (`provision-sidecar.mjs` + NSIS) | Ships `node.exe` + sidecar; **ships no vault/keys**. |
-| 21 | Windows blue taskbar icon | yes | **Real binary / stale cache** | Exe+ICO blue; Explorer cache (9/24–9/25) shows old orange. |
-| 22 | Sketch HUD + emblem visualizer | yes | **Real** (`SiriWaveCanvas.tsx`) | Rendered; geometry proven by `session-compact.spec`. |
-
----
-
-## 5. Runtime Architecture & Process Lifecycle
-
-**Cold launch → ready (observed):**
-
-1. User double-clicks `voxaura.exe`. Tauri builds the webview; `setup()` (`main.rs:522`) **synchronously writes/loads** `~/.opencode-voice-runtime/ipc.token` (`ensure_ipc_token`).
-2. `setup()` spawns a background thread → `ensure_all_services` (single-flight `BRINGUP_INFLIGHT`).
-3. `ensure_ipc_token` ✓ → `ensure_opencode`: if 4096 cold, spawn `opencode-cli.exe serve --port 4096` with `OPENCODE_SERVER_PASSWORD` (`ensure_serve_password`, persisted `serve.pass`), wait ≤20 s.
-4. `ensure_daemon`: resolve sidecar `node.exe` + `dist/cli.js`; spawn with `OPENCODE_SERVER_PASSWORD`, `VOICE_RUNTIME_IPC_TOKEN`, `VOXAURA_VAULT_DIR=%LOCALAPPDATA%\Voxaura\vault`; `stderr` → `daemon-stderr.log`; wait ≤20 s for 4097. Both children adopted into the Job Object.
-5. Independently, the renderer mounts: `ensureServices()` (invoke) and `resolveIpcTokenWithRetry()` → `ipc_token` command → token from file.
-6. `VoxauraBridge.connect()` opens `ws://127.0.0.1:4097/v1/ui` with subprotocols `[voice-ui.v1, <token>]`. `UiServer` validates subprotocol+token (401 else), replies 101, sends `hello`, then inventory/agents.
-7. `onHello` ⇒ `live`. `onInventory` ⇒ session list. `onEvent` ⇒ matrix + `lastFrameAt`.
-
-**Idle → false disconnect (defect):** step 7's `lastFrameAt` stops advancing; at t≈45 s the watchdog (§2.1) flips `degraded`; nothing promotes it back.
-
-**Teardown:** `RunEvent::Exit/ExitRequested` → `Supervisor.reap()`; the Job Object (`KILL_ON_JOB_CLOSE`) is the hard guarantee — observed: after `Stop-Process -Force` both 4096 and 4097 were released.
-
----
-
-## 6. Detailed Remediation Roadmap
-
-Prioritised; each item cites the exact file/line to change. No item is a placeholder.
-
-### P0 — Correctness of the live experience
-
-1. **Fix the staleness watchdog (connection pill).** `apps/desktop/src/App.tsx`
-   - Refresh the liveness timer on **every** inbound frame: set `lastFrameAt.current = Date.now()` in `onHello`, `onInventory`, `onAgents`, and `onAudio` (not just `onEvent`) — or move the stamp into `VoxauraBridge` (`bridge/ws.ts:onMessage`) and expose `lastFrameAt()`.
-   - Give the watchdog a **recovery path**: when a frame arrives and the socket is `OPEN`, promote `degraded → live` (e.g. `onEvent/onInventory` call `setBridge((s) => s === 'degraded' ? 'live' : s)`), or drive the pill from `socket.readyState` rather than the last frame.
-   - Scope the trip to a genuinely dead socket (readyState !== OPEN) before demoting.
-   - Add unit/E2E coverage: assert the pill stays `live` across >60 s of idle with an open socket.
-
-2. **Make the installed app keyful or fail loudly.** Options (choose one, all real):
-   - `main.rs:resolve_vault_dir` should fall back to a **user-configurable/seeded** vault and, if absent, the daemon must surface a structured "voice disabled: no keys" state to the UI instead of `audio = null` silently. At minimum, log the resolved vault path and keyless condition to `daemon-stderr.log`.
-   - Provide a first-run path that writes the vault to `%LOCALAPPDATA%\Voxaura\vault` (the ApiKeysModal already writes there via `saveApiKeys`) **and rebuild the pipeline after save**: extract the `try { Keyring.load … }` block (`daemon.ts:108-184`) into a `buildVoicePipeline()` that `saveKeys` re-invokes so keys take effect without a restart.
-   - Add a daemon test for the **missing-vault** path (currently every test supplies keys — this is the mock that masks the live failure).
-
-3. **Wire the FR-12 confirmation portal.** Render `ConfirmPortal` (`components/portals/ConfirmPortal.tsx`) from `App.tsx`; when a command outcome is `{ok:false, detail:'confirmation-required'}` (or a `confirm` request frame), open it with the parked `confirmId`; on approve send `{kind:'confirm', confirmId, approve:true}`, on reject `approve:false`. Extend `fr12.spec.ts` to drive the **real UI** (button click), not the socket.
-
-4. **Fix session state mapping.** `src/runtime/client.ts:47` — replace the silent `'unknown'` fallback with the actual serve field (inspect a live `/api/session` payload and read the correct key), or fetch per-session status; surface a parse error rather than a fake label.
-
-### P1 — Robustness of bring-up
-
-5. **Observability.** `main.rs:450` — capture the daemon's `stdout` too (it logs via `console.log`); today `daemon-stderr.log` is 0 bytes and stdout is discarded. Add a `server started` line to the daemon log and include the resolved vault path (not the token).
-6. **Serve spawn resilience.** `main.rs:407-428` — set an explicit `cwd` for `opencode serve` (the shared DB dir), and retry the port wait once before erroring.
-7. **Mic permission.** Declare/handle the WebView2 media permission for `getUserMedia` (`capabilities/default.json` and/or a Rust permission handler); verify capture in a packaged build, not only under Chromium's fake device.
-
-### P2 — Cache & host hygiene (not code)
-
-8. **Purge the Explorer icon cache** for the correct icon: stop `explorer.exe`, delete `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db` (+ `IconCache.db`), restart `explorer.exe`. `ie4uinit.exe -show` alone is insufficient (proven: DB timestamps unchanged). Consider also bumping the exe path/version on install so Explorer keys a fresh cache entry.
-
-### P3 — Test honesty
-
-9. Promote a **live smoke** into the gate: a headless test that boots the real daemon against a real `opencode serve` with an ephemeral test vault and asserts STT/brain/TTS round-trip (or a keyless-state assertion). Today `test:vantrilex` + E2E are hermetic and cannot catch #1–#4.
-10. Remove drift: `pnpm-lock.yaml`/`pnpm-workspace.yaml` and `pyrightconfig.json` reference toolchains not used by the build.
-
----
-
-*End of dossier. Compiled from source at `f2c075a`, the decoded icon container, the installed PE, the raw `~/.opencode-voice-runtime` logs, and live process/port state.*
-
----
-
-## 7. Remediation Status — v0.5.0 (closed findings)
-
-Compiled after the autonomous remediation pipeline. Code + tests are the source of truth.
-
-| Finding | Status | Evidence |
+| Brief premise | Verdict | Evidence |
 |---|---|---|
-| UX-1 false-disconnect watchdog | **Closed** | `bridge/ws.ts` exposes `live` (socket OPEN) + `onFrame`; `App.tsx` promotes on any frame and only demotes a genuinely closed socket. Root unit 222 + desktop 95, E2E 18/18. |
-| UX-2 visualizer not RMS-reactive | **Closed** | `capture.ts` emits `onEnergy` (RMS); `SiriWaveCanvas` takes `energy` and scales the bars; `App.tsx` feeds mic energy. |
-| UX-3 no voice phase states | **Closed** | Additive `voice` frame (`protocol.ts`) broadcast by `daemon.ts`; HUD pill shows listening/thinking/speaking; E2E `ux.spec.ts`. |
-| UX-4 transcript never shown | **Closed** | `voice` frame carries `transcript`; HUD renders `last-transcript`; E2E asserts it. |
-| UX-5 silent provider failures | **Closed** | Additive `notice` frame; daemon broadcasts on STT/brain/TTS failure; HUD renders a dismissible `notice-banner`. |
-| UX-6 empty-vault no CTA | **Closed** | Daemon broadcasts `voice-disabled-no-keys`; HUD CTA button opens the keys window; E2E asserts banner + CTA. |
-| UX-7 multi-window persona desync | **Partial** | Persona still flows HUD → daemon; settings-window → HUD sync not yet broadcast (documented, low risk). |
-| UX-8 keys require restart | **Closed** | `buildVoicePipeline()` extracted and re-invoked on `saveApiKeys`; vault root created + seeded on first run (`main.rs`). |
-| SEC-1 arbitrary shell exec | **Partial→Closed** | `ConfirmPortal` mounted and wired to `confirmation-required`; injection metacharacters rejected pre-park; session ids validated. No command allowlist by design (FR-12 confirm is the control). |
-| SEC-2 path injection via sessionId | **Closed** | `command-router.ts` `SESSION_ID_RE`. |
-| SEC-7 WebView2 mic permission | **Open — needs packaged verification** | No Rust media-permission handler exists; capture works under Chromium fake device (E2E). Must be validated in a packaged build. |
-| UX-9 stale version strings | **Closed** | `SettingsView` version strings updated. |
-| Session `state: unknown` | **Closed** | `client.ts` `sessionState()` derives from real fields. |
+| `src/engine/` is a source directory | **FALSE** | `Test-Path src/engine` → `False`. No such directory exists. The orchestration layer is `src/orchestrator/`. |
+| Tests live in a root `tests/` directory | **FALSE** | `Test-Path tests` → `False`. Tests are **colocated** with their subjects: `src/voice/brain.ts` ↔ `src/voice/brain.test.ts`. Zero central test tree. |
+| "Tauri/Electron host", "electron preload / bridge methods" | **FALSE — it is Tauri v2, no Electron** | `apps/desktop/src-tauri/src/main.rs` (1,315 lines) is the host. A full-tree grep for `electron` returns hits **only** inside `.opencode/agents/desktop-app-engineer.md` — a subagent *prompt document*, not product code. There is no `preload`, no `BrowserWindow`, no `ipcRenderer`. |
+| Design tokens: Canvas `#faf9f5`, Coral `#cc785c`, Ink `#141413` | **FALSE — inverted palette** | `#faf9f5` and `#cc785c` appear **nowhere** in the tree. The real system (`apps/desktop/src/styles/tokens.css`) is a **dark** charcoal theme: `--vx-canvas: #090a0f`, `--vx-panel: #18191d`, `--vx-accent: #3b82f6` (blue), status `--vx-ok: #4ade80` / `--vx-warn: #fbbf24` / `--vx-err: #f87171`. `#141413` occurs only as a fill inside `Crest.tsx`. The brief described a warm cream/coral scheme — the opposite of what ships. |
+| "Mobile Subsystem: Happy Coder relay client, cryptographic QR pairing, Human-in-the-loop step approval queues" | **FALSE — design doc only, zero implementation** | No `happy coder`, `qrcode`, `relay`, `bluetooth`, or push code exists in `src/` or `apps/`. The repo's own `docs/19-MOBILE-PAIRING.md` states this outright: *"no relay, tunnel, push, or approval-queue code exists in `src/`"*. The single code hit is `src/runtime/client.ts:242`, where `'mobile'` is a member of a `Provenance` **union type** (`'voice' \| 'cli' \| 'mobile' \| 'reconciled'`) — a type-level placeholder, not a client. |
+| "Agent Ownership over Model Management" as the governing philosophy | **FALSE — phrase does not exist** | Full-tree grep for `Agent Ownership` / `over Model Management`: zero hits in any file. This is not the project's stated doctrine. §1.1 below states the philosophy the code actually implements. |
+| Runner CLI flags `--resume` / `--continue` | **FALSE** | Zero occurrences in `src/` or `src-tauri/`. See §4.3 for the flags the supervisor *actually* passes. |
+| Claude Code / Codex as supervised runners | **FALSE — OpenCode only** | The only `codex` hit in product code is `src/voice/brain.ts:18`, a comment documenting the OpenRouter `User-Agent` allowlist. Exactly one runner is supervised: `opencode-cli`. |
+| "Electron preload / bridge methods" as the IPC model | **FALSE** | IPC is a hand-rolled RFC 6455 WebSocket server (`src/ipc/ui-server.ts`) on port 4097, plus 3 Tauri commands. No preload bridge. |
+| Active branch `origin/main` / `origin/master` | **PARTLY** | `origin/HEAD → origin/main`. There is no `master`. Confirmed via `gh`: `defaultBranchRef: main`. |
+| Root 491 / desktop 149 tests | **TRUE — verified** | Re-executed this session: root `491 passed, 3 skipped (494)`, 44 files passed + 1 skipped; desktop `149 passed (149)`, 23 files. `GATE: 0`. |
 
-### Live verification (v0.5.0)
+Two further brief-asserted facts were *directionally* right and are documented as specified:
+the `json_schema` load-bearing role, the `User-Agent` harness gate, the vault's AES-256-GCM
+scheme, the three key pools, and the free-tier invariant. All are covered in §3.
 
-| Stage | Result |
+---
+
+## 1. EXECUTIVE IDENTITY & ARCHITECTURAL PARADIGMS
+
+### 1.1 What this system actually is
+
+Voxaura is a **Windows voice-first desktop companion** that sits *beside* OpenCode v2 rather
+than wrapping it. It is not a chat UI, not a model router, and not an agent framework. It
+is a thin, durable **control-and-voice plane** for a serve process it does not own.
+
+The philosophy the code implements — reconstructed from source, not from a slogan — is:
+
+1. **Adopt, never fight.** The Rust supervisor inspects port 4096 before spawning. If a
+   healthy serve is present it **adopts** it and spawns nothing. If the port is cold but a
+   *foreign* serve exists (the OpenCode desktop app runs its own), it spawns ours anyway and
+   **logs loudly** rather than refusing (`main.rs:238-249`, `bring_up_action`). Refusing would
+   break any user who has the OpenCode desktop app open — a measured, deliberate trade.
+2. **Own the failure boundary, not the work.** Node owns the voice loop and WS-4097. Rust owns
+   process lifetime via a `KILL_ON_JOB_CLOSE` Job Object. Neither duplicates the other. The
+   TypeScript supervision layer that *did* duplicate it was deleted (see §5.5, L13).
+3. **The model writes the words.** There is no template table for user-facing speech anywhere
+   in the tree. `src/policy/zero-canned.test.ts` is a source-level ban that fails the build if
+   a canned confirmation is reintroduced.
+4. **Fail closed, visibly.** A keyless daemon keeps the control plane up, drops audio, and
+   publishes a `voice-disabled-no-keys` notice rather than pretending to work.
+
+### 1.2 The 100% free-tier invariant
+
+Every model in the production path is a `:free` slug. The routing table as of this commit:
+
+| Role | Constant | Slug | Location |
+|---|---|---|---|
+| Conversational intake | `INTAKE_MODEL` | `dots-studio/dots-3-note-preview:free` | `src/orchestrator/coordinator.ts:22` |
+| Coordinator (planner) | `COORDINATOR_MODEL` | `thinkingmachines/inkling:free` | `src/orchestrator/coordinator.ts:23` |
+| Narrator (spoken confirmations) | `NARRATOR_MODEL` | `thinkingmachines/inkling:free` | `src/orchestrator/narrator.ts:41` |
+| Brain / `cli live` | `BRAIN_OPENROUTER_MODEL` | `thinkingmachines/inkling:free` | `src/voice/brain.ts:137` |
+| STT | `whisper-large-v3-turbo` | Groq free tier | `src/voice/stt.ts:98` |
+| TTS | `s2.1-pro-free` | Fish Audio | `src/voice/tts.ts` |
+
+This invariant is **expensive and was chosen with measurement**, not optimism. Measured live
+2026-09-27, same day, same key:
+
+| Path | Result | p50 | max |
+|---|---|---|---|
+| Inkling task-DAG planning (strict `json_schema`) | 5/5 valid | 1,950 ms | 3,987 ms |
+| Inkling narration (strict `{reply_ar}`) + real Fish TTS | 5/5 clean | 2,615 ms | 5,463 ms |
+| Dots3 intake (8 Arabic prompts, real `IntakeSchema`) | 8/8 | 901 ms | 1,210 ms |
+| Ling-3.0-flash intake candidate | **0/8** — provider 400s on `json_object` | n/a | n/a |
+| Nemotron brain (rejected successor) | **3/12 (25%)** | 4,831 ms | — |
+
+The invariant is real but **not free of cost**: free tiers are slow and lossy, and the
+narration p50 exceeds the project's own 2,000 ms `BRAIN_GOLDEN_MS`. That is acceptable only
+because narration is fire-and-forget after a command completes, never on the interactive
+turn path.
+
+---
+
+## 2. COMPLETE PHYSICAL FILE MANIFEST
+
+### 2.1 Repository topology (verified counts)
+
+- **469 tracked files**, **0 untracked** (excluding gitignored), worktree **clean**.
+- **101 source files** (`.ts`/`.tsx`/`.rs`, excluding tests and `target/`): **13,370 lines**.
+- **45 test files** colocated with subjects.
+- Branch `main`; remote `https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant.git`;
+  repository is **private**; `defaultBranchRef: main`.
+
+Directory census of production source (lines):
+
+| Directory | Files | Lines |
+|---|---|---|
+| `apps/desktop/src` | 2 | 672 |
+| `apps/desktop/src/audio` | 4 | 541 |
+| `apps/desktop/src/bridge` | 1 | 515 |
+| `apps/desktop/src/components/*` (5 dirs) | 12 | 1,033 |
+| `apps/desktop/src-tauri/src` | 1 | 1,315 |
+| `apps/desktop/{config}` | 4 | 86 |
+| `src` (root) | 2 | 769 |
+| `src/common` | 5 | 187 |
+| `src/guidance` (+`rag/`) | 11 | 432 |
+| `src/ipc` | 5 | 1,083 |
+| `src/launcher` | 2 | 41 |
+| `src/memory` | 1 | 68 |
+| `src/orchestrator` | 15 | 1,988 |
+| `src/runtime` (+`laya/`) | 8 | 1,490 |
+| `src/telemetry` | 2 | 152 |
+| `src/ui` | 4 | 240 |
+| `src/voice` | 10 | 1,630 |
+
+### 2.2 Root configuration (every root file, verified)
+
+| Path | Verified content |
 |---|---|
-| Fish TTS (real) | ✅ 2 sentences, total 2161 ms, first-chunk 1105 ms |
-| Groq Whisper STT (real) | ✅ 299 ms round-trip |
-| OpenRouter Dots3/Nemotron (real) | ⚠️ HTTP 429 — OpenRouter free-tier account limit (upstream, verified not code; Dots3 answered ~1.5 s earlier in the session) |
+| `package.json` | `version 0.6.2`; `type: module`; scripts: `build`(tsc), `typecheck`, `lint`(eslint `--max-warnings 0`), `lint:ox`(oxlint), `test`(vitest), `test:desktop`, **`test:vantrilex`** = typecheck→eslint→oxlint→vitest→desktop-vitest, `dev`, `dev:web`, `doctor`. |
+| `tsconfig.json` | ESM `NodeNext`; **`exactOptionalPropertyTypes`**, **`noUncheckedIndexedAccess`**; excludes `*.test.ts` from the build. |
+| `vitest.config.ts` | Root suite; node environment. |
+| `eslint.config.js` / `.oxlintrc.json` | Dual linter; oxlint reports 7 pre-existing *intentional* `no-control-regex` warnings (control-char rejection is the point) — **0 errors**. |
+| `pyrightconfig.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml` | Editor/tooling for the `ml/` Python layer. |
+| `opencode.json` | This repo's **own** dev-session model config (`nemotron` default + 3 role slugs). Not product config. |
+| `.mcp.json` | MCP server declarations for the dev environment. |
+| `.env.example` | Tracked template; `.env.local` is **gitignored** (`.gitignore:19 *.local`). |
+| `AGENTS.md` | Operating contract; notably warns that *"green CI does not mean the live loop works"* — vindicated by §5.3. |
+| `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `README.md`, `README.ar.md` | Project records; README is bilingual (EN/AR). |
 
-### Honest residual risks
+### 2.3 `src/` — the daemon (all files, exports, responsibility)
 
-- The OpenRouter free tier is rate-limited; the live brain path needs account headroom.
-- WebView2 microphone permission is unproven in a packaged build.
-- UX-7 (persona cross-window sync) remains a documented gap.
+**`src/daemon.ts` (563 L)** — the production composition root. Exports `startDaemon`,
+`ensureIpcToken`, `ipcTokenFromEnv`, `ipcTokenPath`, `vaultPathFromEnv`, `DaemonHandle`,
+`DaemonOptions`. Owns: WS-4097 wiring, the voice pipeline, narration dispatch, telemetry
+seam, model constants consumed by the pipeline. It is the only file in `src/` that composes
+everything else.
+
+**`src/cli.ts` (206 L)** — CLI entry; exports nothing. Subcommands parsed at `cli.ts:194-200`:
+`doctor`, `vault bootstrap`, `live`, `serve`. Contains `loadDotEnvLocal()` (splits on `\n`,
+skips `#`, sets `process.env` only when unset).
+
+**`src/common/`**
+- `brands.ts` (36 L) — `VOICE_IDS`, `PERSONA_VOICE`, `PERSONA_LABEL`, `nowIso`; branded types `SessionId`, `EventId`, `PersonaId`, `VoiceId`, `ISODateString`, `ApprovalId`, `SessionState`, `SessionOutcome`.
+- `config.ts` (71 L) — `loadConfig`, `OrchestratorConfig`.
+- `errors.ts` (30 L) — `OrchestratorError`, `ErrorCode` (20-member closed union; `BRAIN_REJECTED`/`BRAIN_AUTH` added for L24).
+- `logger.ts` (42 L) — `createLogger`, `redactSecrets`, `containsSecret`.
+- `index.ts` (8 L) — barrel.
+
+**`src/ipc/`** — the WS-4097 plane, zero dependencies.
+- `protocol.ts` (470 L) — frozen frame schemas + frame codec. Exports `UiCommandSchema` (**`.strict()`**), `UiEventSchema`, `HelloFrameSchema`, `InventoryFrameSchema`, `AgentFrameSchema`, `ContextFrameSchema`, `NoticeFrameSchema`, `VoiceFrameSchema`, `AckFrameSchema`, `FrameReassembler`, `WsProtocolError`, `Opcode`, `decodeFrames`, `encodeTextFrame`, `encodeBinaryFrame`, `maskFrame`, `parseSeq`, `buildAgentFrame`, `buildInventoryFrame`, plus limits: `MAX_MESSAGE_BYTES` 1 MiB, `MAX_AUDIO_BYTES` 64 KiB, `MAX_CONNECTIONS` **8** (L15), `MISSED_PINGS_LIMIT` 3, `PING_INTERVAL_MS`, `RESUME_BUFFER_CAP` 256, `UI_SUBPROTOCOL` `voice-ui.v1`, `UI_WS_PATH` `/v1/ui`, `UI_WS_PORT` 4097, `SERVE_PORT` 4096.
+- `ui-server.ts` (507 L) — `UiServer`, `CommandOutcome`, `UiServerOptions`. Zero-dependency RFC 6455 server. Bearer auth via **subprotocol token** (browsers cannot set upgrade headers). Oldest-first eviction at the connection cap.
+- `audio.ts` (39 L) — downlink framing `[type:1][seq:u16be][mp3…]`, `AUDIO_DOWNLINK_TYPE 0x01`, `MAX_AUDIO_CHUNK` 32 KiB, `encodeAudioChunk`, `decodeAudioChunk`, `splitAudio`.
+- `attach.ts` (30 L) — `attachInventory`, `InventoryPublisher`. **DEAD** (§2.12).
+- `index.ts` (37 L) — barrel.
+
+**`src/orchestrator/`** — 15 files, 1,988 L.
+- `coordinator.ts` (308 L) — `Coordinator`, `INTAKE_MODEL`, `COORDINATOR_MODEL`, `IntakeSchema`, `PlanSchema`, `PlanStepSchema`, `buildHandoff`, `ChatFn`, `ChatOptions`, `CoordinatorDeps`, `IntakeContext`, `MissionResult`. Two-stage: intake with failover, then planning under `PLAN_RESPONSE_FORMAT` (strict `json_schema`, `additionalProperties:false`).
+- `narrator.ts` (137 L) — `narrate`, `NARRATOR_MODEL`, `NARRATOR_RESPONSE_FORMAT`, `NARRATOR_SYSTEM`, `narrationContextLine`, `NarrationContext`, `NarratorChat`. Speaks **only** an extracted `reply_ar`.
+- `audio-pipeline.ts` (175 L) — `AudioPipeline`, `NO_SPEECH_DROP`, `AudioPipelineDeps`, `Utterance`, `Transcription`.
+- `command-router.ts` (278 L) — `createCommandHandler`, `parseModelRef`, `shellCommandError`, `DESTRUCTIVE_KINDS`, `CONFIRMATION_TTL_MS`, `MAX_PARKED` **8** (L20).
+- `inventory.ts` (98 L) — `SessionInventory`, `SessionRecord`.
+- `mentions.ts` (163 L) — `resolveMentions`, `MENTION_MAX_FILES`, `MENTION_MAX_TOKENS`. **DEAD**.
+- `slash.ts` (81 L) — `SLASH_COMMANDS`, `parseSlashCommand`, `slashCommandError`. **DEAD**.
+- `prompt-optimizer.ts` (104 L) — `optimizePrompt`, `PROMPT_SYSTEM`. **DEAD**.
+- `orchestrator.ts` (291 L) — `Orchestrator`, `FR12_*_MIN`, `SpeechAdvisor`, `ScoringAdvisor`, `Speaker`. **DEAD cluster root.**
+- `dispatch.ts` (116 L), `events.ts` (59 L), `ledger.ts` (57 L), `queue.ts` (70 L), `laya-advisor.ts` (38 L), `index.ts` (13 L) — **DEAD** (self-referential only).
+- `failclosed.test.ts`, `fr12.test.ts`, `fr12-route.test.ts` — pass, but gate DEAD production code.
+
+**`src/runtime/`**
+- `client.ts` (735 L) — `ServeClient`, `basicAuth`, and the telemetry types `ContextUsage`, `MessageTokens`, `SessionInfo`, `SessionTokens`, `SessionStatusInfo`, `AgentInfo`, `ModelRef`, `Provenance`, `DispatchProvenance`. Largest file in the project; the sole HTTP client to `opencode serve`.
+- `opencode-bridge.ts` (237 L) — `OpenCodeBridge`, `SessionDetails`, `SessionTokensView`, `EnvironmentStatus`, `AgentInfoView`, `CommandInfoView`. The 360° façade.
+- `fuzzy-match.ts` (112 L) — `fuzzyCandidates`, `fuzzyPick`, `normalizeForMatch`. **Uniqueness required at every tier**; ambiguity throws rather than guessing. Contains the Arabic→Latin alias table (`ني?موترون|نيموترون` → `nemotron`).
+- `vad.ts` (148 L) — `SileroVad`, `VadModelMissing`, `VadModelError`, `VAD_WINDOW_SAMPLES` 512, `VAD_SAMPLE_RATE`. **Dynamically imported** (see §3.6).
+- `laya/` (3 files, 255 L) — `LayaEngine`, `LayaBpeTokenizer`, `LAYA_HEADS`, `LAYA_OPERATING_LENGTH`. **DEAD.**
+
+**`src/voice/`** — 10 files, 1,630 L.
+- `brain.ts` (362 L) — `OpenRouterBrainClient`, `openRouterChat`, `extractJson`, `normalizeBrainJson`, `requiresConfirmation`, `BrainOutputSchema`, `BRAIN_OPENROUTER_MODEL`, `OPENROUTER_CHAT_URL`, `OPENROUTER_USER_AGENT`, `BRAIN_GOLDEN_MS` 2000, `BRAIN_CEILING_MS` 5000.
+- `tts.ts` (534 L) — `TtsEngine`, `FishHttpTransport`, `SpeechGate`, `FileAudioOut`, `fetchWithTimeout`, `stripSpeechText`, `isSpeakable`, `splitSentences`, `sweepOldPlaybackFiles`, `TTS_MODEL` `s2.1-pro-free`.
+- `stt.ts` (205 L) — `transcribeStream`, `GroqWhisperClient`, `SttTimeoutError`, `chunkPcm`, `meanNoSpeechProb`, `CHUNK_BYTES`/`OVERLAP_BYTES`.
+- `vault.ts` (110 L) — `FileVault`, `KEY_POOLS`, `encryptPool`, `decryptPool`, `VaultBlob`, `KeyPool`. See §3.7.
+- `keyring.ts` (119 L) — `Keyring`, `ROTATION_LIMIT` 10, `AcquiredKey`, `RolloverInfo`.
+- `key-store.ts` (45 L) — `readKeyPools`, `mergeKeyPools`, `writeKeyPools`.
+- `ingest.ts` (106 L) — `AudioIngest`, `WINDOW_BYTES` 160,000, `SPEECH_GATE_DB` −30, `isLoudWindow`, `bytesToFloat32`, `windowRmsDb`.
+- `cache.ts` (111 L) — `AudioCache`, `cacheKey`, `normalizeForCache`.
+- `disambiguation.ts` (20 L), `index.ts` (18 L) — **DEAD**.
+
+**`src/telemetry/`** — `writer.ts` (149 L) `TelemetryWriter` + closed `SanitizedErrorClassSchema`/`RemediationSchema`; `index.ts` (3 L). **No transcript or free-text field exists anywhere in the schema** — the anti-injection invariant.
+
+**`src/launcher/`** — post-L13, 41 L total. `launcher.ts` exports **only** `probeHealth`; `index.ts` re-exports it. `SupervisedLauncher`, `resolvePort`, and the entire `siblings.ts` sweeper were **deleted**.
+
+**`src/memory/vault.ts` (68 L)** — `ensureVault`, `resolveVaultRoot`, `VAULT_NOTES`. Obsidian memory scaffolding, reached from `cli.ts`.
+
+**`src/guidance/`** — 11 files, 432 L: `agents.ts`, `bluf.ts`, `overseer.ts`, `guildskills.ts`, `guildskills.stub.ts`, `index.ts`, `rag/{guard,normalize,personas,retriever,index}.ts`. **Entire subsystem DEAD.**
+
+**`src/ui/`** — `mic.ts`, `modal.ts`, `settings.ts`, `index.ts` (240 L). Legacy settings/mic surface, self-referential only. **DEAD** — superseded by the React `SettingsView`/`KeysView`.
+
+**`src/policy/`** — three source-level invariant tests, no production code: `zero-canned.test.ts` (141 L), `sidecar-safety.test.ts` (150 L), `telemetry-wired.test.ts` (135 L).
+
+### 2.4 `apps/desktop/` — the Tauri shell
+
+- `src-tauri/src/main.rs` (1,315 L) — supervisor. **3 Tauri commands**: `ensure_all_services`, `ipc_token`, `shutdown_all_services`. Internals: `Job` (`CreateJobObjectW` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), `opencode_pids` via `tasklist` CSV, `foreign_serve_present`, `bring_up_action`, `spawn_and_wait_for_port`, `plan_child_logs`/`open_child_stdout`/`open_child_stderr` (append-only), `ensure_ipc_token`, `ensure_serve_password`, `resolve_vault_dir`. Contains 26 `#[test]` cases.
+- `src-tauri/capabilities/default.json` — least-privilege, 5 permissions, windows `["main","settings","api-keys"]`. **No media/microphone permission** (relevant to SEC-7, §6).
+- `src-tauri/tauri.conf.json`, `Cargo.toml`, `build.rs`, icons (incl. full iOS/Android icon sets from the Tauri scaffold — **unused**, see §2.7).
+- `src/App.tsx` (648 L) — the HUD; owns the WS bridge, mic policy, and the 15 s context poll.
+- `src/bridge/ws.ts` (515 L) — `VoxauraBridge` + all frame interfaces; reconnect with jittered backoff (`computeBackoff`, `RECONNECT_BASE_MS`/`CAP_MS`).
+- `src/audio/` — `capture.ts` (174 L, `AudioCapture`; `onError` preserves `DOMException.name` so `micFailureNotice` can distinguish causes), `playback.ts` (166 L, `AudioPlayer`, `PLAYBACK_QUEUE_CAP`), `vad.ts` (93 L, `bargePolicy`, `micPolicy`, `micFailureNotice`), `earcons.ts` (108 L, `EarconPlayer`).
+- `src/components/` — `brand/{Crest,WaveformEmblem}`, `icons/ControlGlyphs`, `portals/{PortalShell,ApiKeysModal,ConfirmPortal,CredentialPortal}`, `session/{SessionChip,AgentModelBadge,ContextGauge}`, `settings/{SettingsView,KeysView}`, `waveform/SiriWaveCanvas` (193 L, `SPEAKER_PALETTE`, per-speaker gradient).
+- `src/{matrix,sessions,settings,window}/` — `matrix-state.ts` (178 L, 192×192 `matrixForDaemonState`), `sessions/store.ts`, `settings/{chain,ipc-token,open-settings,services}.ts`, `window/{useAutoSize,close-current-window}.ts`.
+- `e2e/` — **14 spec files**, 18 tests, driven against `e2e/stub-daemon.mjs` (a **fake** control plane: real `UiServer` + real router, fake serve on :4197, no providers, no vault).
+- Config: `vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, `postcss.config.js`, `playwright.config.ts`.
+
+### 2.5 `ml/` — Laya ONNX subsystem (38 files, Python)
+
+Full training/eval/export/quantization pipeline: `train_laya.py`, `export_onnx.py`, `eval_onnx.py`, `quant_report.json`, `head_metrics.py`, plus adversarial and stress batteries. Its own gate results are green:
+`should_speak` acc 0.9970 · `is_destructive` acc 0.9889 · `barge_in` acc 0.9990 · `stuck_in_loop` acc 1.0000 — all gates PASS.
+**However `src/runtime/laya/*` (255 L) is DEAD** (§2.12): the trained model is not in the
+production voice path. The `ml/` layer is an evaluated, documented, *unreleased* capability.
+
+### 2.6 `vault/`, `docs/`, `assets/`, `.opencode/`
+
+- `vault/` — 7 Obsidian markdown files (`projects/voxaura/01-06` + `indexes/MOC-master.md`). The memory substrate `src/memory/vault.ts` seeds.
+- `docs/` — 29 numbered specs (`00`–`28`) plus 15 unnumbered. **Explicitly a frozen, partly-wrong spec set** per `AGENTS.md`. `docs/19-MOBILE-PAIRING.md` and `docs/26-AGENT-LAUNCHER.md` both carry supersession banners added when code reality diverged.
+- `assets/` — 20 hand-drawn SVGs + `icon.svg`.
+- `.opencode/` — 12 agent definitions, 25 skills, 11 plugins, 6 hooks, and a `_archive/catalog-stubs/` of 33 retired stubs. Dev-environment tooling, not shipped.
+- `scripts/` — `provision-sidecar.mjs` (bundles `node.exe` + `dist/` + pruned deps), `packaging-preflight.mjs`, `key-report.mjs`, `generate-whiteboard-assets.mjs`, `live_console_test.ts` (385 L).
+
+### 2.7 Unused scaffolding (honest inventory)
+
+The Tauri scaffold shipped iOS + Android icon sets (`src-tauri/icons/ios/`, `icons/android/`)
+and a `.icns`. There is **no mobile target**: no `tauri.conf.json` mobile config, no mobile
+Rust crate, no store metadata, and no mobile code. They are inert assets. Likewise
+`pnpm-workspace.yaml` coexists with npm as the actual package manager (`package-lock.json`
+is the real lockfile).
+
+### 2.8 Colocated test manifest — all 45 root test files
+
+No central test tree exists; every test sits beside its subject. Line counts as measured:
+
+| Lines | Test file | Subject under test |
+|---|---|---|
+| 568 | `src/runtime/client.test.ts` | `ServeClient`, context gauge math |
+| 474 | `src/ipc/ui-server.test.ts` | `UiServer`, auth, caps, framing |
+| 434 | `src/orchestrator/command-router.test.ts` | `createCommandHandler`, FR-12, L20 cap |
+| 339 | `src/ipc/protocol.test.ts` | frame schemas, codec, `.strict()` |
+| 323 | `src/orchestrator/coordinator.test.ts` | intake→plan→handoff, failover |
+| 319 | `src/orchestrator/audio-pipeline.test.ts` | windowing, gate, dedupe |
+| 279 | `src/voice/brain.test.ts` | brain client, L24 codes, `extractJson` |
+| 252 | `src/runtime/opencode-bridge.test.ts` | 360° façade, live payload shapes |
+| 226 | `src/orchestrator/narrator.test.ts` | zero-canned, control-token leakage |
+| 209 | `src/voice/ingest.test.ts` | window RMS, energy gate |
+| 189 | `src/voice/stt.test.ts` | Whisper chunking, `no_speech_prob` |
+| 156 | `src/orchestrator/mentions.test.ts` | **DEAD subject** (`mentions.ts`) |
+| 150 | `src/policy/sidecar-safety.test.ts` | import-graph native-package scan |
+| 141 | `src/policy/zero-canned.test.ts` | source-level canned-string ban |
+| 140 | `src/orchestrator/dispatch.test.ts` | **DEAD subject** |
+| 135 | `src/policy/telemetry-wired.test.ts` | telemetry-is-actually-called |
+| 135 | `src/runtime/laya/laya.test.ts` | **DEAD subject** |
+| 134 | `src/orchestrator/prompt-optimizer.test.ts` | **DEAD subject** |
+| 132 | `src/orchestrator/inventory.test.ts` | `SessionInventory` |
+| 124 | `src/orchestrator/failclosed.test.ts` | **DEAD subject** (orchestrator) |
+| 122 | `src/daemon.test.ts` | daemon composition |
+| 116 | `src/orchestrator/slash.test.ts` | **DEAD subject** |
+| 114 | `src/guidance/guidance.test.ts` | **DEAD subject** |
+| 111 | `src/voice/keyring.test.ts` | rotation, force-advance |
+| 105 | `src/telemetry/writer.test.ts` | schema, rotation, JSONL |
+| 100 | `src/runtime/fuzzy-match.test.ts` | uniqueness-at-every-tier |
+| 94 | `src/ui/ui.test.ts` | **DEAD subject** |
+| 91 | `src/runtime/vad.test.ts` | `SileroVad` real contract |
+| 88 | `src/orchestrator/fr12.test.ts` | **DEAD subject** |
+| 83 | `src/orchestrator/fr12-route.test.ts` | **DEAD subject** |
+| 81 | `src/orchestrator/orchestrator.test.ts` | **DEAD subject** |
+| 75 | `src/runtime/laya/laya.integration.test.ts` | **DEAD subject** |
+| 75 | `src/ipc/attach.test.ts` | **DEAD subject** |
+| 52 | `src/voice/key-store.test.ts` | pool merge/rotation |
+| 48 | `src/guidance/rag/personas.test.ts` | **DEAD subject** |
+| 46 | `src/memory/vault.test.ts` | `ensureVault` |
+| 43 | `src/orchestrator/laya-advisor.test.ts` | **DEAD subject** |
+| 43 | `src/guidance/rag/retriever.test.ts` | **DEAD subject** |
+| 34 | `src/launcher/launcher.test.ts` | `probeHealth` (post-L13) |
+| 31 | `src/ipc/audio.test.ts` | chunk framing |
+| 30 | `src/guidance/rag/normalize.test.ts` | **DEAD subject** |
+| 22 | `src/common/logger.test.ts` | secret redaction |
+| 18 | `src/voice/cache.test.ts` | `AudioCache` |
+| 18 | `src/voice/voice.test.ts` | **DEAD subject** (`disambiguation.ts`) |
+
+**19 of 45 root test files (≈4,100 lines) test code no user can execute.** This is the
+quantified form of the §2.12 finding: a large fraction of the green suite is measuring a
+product that does not ship.
+
+### 2.9 Dead subsystem designs — what each unreachable module was built to do
+
+Recorded so a future decision to wire-or-delete is informed, not guessed.
+
+| Module | Lines | Intended function | Wiring verdict |
+|---|---|---|---|
+| `orchestrator/orchestrator.ts` | 291 | Full lifecycle coordinator: `Speaker`, `SpeechAdvisor`, `ScoringAdvisor`, FR-12 thresholds | Superseded by the lean `Coordinator`; `daemon.ts` never imports it |
+| `orchestrator/mentions.ts` | 163 | `@file` resolver with `realpath` validation, `MENTION_MAX_FILES`/`MENTION_MAX_TOKENS` | Built in "Phase 4 OpenCode 360" and **documented as shipped**; no importer |
+| `orchestrator/slash.ts` | 81 | Native `/`-command interpreter, `SLASH_COMMANDS` | Same — documented as shipped, no importer |
+| `orchestrator/prompt-optimizer.ts` | 104 | Prompt optimization seam, `isActionableInstruction` | Same — documented as shipped, no importer |
+| `orchestrator/dispatch.ts` | 116 | `DispatchQueue`, pending-dispatch lifecycle | Only imported by dead `orchestrator.ts` |
+| `orchestrator/events.ts` | 59 | SSE lifecycle `EventEnvelopeSchema` | Only by dead modules + `ledger.ts` |
+| `orchestrator/ledger.ts` | 57 | Append-only JSONL ledger | Only by dead `orchestrator.ts` |
+| `orchestrator/queue.ts` | 70 | `SpeechQueue`, `BriefingTier` | Only by dead `orchestrator.ts` |
+| `orchestrator/laya-advisor.ts` | 38 | `LayaSpeechAdvisor` bridging the ONNX model | Only by its own test |
+| `ipc/attach.ts` | 30 | `attachInventory` publisher glue | No importer |
+| `guidance/*` (11) | 432 | RAG retrieval, persona profiles, content guard, BLUF briefings, guild-skill scoring, session overseer | Entire subsystem unwired |
+| `runtime/laya/*` (3) | 255 | `LayaEngine` (ONNX, 4 heads) + BPE tokenizer | Reachable only from dead `laya-advisor` |
+| `ui/*` (4) | 240 | `MicControl`, `SettingsStore`, `buildSettingsModal` | Superseded by React `SettingsView`/`KeysView` |
+| `voice/disambiguation.ts` | 20 | `projectSlot`, `qualifyBriefing` | Only by its own test |
+| `voice/index.ts` | 18 | Barrel | No importer |
+
+### 2.10 Strictness and configuration inventory (verified)
+
+- `tsconfig.json` — `exactOptionalPropertyTypes: true` and `noUncheckedIndexedAccess: true`
+  in **both** root and desktop configs. These two flags are why `{x?: T}` cannot be assigned
+  `undefined` and why `arr[i]` is `T | undefined`. They are the single largest source of
+  compile friction and the reason several fixes here are shaped as conditional object builds.
+- ESM `NodeNext`: relative imports in `src/` **must** carry a `.js` extension even when the
+  file on disk is `.ts`.
+- `*.test.ts` is excluded from the root `tsc` build; the desktop config is `noEmit`.
+- `apps/desktop/src-tauri/capabilities/default.json` — 5 permissions only
+  (`window:get-all-windows`, `window:create`, `window:set-focus`, `window:close`,
+  `webview:create-webview-window`). No filesystem, shell, http, or process plugin. **No media
+  permission**, which is the root of the SEC-7 uncertainty in §6.2.
+- `scripts/provision-sidecar.mjs` — builds the bundled `node.exe` + `dist/` + a pruned
+  dependency tree that the NSIS installer carries. Current sidecar payload: **100.6 MB**.
+  The pruning step is **not covered by any test**, which is precisely how v0.6.0 shipped a
+  daemon that could not boot (§5.4).
+
+### 2.11 Zero-untracked guarantee
+
+`git status --porcelain --untracked-files=all` returns **nothing**. Every scratch/verification
+script this project produced lives in `%LOCALAPPDATA%\Temp\opencode\`, never the repo — an
+explicit `AGENTS.md` rule.
+
+### 2.12 ⚠️ THE DEAD-CODE LEDGER — the audit's central finding
+
+Reachability was computed by resolving every relative import transitively from the two real
+entry points (`src/daemon.ts`, `src/cli.ts`):
+
+| Metric | Value |
+|---|---|
+| Live production modules | **34** |
+| **Dead production modules** | **31** |
+| Live production lines | 6,093 |
+| **Dead production lines** | **1,987 (24.6 % of `src/`)** |
+| Dead lines including their own passing tests | **9,010** |
+
+Dead production modules, verified to have **zero importers anywhere in `src/` or `apps/`**:
+
+- `src/guidance/` — all 11 files (432 L): RAG retriever, personas, guard, BLUF, overseer, guild skills.
+- `src/ui/` — all 4 (240 L): legacy settings/mic UI superseded by React.
+- `src/runtime/laya/` — all 3 (255 L).
+- `src/orchestrator/`: `orchestrator.ts` (291 L), `mentions.ts` (163 L), `dispatch.ts` (116 L), `prompt-optimizer.ts` (104 L), `slash.ts` (81 L), `queue.ts` (70 L), `ledger.ts` (57 L), `events.ts` (59 L), `laya-advisor.ts` (38 L), `index.ts` (13 L).
+- `src/ipc/attach.ts` (30 L), `src/voice/disambiguation.ts` (20 L), `src/voice/index.ts` (18 L).
+
+**Why this matters, and why it is not a trivial cleanup.** `mentions.ts`, `slash.ts`, and
+`prompt-optimizer.ts` were authored in "Phase 4 — OpenCode 360" and described in `CHANGELOG.md`
+and `docs/10-CHECKPOINT.md` as *wired and shipped*. They are not reachable from any entry
+point. Their 406 lines of tests pass, contributing to the healthy-looking 491. **The suite
+measures code the user can never execute.** This is precisely the failure mode `AGENTS.md`
+warns about ("`docs/01-28` are a frozen, partly-wrong spec set"), and it is the highest-value
+finding in this dossier.
+
+---
+
+## 3. RUNTIME ARCHITECTURE & EXECUTION LIFECYCLE
+
+### 3.1 Port map (four fixed ports, all verified in source)
+
+| Port | Owner | Purpose |
+|---|---|---|
+| **4096** | `opencode serve` | Session/agent/model REST + SSE. `SERVE_PORT` in `protocol.ts`. |
+| **4097** | Node daemon | WS-4097 UI bridge. `UI_WS_PORT`. |
+| **1420** | Vite | Dev web server only. |
+| **4197** | E2E stub | Fake control plane for Playwright only. |
+
+### 3.2 Cold-launch sequence (Rust, `main.rs`)
+
+1. `setup()` provisions `~/.opencode-voice-runtime/ipc.token` **before** the webview loads
+   (H4: the bearer is never baked into the bundle).
+2. `setup()` provisions `serve.pass` (0600, per-install).
+3. A background thread runs `ensure_all_services`; the frontend can also invoke it. An
+   `in_flight` guard prevents duplicate work and reports a **retriable** status rather than
+   a silent no-op.
+4. `bring_up_action(port_open, foreign_serve_present)` decides: adopt / spawn / spawn-and-flag.
+5. Both children are assigned to the `KILL_ON_JOB_CLOSE` Job Object. The `AssignProcessToJobObject`
+   **BOOL is now load-bearing** (D10): failure to adopt means the child is killed immediately
+   rather than left unowned.
+6. `resolve_daemon_entry` strips the `\\?\` prefix Rust's `resource_dir` returns, because
+   Node's resolver rejects it.
+7. Child stdout **and** stderr go to append-only files; a restart cannot erase the prior failure.
+
+### 3.3 Intake pipeline (`coordinator.ts`)
+
+- Model: Dots3 note-preview, `reasoning: {effort:'none'}`, `maxTokens 200`, `temperature 0.2`,
+  `timeoutMs 10_000`, `response_format {type:'json_object'}`.
+- Contract: `IntakeSchema = { reply_ar: string(min 1), task_en: string(min 1) }`.
+- Measured: **901 ms p50**, 8/8, zero prose drift.
+- Failover: on throw or unparseable output, one attempt on `fallbackModel` (defaults to
+  `COORDINATOR_MODEL` = inkling). Failure yields a structured
+  `{ok:false, detail:'intake-failed'|'intake-invalid'}` — never a thrown error.
+- The spoken `reply_ar` is fired to TTS **without await** (D4: awaiting serialized the whole
+  turn behind a Fish round-trip). The `.catch()` is mandatory — an unhandled rejection in a
+  detached promise kills the daemon process, not one turn.
+
+### 3.4 Coordinator planning (`coordinator.ts`)
+
+- Model: inkling, strict `PLAN_RESPONSE_FORMAT` = `json_schema`, `strict: true`,
+  `additionalProperties: false`, `required: ['steps']`, each step `required: [id,kind,detail]`.
+- `timeoutMs 25_000`, `temperature 0.2`, `maxTokens 300`, one bounded retry.
+- **The schema is load-bearing, not decorative.** Measured: inkling with strict schema →
+  **5/5** valid DAGs. Inkling prompt-only → **0/5**, emitting raw
+  `<|message_model|>shell<|content_invoke_tool_json|>{"name":"shell","args":{…}}<|end_message|>`.
+- The handoff envelope `[HANDOFF from=Nemotron to=Inkling task=…]` is a **protocol string**
+  defined by the `mission-handoff` skill. It survives the model change deliberately: it is a
+  role name in a wire contract, not a model slug.
+
+### 3.5 Narrator + brain (`narrator.ts`, `brain.ts`)
+
+- `NARRATOR_MODEL` = inkling. `NARRATOR_RESPONSE_FORMAT` = strict
+  `{"reply_ar": string}`, `required`, `additionalProperties:false`.
+- `reasoning: {effort:'none'}` is **mandatory**: without it inkling spends the 120-token
+  budget reasoning and returns `finish=length` with `content: null` — measured 0/5 before
+  the fix, 5/5 after.
+- `extractJson` uses a **string-aware balanced-brace scan** and returns the **first** complete
+  object. This was added after measuring that inkling emits *concatenated* objects
+  (`{…}{…truncated`); the old first-to-last-brace span was unparseable. Quotes, escapes and
+  braces-inside-strings are honored.
+- `narrate()` speaks only the extracted `reply_ar`. Non-JSON, missing/non-string `reply_ar`,
+  and control-token leakage all yield `null` — **no fallback sentence exists by design**.
+- `BRAIN_OPENROUTER_MODEL` = inkling; `OpenRouterBrainClient` uses `json_object`, 3 attempts,
+  `BRAIN_CEILING_MS` 5,000, `BRAIN_GOLDEN_MS` 2,000.
+
+### 3.6 Voice pipeline
+
+Uplink: renderer `getUserMedia` → `AudioCapture` (16 kHz Int16 mono) → binary WS frames
+(≤64 KiB each; the renderer emits ~32 KiB) → `UiServer.onAudio` → `AudioPipeline` →
+`AudioIngest` buffers to `WINDOW_BYTES` 160,000 (5 s) → **speech gate** → `transcribeStream`.
+
+The speech gate is three-layered:
+1. **Silero VAD** — `src/runtime/vad.ts`, ONNX, 512-sample windows. **Dynamically imported**
+   inside a `.catch()`-wrapped promise. A static import broke the packaged build in v0.6.0
+   (§5.3); `src/policy/sidecar-safety.test.ts` now walks the whole import graph and fails if
+   any module *statically* reachable from `daemon.ts` imports a native package.
+2. `no_speech_prob` from Whisper's `verbose_json` — a field already paid for and previously
+   discarded.
+3. Last-5-window repeat dedupe.
+
+If the ONNX model or runtime is unavailable the gate **fails closed** to the RMS energy gate
+(`SPEECH_GATE_DB` −30 dBFS). Measured on the live window: −21.2 dBFS, admitted.
+
+Downlink: `FishHttpTransport.synthesize` per sentence → `encodeAudioChunk` (32 KiB) →
+broadcast to all sockets → `AudioPlayer` queue cap → playback.
+
+Latency budget as declared in `cli.ts`: `stt<500ms`, `brain_p50<=2000ms`, `ceiling=5000ms`,
+`tts_first_chunk<800ms`. **Measured reality this session: STT 726 ms, brain 4,831 ms p50
+(inkling) / 901 ms (Dots3 intake), TTS 3,196 + 1,267 ms.** STT and brain both exceed the
+declared budget on the free tier.
+
+### 3.7 Security & storage vault (`vault.ts`, `keyring.ts`)
+
+- **Not DPAPI.** The brief said DPAPI; the code uses **AES-256-GCM** with a key derived by
+  `scryptSync(machineKey(), 'opencode-voice-runtime:vault:v1', 32)`, where `machineKey` is a
+  32-byte file at `~/.opencode-voice-runtime/machine.key` written 0600. The `safeStorage`
+  preference is noted in a comment but **not implemented**; the fallback is unconditional.
+- `KEY_POOLS = ['groq', 'fish', 'openrouter']` (L23 hardened to a closed tuple).
+- Each pool: `{nonce, ciphertext, checksum}`; checksum mismatch → `VAULT_CORRUPT`, pool refused.
+- `Keyring` slot assignment: wait-free `Atomics.add` on a `SharedArrayBuffer` counter;
+  `keyIndex = floor(slot/10) % n` (`ROTATION_LIMIT` 10). `release(key, ok, status)`
+  force-advances on **429 / 401 / 403**. Secret buffers are zero-filled on release and rollover.
+- **Triple-key fail-closed mandate:** `bootstrapFromEnv` returns `null` unless all three
+  pools are non-empty; the `saveApiKeys` command requires all three or returns
+  `{ok:false, detail:'all 3 keys required'}`.
+- **Known gap (L17, open):** 401/403 advances the key but never surfaces to the user. A vault
+  with one dead key looks identical to a healthy one until the first utterance — a failure
+  mode this project actually hit during the audit.
+
+### 3.8 Desktop UI
+
+Tauri v2 host; React 18 + Vite + Tailwind renderer; Arabic/RTL (`dir="rtl"` on the surface
+root) while `index.html` is `lang="en"` (a known, unfixed inconsistency). Dark theme per
+§0. The window **auto-sizes to content** via `useAutoSize` (measures `scrollHeight`), so any
+non-absolutely-positioned growing element resizes the OS window. Scrollbars are globally
+hidden. Voice-only: no text input anywhere; `/` and `@` are assistant-internal.
+
+### 3.9 Mobile subsystem
+
+**Does not exist.** See §0. `docs/19-MOBILE-PAIRING.md` is a frozen M4 design target that the
+repository itself labels as not implemented. The only artifact is the `'mobile'` member of
+the `Provenance` union in `src/runtime/client.ts:242`.
+
+---
+
+## 4. API, IPC BRIDGE & COMMAND INVENTORY
+
+### 4.1 WS-4097 transport
+
+- **Path** `/v1/ui`, **port** 4097, **subprotocol** `voice-ui.v1`.
+- **Auth:** the bearer travels as a *second subprotocol token* (`[voice-ui.v1, <token>]`)
+  because browsers cannot set `Upgrade` headers. A wrong/missing token → **401, socket
+  closed, never upgraded** (fail-closed, asserted in `ui-server.test.ts`).
+- **Resume:** `?lastSeq=<n>` replays missed frames; `eventId` dedupes at the edge.
+- **Heartbeat:** ping every `PING_INTERVAL_MS`; `MISSED_PINGS_LIMIT` 3 → close.
+- **Caps:** 8 connections (oldest evicted), 1 MiB message, 64 KiB audio frame.
+
+### 4.2 Frame inventory (frozen, additive-only)
+
+Downstream (`UiEventSchema`): `hello`, `inventory`, `agent`, `event`, `ack`, `error`,
+`notice`, `voice`, `context`. Upstream (`UiCommandSchema`, **`.strict()`**): `abort`, `arm`,
+`mute`, `deafen`, `switchSession`, `createSession`, `compact`, `interrupt`, `setSessionAgent`,
+`setSessionModel`, `toggleSessionSkill`, `execSessionShell`, `confirm`, `saveApiKeys`,
+`setPersona`, `sessionContext`, `listModels`, `listSkills`, `listCommands`, `runInternalCommand`,
+`getEnvironment`, `optimizePrompt`, `setContextLimit`. Audio uplink: binary frames; audio
+downlink: `[0x01][seq][mp3]`.
+
+### 4.3 Full upstream command reference (`UiCommandSchema`, `.strict()`)
+
+| Command | Required fields | Enforced behaviour |
+|---|---|---|
+| `abort` | — | Cancels the in-flight reply |
+| `arm` / `mute` / `deafen` | — | Local mic state; acknowledged |
+| `switchSession` | `sessionId` | `ses_`-prefixed id; no path injection |
+| `createSession` | — | Created in the project directory only |
+| `compact` | — | Context compaction |
+| `interrupt` | — | Interrupts current session work |
+| `setSessionAgent` | `agent` | Resolves against the agent catalog |
+| `setSessionModel` | `model` | `parseModelRef` splits `provider/id`; bare id defaults to `opencode` |
+| `toggleSessionSkill` | `skill`, `skillAction` | attach/detach |
+| `execSessionShell` | `command` | **Parks for FR-12 confirmation**; metacharacter guard (L21) |
+| `confirm` | `confirmId` | Executes or discards a parked command; `MAX_PARKED` 8 |
+| `saveApiKeys` | `groqKey`, `fishKey`, `openrouterKey` | **All three mandatory**; writes via `writeKeyPools` |
+| `setPersona` | `persona` | kareem / nour |
+| `sessionContext` | — | Returns the context-gauge frame; honours `contextLimit` |
+| `listModels` / `listSkills` / `listCommands` | — | Feeds the gauge and the 360° inspector |
+| `runInternalCommand` | — | Assistant-internal `/` and `@` execution |
+| `getEnvironment` | — | Environment/agent/command inventory |
+| `optimizePrompt` | — | Prompt-optimization seam (note: its module is DEAD, §2.9) |
+
+`DESTRUCTIVE_KINDS` requires confirmation; the parked payload is bounded by
+`CONFIRMATION_TTL_MS` 60,000 **and** the L20 cap of 8 entries.
+
+### 4.4 Downstream frame field reference
+
+| Frame | Key fields | Notes |
+|---|---|---|
+| `hello` | `type`, `contractVersion` | First frame on every connection |
+| `inventory` | `sessions[]` (`id`, `title`, `agent`, `model`, `state`, `tokens`) | Live session list |
+| `agent` | `agents[]` (`id`, `name`) | Agent catalog |
+| `context` | `sessionId`, `used`, `limit`, `percent`, `messageCount` | Gauge; `percent` is `null` when the window is unknown — **never guessed** |
+| `event` | `eventId`, `seq`, `state` | Resume via `?lastSeq=`, dedupe by `eventId` |
+| `notice` | `code`, `text`, `level` | Includes `assistant-said`, `voice-disabled-no-keys`, `stt-timeout` |
+| `voice` | `phase` | `idle`/`listening`/`thinking`/`speaking` |
+| `ack` | `id`, `ok`, `detail` | Per-command result |
+| `error` | `detail` | e.g. `audio frame too large` |
+
+### 4.5 Context-gauge maths (corrected against live data)
+
+`windowFill` is the **most recent step's** `input + output + reasoning + cache.read +
+cache.write`, **not** a sum across steps. Two corrections were forced by live measurement
+against a real serve (690 context rows):
+
+1. `/context` rows are **flat** — `{type, id, time, status, model, summary, recent, cost,
+   tokens}` with `tokens` at the **top level** — not the `{info, parts}` shape the SDK types
+   implied. The old reader looked for `parts[].tokens` and silently returned **zero**, which
+   is why the gauge rendered nothing.
+2. Summing across rows is wrong: each assistant step re-sends the whole conversation, so
+   per-step `input` is cumulative. A naive sum of 671 real rows produced 1,492,988 tokens =
+   **142 %** of a 1,048,576 window. The correct current fill on that session was 469,297 =
+   **44.8 %** (`248 + 429 + 152 + 468,468` — cached reads *do* occupy the window).
+3. `/message` rows are flat too, so `lastMessageAt` was always `null` until fixed.
+
+### 4.6 Supervisor spawn (the real flags)
+
+`opencode-cli serve --port 4096 --hostname 127.0.0.1` (password via **env only**, never argv —
+I-4), and `node <sidecar>/dist/cli.js serve --port 4097`. **No `--resume`/`--continue` exist.**
+
+### 4.7 Tauri commands (3)
+
+`ensure_all_services` (returns `BringUpStatus` with a retriable `in_flight`), `ipc_token`
+(the shell reads the token at runtime — never bundled), `shutdown_all_services`.
+
+### 4.8 CLI
+
+`node dist/cli.js doctor` (env **presence** only, never values) · `vault bootstrap` ·
+`live` (real provider round-trip) · `serve` (daemon).
+
+---
+
+## 5. GIT STATE, GITHUB REALITY & TEST VERIFICATION
+
+### 5.1 Branch and remote
+
+- Local branch `main`; `origin/HEAD → origin/main`; **no `master` branch exists**.
+- Remote: `https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant.git` — **`isPrivate: true`**.
+- `defaultBranchRef: main` (verified via `gh repo view`).
+
+### 5.2 Commit history (HEAD = `1dbc6a5`)
+
+```
+1dbc6a5 feat(models): narrator to inkling:free with strict reply_ar schema
+dc84866 feat(models): coordinator to inkling:free, intake benchmark keeps Dots3
+f122900 fix(brain): tolerate a non-deterministic model instead of losing the reply
+5260b2e feat(hardening): v0.6.2 — bounded resources, honest microphone, live diagnostics
+f0fb5d6 fix(release): v0.6.1 — the packaged daemon could not start on v0.6.0
+80a6050 chore(release): v0.6.0 — voice honesty, process hygiene, OpenCode 360 control
+111a7a7 fix(context): make the context gauge actually report a window
+9527b73 feat(brain): zero canned replies and the OpenCode 360 control layer
+ba05917 feat(sessions): OpenCode 360 middleware - slash, mentions, context gauge, session manager
+2c0e394 fix(hardening): bound audio memory, time out network calls, harden the command envelope
+5546c96 fix(supervisor): harden child supervision and make bring-up diagnosable
+```
+
+### 5.3 ⚠️ Local is 3 commits AHEAD of GitHub
+
+`git log origin/main..main` returns `1dbc6a5`, `dc84866`, `f122900`. **`origin/main` is at
+`5260b2e`.** The installed desktop app is `0.6.2` — which is `5260b2e`, meaning **the machine
+currently runs the pre-inkling wiring** (Nemotron coordinator, Dots3 narrator). The inkling
+switch is committed and gated but **not on GitHub and not in any release**.
+
+Releases: `v0.6.2` (Latest), `v0.6.1`, `v0.6.0` (**marked Pre-release — it is broken**),
+`v0.5.0`, `v0.4.4`…`v0.4.0`.
+
+### 5.4 Test matrix (re-executed this session)
+
+| Suite | Framework | Result | Files |
+|---|---|---|---|
+| Root | Vitest (node) | **491 passed, 3 skipped (494)** | 44 passed + 1 skipped |
+| Desktop | Vitest (happy-dom) | **149 passed (149)** | 23 |
+| Rust | `cargo test` | **26 passed** | in-crate `#[test]` |
+| E2E | Playwright | **18 passed** | 14 spec files |
+
+`npm run test:vantrilex` = typecheck → eslint → oxlint → root vitest → desktop vitest. **Exit 0.**
+
+**Gate blind spots, stated plainly:** E2E is *not* in `test:vantrilex`. E2E drives
+`e2e/stub-daemon.mjs` — a **fake** control plane (real `UiServer` + real router, fake serve on
+:4197, no providers, no vault). `scripts/live_console_test.ts` and `cli live` touch real APIs
+and are in no automated gate. Consequently **the 491 tests do not prove the product runs** —
+demonstrated, not theorized: v0.6.0 shipped with **every gate green** and a daemon that could
+not start at all, because `onnxruntime-node` is native and absent from the sidecar. The only
+thing that found it was installing the artifact and cold-launching it.
+
+### 5.5 Audit finding ledger (L1–L24) with current status
+
+Every latent finding from `dossier/COMPREHENSIVE_AUDIT_REPORT.md`, re-verified against HEAD.
+
+| ID | Finding | Status | Evidence at HEAD |
+|---|---|---|---|
+| L1 | `AudioPlayer.queue` unbounded | **CLOSED** | `PLAYBACK_QUEUE_CAP` in `playback.ts` |
+| L2 | TTS cache blob unbounded by reply length | **CLOSED** | `SPEECH_CACHE_MAX_ENTRY_BYTES` |
+| L3 | Dead `FileAudioOut` never pruned | **CLOSED** | `sweepOldPlaybackFiles` + `PLAYBACK_RETENTION_MS` |
+| L4 | `AudioContext` never closed | **CLOSED** | disposal path in `App.tsx` unmount effect |
+| L5 | Suspended `AudioContext`, no `resume()` | **CLOSED** | resume on first interaction/enqueue |
+| **L6** | `AudioPipeline` windows `await`-serial; no concurrency cap; `reset()` does not abort in-flight STT | **OPEN** | — |
+| L7 | O(n²) buffer concat | **CLOSED** | chunked ingest |
+| L8 | Dead awaited `speakSentences` | **CLOSED** (D4) | `coordinator.ts` fire-and-forget with mandatory `.catch()` |
+| L9 | Fish fetch had no timeout | **CLOSED** | `fetchWithTimeout`, `TtsTimeoutError` |
+| L10 | Persona captured mid-reply | **CLOSED** | `daemon.ts:413-415` snapshots `voiceId` per utterance |
+| L11 | "busy" indistinguishable from "failed" | **CLOSED** | `BringUpStatus` enum, shell retries `in_flight` |
+| L12 | Child that never binds left running | **CLOSED** | `spawn_and_wait_for_port` kills on timeout |
+| **L13** | `SupervisedLauncher`/sweeper looked like supervision but were dead | **CLOSED** | Deleted; `src/launcher` is now 41 L, `probeHealth` only; `docs/26` banner-marked |
+| L14 | 15 s of blocked webview tears the socket | **CLOSED** | hysteretic limit |
+| L15 | Unbounded WS connections | **CLOSED** | `MAX_CONNECTIONS` 8, oldest-first eviction |
+| L16 | Key rollover counts never surfaced | **OPEN** | — |
+| **L17** | 401/403 advances the key and never surfaces | **OPEN** | *(we hit this: a stale Groq key presented as "keyed")* |
+| L18 | No microphone permission surface | **PARTIAL** | distinct failure notices added; grant still unverified (SEC-7) |
+| L19 | Mic stayed hot on blur/minimise | **CLOSED** | `micPolicy` releases on `hidden`; `startMic` is a `useCallback` so restore really re-acquires |
+| L20 | Parked-command map unbounded by TTL sweep | **CLOSED** | `MAX_PARKED` 8; both caps proven non-vacuous by disabling them |
+| L21 | Shell metacharacter guard incomplete | **CLOSED** | `DESTRUCTIVE_KINDS` + confirmation gate |
+| **L22** | Persona not broadcast back to the HUD | **OPEN** | — |
+| L23 | `UiCommandSchema` not `.strict()` | **CLOSED** | `.strict()` + per-field validation |
+| L24 | 401/403 and non-2xx both `BRAIN_TIMEOUT` | **CLOSED** | `BRAIN_AUTH` / `RATE_LIMITED` / `BRAIN_REJECTED`, applied to **both** chat paths |
+
+**Tally: 20 closed · 3 open (L6, L16, L17, L22 = 4) · 1 partial (L18).**
+
+### 5.6 Secret hygiene
+
+`git grep -nE "sk-or-v1-[A-Za-z0-9]+|gsk_[A-Za-z0-9]+|sk-ant-[A-Za-z0-9]+"` → **empty** on
+every commit. `.env.local` and `vault/keyring.dat` are gitignored
+(`.gitignore:19 *.local`, `.gitignore:22 vault/keyring.dat`); `git ls-files` shows **no**
+secret-shaped tracked file. Key material is moved only through `writeKeyPools` (the same
+encrypted merge path as the `saveApiKeys` command) and verified by SHA-256 fingerprint only.
+
+---
+
+## 6. OPERATIONAL FRONTIER
+
+### 6.1 Verified-working
+
+- Packaged v0.6.2 cold-launch: 4096 + 4097 bound, `daemon.log` 0 bytes.
+- **Orphan gate 30/30 clean** against the installed build: each cycle brought up 3 processes
+  (shell + sidecar `node.exe` + `opencode-cli.exe`); the Job Object reaped all 3; ports
+  2→0; **0 stale ports, 0 stray processes**. (The first 30-cycle script reported a false
+  30/30 ORPHAN from two bugs in the *script* — a helper that both printed and returned, and
+  a `$_`-vs-`$p` cleanup error. The honest result required fixing the gate, not the product.)
+- Context gauge resolves live: `windowFill 486,925 / windowMax 1,048,576 = 46.4%` against a
+  real serve with 29 sessions, 423 models, 55 skills.
+- Telemetry writes real rows (a keyless daemon produced a real `KEYS_MISSING` row).
+
+### 6.2 Open items (exact)
+
+- **Dead code (§2.12): 31 modules / 1,987 lines unreachable.** Highest-value cleanup.
+- **L17** — key exhaustion never surfaces; a dead key looks healthy. *(We lived this.)*
+- **SEC-7** — WebView2 microphone grant in a packaged build is **unverified**. wry registers
+  a `PermissionRequested` handler that leaves the mic at `PERMISSION_STATE_DEFAULT` (it only
+  explicitly allows clipboard reads) and `tauri-runtime-wry` exposes **no** passthrough. The
+  mitigation is three distinct user-facing notices (`NotAllowedError` / `NotFoundError` /
+  `NotReadableError`); the grant itself is unproven.
+- **L22** — persona set in Settings is not broadcast back to the HUD.
+- **L16** — key-rollover counts never surfaced in diagnostics.
+- **L6** — `AudioPipeline` windows are `await`-serial; no concurrency cap, no in-flight abort on reset.
+- **Full live voice loop never completed** end-to-end. Each stage is individually verified
+  (STT 726 ms, brain OK, TTS real MP3s), but speech→STT→brain→TTS through the real daemon has
+  not yet run once. **Arabic STT quality is untested** — the only STT probe used English audio
+  against a client that pins `language: 'ar'`, so the transcript was correctly garbage. The
+  Fish-synthesized Arabic MP3s from the narration benchmark are the natural test vector.
+- **Unreleased work:** 3 commits ahead of `origin/main` (§5.3).
+- **Privacy trade-off undocumented:** free-tier providers state data may be used for product
+  improvement. Transcripts and session titles leave the machine to Groq, Fish and OpenRouter.
+
+### 6.3 Immediate roadmap
+
+1. Close the full live voice loop, including the Arabic STT round-trip.
+2. `v0.6.3`: rebuild sidecar + installer so the inkling switch ships; packaged cold-launch
+   verify; E2E; tag and push (3 commits currently unpublished).
+3. Triage the dead-code ledger: wire what the specs claim is shipped (`mentions`, `slash`,
+   `prompt-optimizer`) or delete it and correct `CHANGELOG.md` + `docs/10-CHECKPOINT.md`,
+   which currently assert these are shipped.
+4. L17 key-exhaustion surfacing; SEC-7 remains blocked on a physical machine with a microphone.
+
+---
+
+*End of dossier. 469 tracked files · 101 source files (13,370 L) · 34 live / 31 dead production
+modules · 491 + 149 + 26 + 18 tests green · HEAD `1dbc6a5`, 3 commits ahead of `origin/main`
+(`5260b2e`) · v0.6.2 released and installed.*
