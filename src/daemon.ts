@@ -17,6 +17,7 @@ import { narrate, NARRATOR_MODEL, type NarratorChat } from './orchestrator/narra
 import { OpenCodeBridge } from './runtime/opencode-bridge.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { describeSlashCommands, parseSlashCommand, slashCommandError } from './orchestrator/slash.js';
+import { mentionSummary, resolveMentions } from './orchestrator/mentions.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, type AcquiredKey } from './voice/keyring.js';
@@ -85,6 +86,21 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const client = new ServeClient(`http://127.0.0.1:${options.servePort}`, options.servePassword);
   // Phase 5: the 360° control surface over the same client.
   const bridge = new OpenCodeBridge(client, options.directory ?? process.cwd());
+  // Mention resolution needs the agent/skill catalog. Fetched once and reused:
+  // these change only on a config edit, and a turn that waited on two HTTP
+  // round-trips before it could transcribe would blow the speech budget. A failed
+  // fetch yields empty lists, which makes every `@name` fall through to the
+  // file branch and then be rejected - degraded, never unsafe.
+  let envCachePromise: Promise<{ agents: readonly string[]; skills: readonly string[] }> | null = null;
+  const envCache = (): Promise<{ agents: readonly string[]; skills: readonly string[] }> => {
+    if (envCachePromise === null) {
+      envCachePromise = bridge
+        .getEnvironmentStatus()
+        .then((env) => ({ agents: env.agents.map((a) => a.id), skills: env.skills }))
+        .catch(() => ({ agents: [], skills: [] }) as const);
+    }
+    return envCachePromise;
+  };
   const ui = new UiServer({
     token: options.ipcToken,
     contractVersion: options.contractVersion ?? '3.1.0',
@@ -413,9 +429,58 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
             ui.notice('slash-invalid', msg, 'warn');
             return { reply: msg };
           }
+          // `@file` / `@agent` / `@skill` are resolved BEFORE the text reaches
+          // any model. A rejected token must never survive as prose — that is the
+          // whole point of the resolver, and re-introducing the raw text here
+          // would hand a traversal attempt straight to the planning agent.
+          //
+          // The catalog is memoised per daemon lifetime: a mention is resolved
+          // at most once per turn, and re-fetching agents/skills on every
+          // utterance would put two HTTP round-trips on the interactive path.
+          let spoken = transcript;
+          let resolvedMentions = '';
+          if (transcript.includes('@')) {
+            try {
+              const env = await envCache();
+              const mentions = resolveMentions(transcript, {
+                root: options.directory ?? process.cwd(),
+                agents: env.agents,
+                skills: env.skills,
+              });
+              spoken = mentions.clean;
+              resolvedMentions = mentionSummary(mentions);
+              if (mentions.files.length > 0 || mentions.agents.length > 0 || mentions.skills.length > 0) {
+                // Machine context, never a sentence for the user to hear.
+                const attached = [
+                  mentions.files.length > 0 ? `files=${mentions.files.join(',')}` : '',
+                  mentions.agents.length > 0 ? `agents=${mentions.agents.join(',')}` : '',
+                  mentions.skills.length > 0 ? `skills=${mentions.skills.join(',')}` : '',
+                ]
+                  .filter((s) => s.length > 0)
+                  .join(' ');
+                spoken = `${spoken}\n[mentions: ${attached}]`;
+              }
+            } catch (err) {
+              // Telemetry is decoration; a catalog failure must not eat the turn.
+              // Fall through with the raw transcript: degradation, not silence.
+              spoken = transcript;
+              record({
+                subsystem: 'BRAIN',
+                status: 'DEGRADED',
+                latencyMs: Date.now() - t0,
+                errorCode: 'SESSION_NOT_FOUND',
+                sanitizedErrorClass: classify(err),
+              });
+            }
+          }
           try {
-            const mission = await coordinator.run(transcript);
-            record({ subsystem: 'BRAIN', status: 'OK', latencyMs: Date.now() - t0 });
+            const mission = await coordinator.run(spoken);
+            record({
+              subsystem: 'BRAIN',
+              status: 'OK',
+              latencyMs: Date.now() - t0,
+              ...(resolvedMentions.length > 0 ? { remediationAttempted: 'None' as const } : {}),
+            });
             const reply = mission.replyAr ?? '';
             return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
           } catch (err) {
