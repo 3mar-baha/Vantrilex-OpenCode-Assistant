@@ -10,7 +10,7 @@ import { UiServer } from './ipc/index.js';
 import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
-import { Coordinator, type ChatFn } from './orchestrator/coordinator.js';
+import { Coordinator, INTAKE_MODEL, type ChatFn } from './orchestrator/coordinator.js';
 import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { openRouterChat } from './voice/brain.js';
 import { narrate, NARRATOR_MODEL, type NarratorChat } from './orchestrator/narrator.js';
@@ -18,6 +18,7 @@ import { OpenCodeBridge } from './runtime/opencode-bridge.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { describeSlashCommands, parseSlashCommand, slashCommandError } from './orchestrator/slash.js';
 import { mentionSummary, resolveMentions } from './orchestrator/mentions.js';
+import { isActionableInstruction, optimizePrompt } from './orchestrator/prompt-optimizer.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, type AcquiredKey } from './voice/keyring.js';
@@ -107,6 +108,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   });
 
   let activeSession: SessionId | undefined;
+  // Prompt optimization is bounded: it is a cosmetic improvement on top of an
+  // utterance that is already dispatchable, so a slow provider must never cost the
+  // turn. 8 s sits under the 10 s intake budget and well over the 901 ms p50.
+  const OPTIMIZER_TIMEOUT_MS = 8_000;
   let activePersona: 'kareem' | 'nour' = 'kareem';
   const vault = new FileVault(options.vaultPath);
   // Barge-in generation gate: trips on `abort` so stale reply sentences never
@@ -473,8 +478,50 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               });
             }
           }
+          // A spoken instruction is messy: filler, pronouns, half-formed
+          // references to what's on screen. The optimizer rewrites it into a
+          // dispatchable brief.
+          //
+          // The gate is `isActionableInstruction`, and it is NOT optional: an
+          // acknowledgement ("تمام") must never become a task, or the assistant
+          // starts acting on the user's politeness. That check is synchronous
+          // and free, so the common case costs one provider call less.
+          let task = spoken;
+          if (isActionableInstruction(spoken)) {
+            const tOpt = Date.now();
+            try {
+              const key = ring.acquire('openrouter');
+              try {
+                task = await optimizePrompt(
+                  spoken,
+                  (model, system, user) =>
+                    openRouterChat(keyMaterial(key), model, system, user, fetch, {
+                      reasoning: { effort: 'none' },
+                      timeoutMs: OPTIMIZER_TIMEOUT_MS,
+                    }),
+                  INTAKE_MODEL,
+                  {},
+                );
+                record({ subsystem: 'BRAIN', status: 'OK', latencyMs: Date.now() - tOpt, remediationAttempted: 'None' });
+              } finally {
+                ring.release(key, true);
+              }
+            } catch (err) {
+              // Graceful fallback is the USER'S OWN WORDS, never a template:
+              // optimizePrompt already returns the utterance on failure, and a
+              // degraded prompt is still honest.
+              task = spoken;
+              record({
+                subsystem: 'BRAIN',
+                status: 'DEGRADED',
+                latencyMs: Date.now() - tOpt,
+                errorCode: 'BRAIN_TIMEOUT',
+                sanitizedErrorClass: classify(err),
+              });
+            }
+          }
           try {
-            const mission = await coordinator.run(spoken);
+            const mission = await coordinator.run(task);
             record({
               subsystem: 'BRAIN',
               status: 'OK',
