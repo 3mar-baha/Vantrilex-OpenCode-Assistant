@@ -13,8 +13,7 @@ import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, type ChatFn } from './orchestrator/coordinator.js';
 import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { openRouterChat } from './voice/brain.js';
-import { INTAKE_MODEL } from './orchestrator/coordinator.js';
-import { narrate } from './orchestrator/narrator.js';
+import { narrate, NARRATOR_MODEL, type NarratorChat } from './orchestrator/narrator.js';
 import { OpenCodeBridge } from './runtime/opencode-bridge.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { probeHealth } from './launcher/index.js';
@@ -107,7 +106,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // If the brain is unavailable the narration is simply skipped: a visible
   // silence beats a robotic sentence, and the notice banner still reports the
   // outcome.
-  const narratorChat = (model: string, system: string, user: string): Promise<string> => {
+  const narratorChat: NarratorChat = async (model, system, user, options) => {
     const ring = Keyring.load(vault);
     const key = ring.acquire('openrouter');
     try {
@@ -117,7 +116,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         system,
         user,
         fetch,
-        { temperature: 0.8, maxTokens: 90, timeoutMs: 8_000 },
+        {
+          temperature: 0.8,
+          // 90 was sized for a bare prose line. The strict JSON wrapper plus a
+          // ~20-word Arabic reply needs headroom: a truncation mid-JSON is an
+          // unparseable reply, i.e. silence, so margin here is audibility.
+          maxTokens: 120,
+          timeoutMs: 8_000,
+          // Inkling is a reasoning model: without effort:none it spends the
+          // token budget thinking and returns finish=length with content=null
+          // (measured live). Same suppression the Dots3 intake uses.
+          reasoning: { effort: 'none' },
+          ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
+        },
       );
     } finally {
       ring.release(key, true);
@@ -150,7 +161,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           ...(errorDetail !== undefined ? { errorDetail } : {}),
         },
         narratorChat,
-        INTAKE_MODEL,
+        NARRATOR_MODEL,
       );
       if (line === null) return;
       setVoicePhase('speaking', line);

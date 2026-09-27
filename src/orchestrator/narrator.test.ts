@@ -1,16 +1,30 @@
 import { describe, expect, test } from 'vitest';
-import { NARRATOR_SYSTEM, narrate, narrationContextLine } from './narrator.js';
+import {
+  NARRATOR_MODEL,
+  NARRATOR_RESPONSE_FORMAT,
+  NARRATOR_SYSTEM,
+  narrate,
+  narrationContextLine,
+} from './narrator.js';
 
 // Phase 5 — ZERO CANNED REPLIES.
 //
 // The whole point: a verbal confirmation must be produced by the conversational
 // model from the situation, never selected from a template table. These tests
 // are written to make a template implementation FAIL.
+//
+// The narrator runs on Inkling under a strict json_schema contract, so every
+// fixture below speaks JSON: only the extracted `reply_ar` may ever reach the
+// user. Raw model output — wrapper, prose, or control tokens — is never spoken.
 describe('narrate (zero canned replies)', () => {
   const chat = (reply: string) => async () => reply;
+  const json = (replyAr: string) => `{"reply_ar": ${JSON.stringify(replyAr)}}`;
 
-  test('returns the model output verbatim, not a template', async () => {
-    const out = await narrate({ action: 'setSessionModel', outcome: 'ok' }, chat('بدّلت النموذج، صار أقوى للمهمة.'));
+  test('returns the extracted reply_ar, never the JSON wrapper', async () => {
+    const out = await narrate(
+      { action: 'setSessionModel', outcome: 'ok' },
+      chat(json('بدّلت النموذج، صار أقوى للمهمة.')),
+    );
     expect(out).toBe('بدّلت النموذج، صار أقوى للمهمة.');
   });
 
@@ -20,7 +34,7 @@ describe('narrate (zero canned replies)', () => {
     const actions = ['setSessionModel', 'setSessionAgent', 'switchSession', 'createSession', 'compact', 'unknownAction'];
     for (const action of actions) {
       for (const outcome of ['ok', 'error'] as const) {
-        const line = await narrate({ action, outcome }, chat('سطر أ totally unrelated عن الموقف'));
+        const line = await narrate({ action, outcome }, chat(json('سطر أ totally unrelated عن الموقف')));
         for (const phrase of banned) {
           expect(line, `${action}/${outcome}`).not.toContain(phrase);
         }
@@ -30,15 +44,15 @@ describe('narrate (zero canned replies)', () => {
 
   test('two different situations with the same model output stay distinct', async () => {
     // A template keyed on (action, outcome) would collapse these.
-    const a = await narrate({ action: 'setSessionModel', outcome: 'ok' }, chat('اختيار'));
-    const b = await narrate({ action: 'compact', outcome: 'ok' }, chat('اختيار'));
+    const a = await narrate({ action: 'setSessionModel', outcome: 'ok' }, chat(json('اختيار')));
+    const b = await narrate({ action: 'compact', outcome: 'ok' }, chat(json('اختيار')));
     expect(a).toBe('اختيار');
     expect(b).toBe('اختيار');
     // Same model words, but the CONTEXT handed to the model must differ.
     const seen: string[] = [];
     const capture = async (_m: string, _s: string, user: string) => {
       seen.push(user);
-      return 'x';
+      return json('x');
     };
     await narrate({ action: 'setSessionModel', outcome: 'ok', target: 'nemotron' }, capture);
     await narrate({ action: 'compact', outcome: 'ok' }, capture);
@@ -49,7 +63,7 @@ describe('narrate (zero canned replies)', () => {
     let user = '';
     const capture = async (_m: string, _s: string, u: string) => {
       user = u;
-      return 'حسناً';
+      return json('حسناً');
     };
     await narrate(
       {
@@ -77,15 +91,15 @@ describe('narrate (zero canned replies)', () => {
       { action: 'setSessionAgent', outcome: 'error', errorDetail: 'SERVE_UNREACHABLE' },
       async (_m, _s, u) => {
         user = u;
-        return 'ما قدرت أوصله';
+        return json('ما قدرت أوصله');
       },
     );
     expect(user).toContain('SERVE_UNREACHABLE');
   });
 
-  test('trims the model output and drops an empty reply', async () => {
-    expect(await narrate({ action: 'x', outcome: 'ok' }, chat('  padded  '))).toBe('padded');
-    expect(await narrate({ action: 'x', outcome: 'ok' }, chat('   '))).toBeNull();
+  test('trims the model output and drops an empty reply_ar', async () => {
+    expect(await narrate({ action: 'x', outcome: 'ok' }, chat(json('  padded  ')))).toBe('padded');
+    expect(await narrate({ action: 'x', outcome: 'ok' }, chat(json('   ')))).toBeNull();
   });
 
   test('returns null when the model is unavailable — never a fallback sentence', async () => {
@@ -98,7 +112,7 @@ describe('narrate (zero canned replies)', () => {
   });
 
   test('caps the length so a rambling model cannot produce a monologue', async () => {
-    const out = await narrate({ action: 'x', outcome: 'ok' }, chat('ط'.repeat(500)));
+    const out = await narrate({ action: 'x', outcome: 'ok' }, chat(json('ط'.repeat(500))));
     expect(out).not.toBeNull();
     expect(out!.length).toBeLessThanOrEqual(240);
   });
@@ -109,12 +123,62 @@ describe('narrate (zero canned replies)', () => {
       { action: 'setSessionModel', outcome: 'error', errorDetail: 'HTTP 401 for Bearer sk-secret-value' },
       async (_m, _s, u) => {
         user = u;
-        return 'حسنا';
+        return json('حسنا');
       },
     );
     // Error details are passed through, but a redaction step must exist upstream
     // or in the caller; here we assert the narrator never ADDS one.
     expect(user).not.toMatch(/api[_-]?key\s*[:=]/i);
+  });
+
+  test('passes the strict schema to the model so the provider enforces JSON', async () => {
+    // If this regresses to a format-less call, inkling answers with tool-call
+    // syntax and the next test is what the user would hear. Pin the wiring.
+    let format: unknown;
+    await narrate({ action: 'x', outcome: 'ok' }, async (_m, _s, _u, o) => {
+      format = o?.responseFormat;
+      return json('تمام');
+    });
+    expect(format).toEqual(NARRATOR_RESPONSE_FORMAT);
+  });
+});
+
+describe('narrate (control-token leakage can never reach the speaker)', () => {
+  // Measured live 2026-09-27: prompt-only inkling answers narration prompts
+  // with raw `<|message_model|>shell<|content_invoke_tool_json|>…` in 5/5
+  // trials. Every one of these must be a null — never spoken, never displayed.
+  const chat = (reply: string) => async () => reply;
+
+  test('raw tool-call syntax is a null, not a spoken line', async () => {
+    const leaked =
+      '<|message_model|>shell<|content_invoke_tool_json|>{"name":"shell","args":{"command":"pwd && ls -la"}}<|end_message|>';
+    const out = await narrate({ action: 'compact', outcome: 'ok' }, chat(leaked));
+    expect(out).toBeNull();
+  });
+
+  test('plain prose without the JSON wrapper is a null', async () => {
+    // The strict schema is enforced at the provider; anything arriving without
+    // it means the contract already broke upstream, and speaking it would
+    // reward the breakage with airtime.
+    const out = await narrate({ action: 'x', outcome: 'ok' }, chat('تم، خلصت الشغلة'));
+    expect(out).toBeNull();
+  });
+
+  test('JSON without a reply_ar string is a null', async () => {
+    expect(await narrate({ action: 'x', outcome: 'ok' }, chat('{"other": "x"}'))).toBeNull();
+    expect(await narrate({ action: 'x', outcome: 'ok' }, chat('{"reply_ar": 42}'))).toBeNull();
+    expect(await narrate({ action: 'x', outcome: 'ok' }, chat('[1,2]'))).toBeNull();
+  });
+
+  test('the JSON wrapper itself is never part of the spoken line', async () => {
+    const out = await narrate({ action: 'x', outcome: 'ok' }, chat('{"reply_ar": "خلصت"}'));
+    expect(out).toBe('خلصت');
+    expect(out).not.toContain('reply_ar');
+    expect(out).not.toContain('{');
+  });
+
+  test('the narrator runs on the free inkling model', async () => {
+    expect(NARRATOR_MODEL).toBe('thinkingmachines/inkling:free');
   });
 });
 
@@ -130,6 +194,15 @@ describe('NARRATOR_SYSTEM', () => {
 
   test('demands brevity so a confirmation is not a lecture', () => {
     expect(NARRATOR_SYSTEM).toMatch(/قصير|بسيط|كلمة/i);
+  });
+
+  test('demands JSON-only output naming reply_ar, never bare prose', () => {
+    // Inkling emits tool-call syntax when the output shape is only suggested;
+    // the provider-enforced schema plus this instruction close that hole.
+    // The placeholder is not a speakable sentence, so it cannot be parroted.
+    expect(NARRATOR_SYSTEM).toContain('reply_ar');
+    expect(NARRATOR_SYSTEM).toMatch(/JSON/);
+    expect(NARRATOR_SYSTEM).toMatch(/دون أي نص خارج/);
   });
 
   test('offers no worked example the model could parrot', () => {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { OrchestratorError } from '../common/errors.js';
 
-// Cognitive brain — docs/18 §18.3, docs/06 §6.5. Nemotron via OpenRouter,
+// Cognitive brain — docs/18 §18.3, docs/06 §6.5. Inkling via OpenRouter,
 // 2.0 s golden mark / 5.0 s hard abort, validated JSON output, high-stakes gate.
 // Phrasing is synthesized by the model under the RAG-grounded system prompt;
 // anchors in docs are illustrative, never templates.
@@ -120,8 +120,20 @@ export function extractJson(content: string): unknown | null {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(content);
   const candidate = (fenced?.[1] ?? content).trim();
   const start = candidate.indexOf('{');
+  if (start < 0) return null;
+  // Prefer the FIRST complete object: models under a repetition habit emit
+  // `{"reply_ar": "…"}{"reply_ar": "…truncated`, and first-brace-to-last-brace
+  // spans that into unparseable garbage. Measured live on inkling 2026-09-27.
+  const first = firstBalancedObject(candidate, start);
+  if (first !== null) {
+    try {
+      return JSON.parse(first) as unknown;
+    } catch {
+      // Fall through to the legacy whole-span attempt below.
+    }
+  }
   const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
+  if (end <= start) return null;
   try {
     return JSON.parse(candidate.slice(start, end + 1)) as unknown;
   } catch {
@@ -129,12 +141,40 @@ export function extractJson(content: string): unknown | null {
   }
 }
 
+/**
+ * String-aware scan for the first balanced `{…}` starting at `from`.
+ * Quotes, escapes and braces-inside-strings are honored, so Arabic text
+ * containing `{` cannot corrupt the boundary. Returns null when no balanced
+ * object closes.
+ */
+function firstBalancedObject(text: string, from: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = from; i < text.length; i += 1) {
+    const ch = text[i] as string;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(from, i + 1);
+    }
+  }
+  return null;
+}
+
 export interface BrainClient {
   respond(transcript: string, sessionContext: string): Promise<{ output: BrainOutput; elapsedMs: number; goldenBreached: boolean; attempts: number }>;
 }
 
 /** Project-default OpenRouter slug for the brain (coordinator default, verified live). */
-export const BRAIN_OPENROUTER_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
+export const BRAIN_OPENROUTER_MODEL = 'thinkingmachines/inkling:free';
 
 export const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 

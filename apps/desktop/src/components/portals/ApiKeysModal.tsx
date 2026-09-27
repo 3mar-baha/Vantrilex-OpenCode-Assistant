@@ -24,7 +24,7 @@ export interface ApiKeysModalProps {
 const FIELDS = [
   { id: 'groq', label: 'مفتاح Groq', hint: 'مطلوب لـ Whisper STT' },
   { id: 'fish', label: 'مفتاح Fish Audio', hint: 'مطلوب لـ Kareem و Nour TTS' },
-  { id: 'openrouter', label: 'مفتاح OpenRouter', hint: 'مطلوب لـ Dots3 و Nemotron و Inkling' },
+  { id: 'openrouter', label: 'مفتاح OpenRouter', hint: 'مطلوب لـ Dots3 و Inkling' },
 ] as const;
 
 type FieldId = (typeof FIELDS)[number]['id'];

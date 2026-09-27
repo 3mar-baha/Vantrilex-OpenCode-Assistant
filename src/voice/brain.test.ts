@@ -4,6 +4,7 @@ import {
   BRAIN_OPENROUTER_MODEL,
   openRouterChat,
   normalizeBrainJson,
+  extractJson,
 } from './brain.js';
 
 // OpenRouter brain routing TDD — Bearer endpoint, project-default slug,
@@ -23,7 +24,7 @@ const good = {
 
 describe('OpenRouterBrainClient', () => {
   test('uses the project-default OpenRouter slug and Bearer auth', async () => {
-    expect(BRAIN_OPENROUTER_MODEL).toBe('nvidia/nemotron-3-ultra-550b-a55b:free');
+    expect(BRAIN_OPENROUTER_MODEL).toBe('thinkingmachines/inkling:free');
     let seen: { url: string; init: RequestInit } | null = null;
     const fetchImpl = (async (url: string, init: RequestInit) => {
       seen = { url, init };
@@ -231,5 +232,47 @@ describe('openRouterChat (shared P5 transport)', () => {
     const empty = async () =>
       openRouterChat('k', 'm', 's', 'u', mockFetch([{ status: 200, body: { choices: [{ message: { content: ' ' } }] } }]));
     await expect(empty()).rejects.toMatchObject({ code: 'BRAIN_REJECTED', retryable: true });
+  });
+});
+
+describe('extractJson (first complete object wins)', () => {
+  // Measured live 2026-09-27: inkling under a repetition habit emits
+  // `{"reply_ar": "…"}{"reply_ar": "…truncated`. First-brace-to-last-brace
+  // spans that into unparseable garbage and the turn goes silent. The fix
+  // takes the first balanced object; the legacy whole-span parse remains as
+  // fallback for shapes the scanner cannot close.
+  test('two concatenated objects yield the first', () => {
+    expect(extractJson('{"reply_ar": "خلصت"}{"reply_ar": "ناقص')).toEqual({ reply_ar: 'خلصت' });
+  });
+
+  test('the exact live inkling shape parses', () => {
+    const live =
+      '{"reply_ar": "تم تفعيل muse-spark للجلسة، جاهز للمهمة الصعبة."}' +
+      '{"reply_ar": "muse-spark جاهز، يبدو أنه سيحتاج تر';
+    expect(extractJson(live)).toEqual({ reply_ar: 'تم تفعيل muse-spark للجلسة، جاهز للمهمة الصعبة.' });
+  });
+
+  test('braces inside strings do not corrupt the boundary', () => {
+    expect(extractJson('{"reply_ar": "نص { ليس كائناً } تمام"}')).toEqual({
+      reply_ar: 'نص { ليس كائناً } تمام',
+    });
+  });
+
+  test('escaped quotes inside strings do not end the scan early', () => {
+    expect(extractJson('{"reply_ar": "قال \\"تمام\\" ومشى"}')).toEqual({ reply_ar: 'قال "تمام" ومشى' });
+  });
+
+  test('prose around a single object still parses (legacy behavior)', () => {
+    expect(extractJson('sure: {"a": 1} done')).toEqual({ a: 1 });
+  });
+
+  test('fenced blocks still parse (legacy behavior)', () => {
+    expect(extractJson('```json\n{"a": 2}\n```')).toEqual({ a: 2 });
+  });
+
+  test('no JSON, or an unclosable object, is null', () => {
+    expect(extractJson('just words')).toBeNull();
+    expect(extractJson('{"reply_ar": "never closes')).toBeNull();
+    expect(extractJson('')).toBeNull();
   });
 });
