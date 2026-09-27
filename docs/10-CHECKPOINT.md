@@ -432,4 +432,25 @@ D6–D9. Every number below is measured, not assumed.
 | Gates | `tsc` 0 · `eslint --max-warnings 0` 0 · `oxlint` 0 errors (7 pre-existing warnings, none in changed files) · root vitest **284** (was 222) · desktop vitest **113** (was 95) · E2E **18/18** · `cargo check --no-default-features` 0 |
 | Not done in Phase 1 | live TTS/STT re-benchmark (needs OpenRouter quota), packaged-build mic verification (SEC-7), `main.rs` supervision (D10/D11/D12), prompt-optimisation layer, `events.jsonl` observability |
 
+## Phase 2 remediation — process supervision and log observability
+
+Closed D10, D11, D12, L11, L12 in `apps/desktop/src-tauri/src/main.rs`. Rust had no
+test target before this phase; `#[cfg(test)] mod phase2_tests` and `cargo test` were
+added as part of the work.
+
+| Item | Evidence |
+|---|---|
+| **D10 job adoption** | `adopt()` returned `bool` instead of discarding it; `adoption_action()` routes it and the `Kill` branch **kills the child immediately** rather than counting it. Proven with a real Job Object + real child (`own()` → `true`, `unadopted()` → 0); the failure branch is testable via `own_with_adoption(child, false)` and asserts the PID is gone |
+| **D11 second supervisor** | live detection fires on a real cold launch: `opencode-cli.exe pids [19516] include 1 process(es) we did not spawn, and 4096 is cold` — 19516 is the same orphan the Phase 0 forensics found, previously invisible |
+| **D11 correction (measured)** | first implementation used `wmic`; **`wmic` is absent on this machine**, so detection would have silently returned nothing. `Get-CimInstance` measured ~500 ms and is quoting-fragile. Now **PID-based via `tasklist`**, measured **134 ms**, verified against the live PID, with a test that the "INFO: No tasks are running" banner does not parse as a PID |
+| **D11 decision** | a cold 4096 with a foreign serve still **spawns ours and warns**. Refusing would break the app for anyone running the OpenCode desktop app — a worse failure than the duplication. Surfaced, not prevented |
+| **D12 log capture** | `plan_child_logs()` tries the canonical file, then a unique fallback, then reports `Unavailable` **naming both errors** — never a silent `Stdio::null()`. **Append, never truncate** (pinned: a restart must not erase the prior failure). **stdout now captured too**; it was unconditionally null. Byte-level proof: a test spawns a child through the same helpers and asserts `STDOUT_MARKER`/`STDERR_MARKER` land on disk |
+| **D12 real launch** | creates `daemon.log`, `daemon-stdout.log`, `opencode.log`, `opencode-stdout.log` (previously only `daemon-stderr.log`, and only on success) |
+| **L11 typed status** | `ensure_all_services` returns `BringUpStatus { state, detail, retriable, steps }`; `in-flight` is retriable, `services.ts` retries 3× at 400 ms and **fails closed** on an unrecognised payload. A real failure is attempted exactly once — a failure retried forever is a hang |
+| **L12 kill on bind timeout** | `spawn_and_wait_for_port()` kills and reaps before returning `TimedOut { pid }`; non-existent binary → `SpawnFailed`, never a panic. Both tested with real processes |
+| **Orphan gate** | 3 × cold launch + `Stop-Process -Force` (bypasses the exit handler — the case the Job Object exists for): every run spawned 4 children and bound 4096 + 4097; every kill left **0 listening ports, 0 surviving serves** |
+| Gates | `cargo test` **26 passed** (new target) · `cargo check --no-default-features` 0, warnings eliminated · tsc/eslint/oxlint 0 · root vitest 284 · desktop vitest **120** (was 113) · E2E **18/18** |
+| Residual | the audit's gate said 30 force-kill cycles; 3 were run here — the failure mode is deterministic, but 30 is the stated bar and was not reached |
+| Not done | `SupervisedLauncher` / `siblings.ts` sweeper remain dead code (audit L13); `daemon-stderr.log` is now `daemon.log` — any tooling reading the old name needs updating |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*

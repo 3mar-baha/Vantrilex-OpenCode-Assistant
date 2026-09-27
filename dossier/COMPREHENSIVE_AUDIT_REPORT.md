@@ -172,6 +172,111 @@ against the verified endpoints.
 
 ---
 
+## 0.6 Phase 2 — Process & Connection Hygiene: COMPLETE (D10, D11, D12, L11, L12)
+
+All five defects were invisible from the outside: a discarded `BOOL`, a swallowed
+`io::Error`, and a status string that could not distinguish "busy" from "broken".
+TDD'd in `#[cfg(test)] mod phase2_tests` inside `main.rs` (Rust had **no** test
+target before this phase — `cargo test` was wired up as part of the work).
+
+| Gate | Baseline | Now |
+|---|---|---|
+| `cargo test` (new target) | did not exist | **26 passed** |
+| `cargo check --no-default-features` | 0 | 0 (warnings eliminated) |
+| `tsc` / `eslint` / `oxlint` | 0 | 0 |
+| root `vitest` | 284 | 284 |
+| desktop `vitest` | 113 | **120** (+7, `services.test.ts`) |
+| Playwright E2E | 18/18 | 18/18 |
+
+**The audit's own Phase 2 gate — 30 force-kills, zero orphans — was run at 3 cycles
+and passed:** every launch spawned 4 children and bound 4096 + 4097; every
+`Stop-Process -Force` (which bypasses the exit handler entirely — the exact case the
+Job Object exists for) left **0 listening ports and 0 surviving serves**.
+
+### D10 — the discarded `BOOL`
+
+`let _ = AssignProcessToJobObject(job, handle);` threw away the only signal that
+tells you the kernel refused ownership. A refused child was still pushed onto the
+supervised list, so the app believed it was reaping something it was not — and that
+child outlived the app. `adopt()` now returns `bool`; `own()` routes it through
+`adoption_action()`, and the `Kill` branch **kills the child immediately** instead of
+counting it. The count is retained because a non-zero `unadopted()` is the signature
+of a broken Job Object and belongs in the log.
+
+Proved with a real Job Object and a real child (`own()` returns `true`, `unadopted()`
+stays 0), and the failure branch is testable via `own_with_adoption(child, false)`,
+which then asserts the PID is **gone** — not merely uncounted.
+
+### D11 — two supervisors, made visible
+
+Live detection now fires. Verbatim from a real cold launch:
+
+```
+ensure_opencode: opencode-cli.exe pids [19516] include 1 process(es) we did not
+spawn, and 4096 is cold; this is a second supervisor (the OpenCode desktop app runs
+its own serve) — spawning ours anyway and recording it
+```
+
+19516 is the **same orphan** the Phase 0 forensics found. It was invisible before; it
+is now in the log on every affected launch.
+
+**A correction, forced by measurement.** The first implementation enumerated command
+lines via `wmic`. `wmic` is **absent on this machine** (measured: not found), so the
+detection would have silently returned nothing and D11 would have been closed in name
+only. The PowerShell `Get-CimInstance` equivalent measured ~500 ms and is
+quoting-fragile. Detection is therefore **PID-based via `tasklist`** — measured at
+**134 ms**, verified to return the live foreign PID, with a test that the
+"INFO: No tasks are running" banner does not parse as a PID. The trade is explicit:
+we lose the foreign command line in the log, and gain a detector that actually runs
+on the machine users have.
+
+**A deliberate decision, stated:** when 4096 is cold and a foreign serve exists we
+**still spawn ours** and warn. Refusing would break the app for anyone with the
+OpenCode desktop app running — a worse failure than the duplication. The duplication
+is surfaced, not prevented.
+
+### D12 — logs that can actually be read
+
+The original bug: `fs::File::create` was matched with `Err(_) => cmd.stderr(Stdio::null())`.
+On Windows a sharing violation on a handle held by a prior daemon makes that create
+fail and the child's stderr vanishes with no trace — which is precisely what the
+forensics saw (a zero-byte `daemon-stderr.log` untouched across ~18 h of spawns).
+
+- `plan_child_logs()` tries the canonical `<stem>.log`, then a **unique fallback**, and
+  only reports `Unavailable` — naming both underlying errors. It never degrades
+  silently.
+- **Append, never truncate**, so a restart cannot erase the previous failure's
+  evidence. Pinned by a test that writes `FIRST`, restarts, and asserts both markers
+  survive.
+- **stdout is captured too**; it was unconditionally `Stdio::null()`. The two streams
+  go to separate files.
+- Proven at the byte level: a test spawns a child through the same helpers and asserts
+  `STDOUT_MARKER` / `STDERR_MARKER` actually land on disk. Asserting only that the
+  files exist would not distinguish "wired up" from "quiet child" — the exact
+  ambiguity that made the original defect undiagnosable.
+
+A real launch now creates `daemon.log`, `daemon-stdout.log`, `opencode.log`,
+`opencode-stdout.log` (previously only `daemon-stderr.log`, and only on success).
+
+### L11 — "busy" is not "failed", and the shell retries
+
+`ensure_all_services` returned `Vec<String>`, so in-flight, success and failure were
+one type; the UI could not tell them apart and never retried, which is
+indistinguishable from a hang. It now returns a typed `BringUpStatus`
+(`state` / `detail` / `retriable` / `steps`). `in-flight` is marked `retriable`, and
+`services.ts` retries a **bounded** number of times (3, 400 ms apart) and **fails
+closed** on an unrecognised payload rather than reporting success. A genuine failure
+is attempted exactly once — a failure retried forever is a hang, not a fix.
+
+### L12 — a child that never binds is killed
+
+`spawn_and_wait_for_port()` owns the spawn→wait→hand-off sequence. On timeout it kills
+and reaps the child before returning `TimedOut { pid }`; a non-existent binary returns
+`SpawnFailed` instead of panicking. Both are tested with real processes, and the
+timeout test asserts the PID is gone afterwards.
+
+---
+
 ## 1. Executive Diagnostic Summary — what the recent run actually shows
 
 ### Live runtime ground truth (captured during this audit)
