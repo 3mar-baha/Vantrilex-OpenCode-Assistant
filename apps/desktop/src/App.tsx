@@ -1,9 +1,10 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { VoxauraBridge } from './bridge/ws.js';
+import { VoxauraBridge, type ContextMsg } from './bridge/ws.js';
 import { WaveformEmblem } from './components/brand/WaveformEmblem.js';
 import { SiriWaveCanvas, SPEAKER_PALETTE, type WaveSpeaker } from './components/waveform/SiriWaveCanvas.js';
 import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
+import { ContextGauge } from './components/session/ContextGauge.js';
 import { ConfirmPortal } from './components/portals/ConfirmPortal.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import { AudioCapture } from './audio/capture.js';
@@ -49,6 +50,7 @@ export function App(): JSX.Element {
     model: null,
   });
   const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
+  const [context, setContext] = useState<ContextMsg | null>(null);
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const captureRef = useRef<AudioCapture | null>(null);
@@ -105,6 +107,8 @@ export function App(): JSX.Element {
           setVoicePhase(v.phase);
           if (v.transcript !== undefined && v.transcript.length > 0) setLastTranscript(v.transcript);
         },
+        // Phase 4: context-window occupancy for the gauge.
+        onContext: (c) => setContext(c),
         onErrorFrame: (detail) => setNotice({ code: 'transport', detail, level: 'error' }),
         onEvent: (event) => {
           const mapped = matrixForDaemonState(event.state, personaRef.current);
@@ -402,6 +406,19 @@ export function App(): JSX.Element {
 
         <div className="flex flex-col gap-3 border-b border-[#26282e] px-4 py-3">
           <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
+          <ContextGauge
+            {...(context !== null
+              ? {
+                  sessionId: context.sessionId,
+                  used: context.used,
+                  limit: context.limit,
+                  percent: context.percent,
+                }
+              : {})}
+            {...(typeof activeSession === 'string' && activeSession.length > 0
+              ? { activeSessionId: activeSession }
+              : {})}
+          />
           {noSessions && (
             <p data-testid="empty-sessions" title="لا توجد جلسات بعد" className="text-xs text-[#71717a]">
               لا توجد جلسات بعد — افتح جلسة في OpenCode لتظهر هنا.

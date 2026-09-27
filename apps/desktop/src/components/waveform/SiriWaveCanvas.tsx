@@ -150,8 +150,7 @@ export function SiriWaveCanvas({
           else ctx.lineTo(x, y);
         }
         // D8: one stop at the outer curve, the other at the leading curve.
-        ctx.strokeStyle =
-          CURVES.length === 1 ? stops[0] : mixHex(stops[0], stops[1], c / (CURVES.length - 1));
+        ctx.strokeStyle = mixHex(stops[0], stops[1], c / (CURVES.length - 1));
         ctx.globalAlpha = curve.opacity;
         ctx.lineWidth = curve.lineWidth;
         ctx.stroke();

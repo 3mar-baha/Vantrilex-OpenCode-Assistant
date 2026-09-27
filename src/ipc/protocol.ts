@@ -342,6 +342,9 @@ export const UiCommandSchema = z
       'execSessionShell',
       'saveApiKeys',
       'confirm',
+      // Phase 4 — OpenCode 360° session manager.
+      'sessionContext',
+      'createSession',
     ]),
     persona: z.enum(['kareem', 'nour']).optional(),
     minutes: z.number().int().positive().max(1440).optional(),
@@ -361,6 +364,9 @@ export const UiCommandSchema = z
     openrouterKey: z.string().min(1).max(512).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
     confirmId: z.string().min(1).max(128).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
     approve: z.boolean().optional(),
+    /** Phase 4: directory for `createSession`; model context limit for `sessionContext`. */
+    title: z.string().min(1).max(200).optional(),
+    contextLimit: z.number().int().positive().max(10_000_000).optional(),
   })
   .strict();
 export type UiCommand = z.infer<typeof UiCommandSchema>;
@@ -438,3 +444,19 @@ export const VoiceFrameSchema = z.object({
   transcript: z.string().optional(),
 });
 export type VoiceFrame = z.infer<typeof VoiceFrameSchema>;
+
+// --- Context window telemetry (Phase 4). ADDITIVE: an older shell ignores an
+// unknown frame type, so this cannot break a deployed client.
+export const ContextFrameSchema = z.object({
+  type: z.literal('context'),
+  seq: z.number().int().nonnegative(),
+  sessionId: z.string().regex(/^ses_[A-Za-z0-9_-]{1,120}$/),
+  /** Tokens currently occupying the window (not lifetime spend). */
+  used: z.number().int().nonnegative(),
+  /** The model's context window, or null when unknown. */
+  limit: z.number().int().positive().nullable(),
+  /** 0..100, or null when the limit is unknown. Never guessed. */
+  percent: z.number().min(0).max(100).nullable(),
+  messageCount: z.number().int().nonnegative(),
+});
+export type ContextFrame = z.infer<typeof ContextFrameSchema>;

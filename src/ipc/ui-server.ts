@@ -23,8 +23,9 @@ import {
   UI_SUBPROTOCOL,
   UI_WS_PATH,
   VoiceFrameSchema,
-  WsProtocolError,
+  ContextFrameSchema,
   type AgentFrame,
+  type ContextFrame,
   type HelloFrame,
   type InventoryFrame,
   type NoticeFrame,
@@ -32,6 +33,7 @@ import {
   type UiEvent,
   type VoiceFrame,
   type VoicePhase,
+  WsProtocolError,
 } from './protocol.js';
 import { encodeAudioChunk, splitAudio } from './audio.js';
 
@@ -180,7 +182,7 @@ export class UiServer {
   }
 
   /** Broadcast a notice/voice frame to every shell (additive UX signals). */
-  broadcastFrame(frame: NoticeFrame | VoiceFrame): number {
+  broadcastFrame(frame: NoticeFrame | VoiceFrame | ContextFrame): number {
     this.seq += 1;
     const wire = encodeTextFrame(JSON.stringify({ ...frame, seq: this.seq }));
     let sent = 0;
@@ -197,6 +199,33 @@ export class UiServer {
   voice(phase: VoicePhase, transcript?: string): number {
     return this.broadcastFrame(
       VoiceFrameSchema.parse({ type: 'voice', seq: 0, phase, ...(transcript !== undefined ? { transcript } : {}) }),
+    );
+  }
+
+  /**
+   * Publish context-window occupancy (Phase 4).
+   *
+   * `limit`/`percent` are nullable on purpose: when the model's context window
+   * is unknown we say so rather than dividing by a guess, because a gauge that
+   * invents its own denominator is worse than no gauge.
+   */
+  context(
+    sessionId: string,
+    used: number,
+    limit: number | null,
+    percent: number | null,
+    messageCount: number,
+  ): number {
+    return this.broadcastFrame(
+      ContextFrameSchema.parse({
+        type: 'context',
+        seq: 0,
+        sessionId,
+        used,
+        limit,
+        percent,
+        messageCount,
+      }),
     );
   }
 

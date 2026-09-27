@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   ACK_KIND,
   buildInventoryFrame,
+  ContextFrameSchema,
   decodeFrames,
   encodeTextFrame,
   ERROR_KIND,
@@ -270,6 +271,53 @@ describe('frame schemas', () => {
   test('ack and error kinds are namespaced', () => {
     expect(ACK_KIND).toBe('ack');
     expect(ERROR_KIND).toBe('error');
+  });
+
+  // Phase 4 — the context-window frame. Additive: an older shell that does not
+  // know `context` must simply ignore it, which the WS contract guarantees.
+  describe('context frame (Phase 4)', () => {
+    const ok = {
+      type: 'context' as const,
+      seq: 3,
+      sessionId: 'ses_a',
+      used: 10_850,
+      limit: 200_000,
+      percent: 5.4,
+      messageCount: 2,
+    };
+
+    test('round-trips a known-limit frame', () => {
+      const r = ContextFrameSchema.safeParse(ok);
+      expect(r.success).toBe(true);
+      expect(r.success && r.data.percent).toBe(5.4);
+    });
+
+    test('accepts an unknown limit with a null percent rather than guessing', () => {
+      // Divide by a guessed context window is how a gauge ends up lying.
+      const r = ContextFrameSchema.safeParse({ ...ok, limit: null, percent: null });
+      expect(r.success).toBe(true);
+      expect(r.success && r.data.percent).toBeNull();
+    });
+
+    test('rejects a percent outside 0..100', () => {
+      expect(ContextFrameSchema.safeParse({ ...ok, percent: 140 }).success).toBe(false);
+      expect(ContextFrameSchema.safeParse({ ...ok, percent: -1 }).success).toBe(false);
+    });
+
+    test('rejects a non-numeric or negative usage', () => {
+      expect(ContextFrameSchema.safeParse({ ...ok, used: 'lots' }).success).toBe(false);
+      expect(ContextFrameSchema.safeParse({ ...ok, used: -5 }).success).toBe(false);
+    });
+
+    test('rejects a non-opaque session id', () => {
+      expect(ContextFrameSchema.safeParse({ ...ok, sessionId: '../../etc' }).success).toBe(false);
+    });
+
+    test('is a NEW frame type, so an old shell ignores it rather than failing', () => {
+      // The additive contract: unknown types are dropped, never fatal.
+      expect(ContextFrameSchema.shape.type.value).toBe('context');
+      expect(ok.type).not.toBe(HelloFrameSchema.shape.type.value);
+    });
   });
 });
 

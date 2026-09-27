@@ -19,6 +19,17 @@ export interface CommandClient {
   setSessionModel(sessionId: SessionId, model: { id: string; providerID: string }): Promise<unknown>;
   toggleSessionSkill(sessionId: SessionId, skill: string, action: 'attach' | 'detach'): Promise<unknown>;
   execSessionShell(sessionId: SessionId, command: string): Promise<unknown>;
+  /** Phase 4 — session manager. */
+  createSession?(directory: string): Promise<{ sessionId: SessionId }>;
+  contextUsage?(sessionId: SessionId, limit?: number): Promise<ContextUsageLike>;
+}
+
+/** The slice of `ContextUsage` the router needs; keeps this module client-free. */
+export interface ContextUsageLike {
+  readonly used: number;
+  readonly limit: number | null;
+  readonly percent: number | null;
+  readonly messageCount: number;
 }
 
 export interface KeySaver {
@@ -38,6 +49,10 @@ export interface CommandRouterDeps {
    * default (keyless daemons have no speech to stop).
    */
   readonly onAbort?: () => void;
+  /** Phase 4: the directory a new session is created in (the project root). */
+  readonly projectDirectory: () => string;
+  /** Phase 4: publish context-window telemetry to the shell. */
+  readonly onContext?: (sessionId: SessionId, usage: ContextUsageLike) => void;
 }
 
 /** Kinds that may destroy work or touch the host — these require FR-12. */
@@ -164,6 +179,29 @@ export function createCommandHandler(
       case 'abort':
         deps.onAbort?.();
         return { ok: true };
+      // Phase 4 — OpenCode 360° session manager. Both are additive commands;
+      // a client that predates them never sends them.
+      case 'sessionContext': {
+        const session = resolveSession(cmd);
+        if (session === null) return { ok: false, detail: 'no active session' };
+        if (deps.client.contextUsage === undefined) return { ok: false, detail: 'context telemetry unavailable' };
+        const usage = await deps.client.contextUsage(session, cmd.contextLimit);
+        deps.onContext?.(session, usage);
+        // The detail is a number, never a transcript or key material.
+        return {
+          ok: true,
+          detail: usage.percent === null
+            ? `${usage.used} رمز (الحد غير معروف)`
+            : `${usage.percent}% من ${usage.limit ?? 0} رمز`,
+        };
+      }
+      case 'createSession': {
+        if (deps.client.createSession === undefined) return { ok: false, detail: 'session manager unavailable' };
+        const directory = deps.projectDirectory();
+        const created = await deps.client.createSession(directory);
+        deps.switchSession(created.sessionId);
+        return { ok: true, detail: `جلسة جديدة: ${created.sessionId}` };
+      }
       case 'mute':
       case 'deafen':
       case 'arm':

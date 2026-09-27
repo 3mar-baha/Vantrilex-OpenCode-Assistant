@@ -101,7 +101,125 @@ describe('shellCommandError (L21)', () => {
   });
 });
 
-describe('parseModelRef', () => {  test('provider/id splits; bare id defaults to the opencode provider', () => {
+// Phase 4 — the OpenCode 360° session manager commands.
+describe('Phase 4 session manager commands', () => {
+  function harness(over: Partial<{
+    contextUsage: (id: never, limit?: number) => Promise<{ used: number; limit: number | null; percent: number | null; messageCount: number }>;
+    createSession: (dir: string) => Promise<{ sessionId: never }>;
+  }> = {}) {
+    const events: string[] = [];
+    const switched: string[] = [];
+    const h = createCommandHandler({
+      client: {
+        setSessionAgent: async () => undefined,
+        setSessionModel: async () => undefined,
+        toggleSessionSkill: async () => undefined,
+        execSessionShell: async () => undefined,
+        ...(over.contextUsage !== undefined ? { contextUsage: over.contextUsage } : {}),
+        ...(over.createSession !== undefined ? { createSession: over.createSession } : {}),
+      },
+      switchSession: (id) => void switched.push(id),
+      activeSessionId: () => 'ses_a' as never,
+      projectDirectory: () => 'O:/project',
+      onContext: (id, usage) => events.push(`ctx:${id}:${usage.used}:${usage.percent}`),
+    });
+    return { h, events, switched };
+  }
+
+  test('sessionContext publishes telemetry and reports a known limit', async () => {
+    const { h, events } = harness({
+      contextUsage: async () => ({ used: 10_850, limit: 200_000, percent: 5.4, messageCount: 2 }),
+    });
+    const res = await h(cmd({ kind: 'sessionContext', sessionId: 'ses_a' }));
+    expect(res.ok).toBe(true);
+    expect(events).toEqual(['ctx:ses_a:10850:5.4']);
+    expect(res.detail).toContain('%');
+  });
+
+  test('sessionContext says the limit is unknown instead of inventing one', async () => {
+    const { h, events } = harness({
+      contextUsage: async () => ({ used: 10_850, limit: null, percent: null, messageCount: 2 }),
+    });
+    const res = await h(cmd({ kind: 'sessionContext', sessionId: 'ses_a' }));
+    expect(res.ok).toBe(true);
+    expect(res.detail).toContain('غير معروف');
+    expect(res.detail).not.toContain('%');
+    expect(events).toHaveLength(1);
+  });
+
+  test('sessionContext passes the model limit through when supplied', async () => {
+    let seen: number | undefined;
+    const { h } = harness({
+      contextUsage: async (_id, limit) => {
+        seen = limit;
+        return { used: 10, limit: 100, percent: 10, messageCount: 1 };
+      },
+    });
+    await h(cmd({ kind: 'sessionContext', sessionId: 'ses_a', contextLimit: 131_072 }));
+    expect(seen).toBe(131_072);
+  });
+
+  test('sessionContext with no active session is refused, not guessed', async () => {
+    const { h, events } = harness({
+      contextUsage: async () => ({ used: 1, limit: 10, percent: 10, messageCount: 1 }),
+    });
+    const res = await h(cmd({ kind: 'sessionContext', sessionId: '../../etc' }));
+    expect(res).toEqual({ ok: false, detail: 'no active session' });
+    expect(events).toEqual([]);
+  });
+
+  test('sessionContext degrades cleanly when the client lacks telemetry', async () => {
+    const { h } = harness();
+    const res = await h(cmd({ kind: 'sessionContext', sessionId: 'ses_a' }));
+    expect(res).toEqual({ ok: false, detail: 'context telemetry unavailable' });
+  });
+
+  test('createSession uses the project directory and switches to the new session', async () => {
+    let dir = '';
+    const { h, switched } = harness({
+      createSession: async (d) => {
+        dir = d;
+        return { sessionId: 'ses_new1' as never };
+      },
+    });
+    const res = await h(cmd({ kind: 'createSession' }));
+    expect(res.ok).toBe(true);
+    expect(dir).toBe('O:/project');
+    expect(switched).toEqual(['ses_new1']);
+    expect(res.detail).toContain('ses_new1');
+  });
+
+  test('createSession ignores any directory supplied in the payload', async () => {
+    // The directory is the daemon's, never the caller's. A command payload
+    // must not be able to choose where a session is created.
+    let dir = '';
+    const { h } = harness({
+      createSession: async (d) => {
+        dir = d;
+        return { sessionId: 'ses_new2' as never };
+      },
+    });
+    await h(cmd({ kind: 'createSession' } as never));
+    expect(dir).toBe('O:/project');
+  });
+
+  test('createSession degrades cleanly when the client lacks the manager', async () => {
+    const { h, switched } = harness();
+    const res = await h(cmd({ kind: 'createSession' }));
+    expect(res).toEqual({ ok: false, detail: 'session manager unavailable' });
+    expect(switched).toEqual([]);
+  });
+
+  test('the telemetry detail never carries a transcript or key material', async () => {
+    const { h } = harness({
+      contextUsage: async () => ({ used: 10_850, limit: 200_000, percent: 5.4, messageCount: 2 }),
+    });
+    const res = await h(cmd({ kind: 'sessionContext', sessionId: 'ses_a' }));
+    expect(res.detail).not.toMatch(/sk-|gsk_|Bearer/);
+  });
+});
+
+describe('command router (existing behaviour)', () => {  test('provider/id splits; bare id defaults to the opencode provider', () => {
     expect(parseModelRef('anthropic/opus')).toEqual({ providerID: 'anthropic', id: 'opus' });
     expect(parseModelRef('muse-spark')).toEqual({ providerID: 'opencode', id: 'muse-spark' });
   });

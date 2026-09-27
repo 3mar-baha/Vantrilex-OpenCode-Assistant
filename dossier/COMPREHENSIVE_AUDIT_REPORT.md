@@ -307,6 +307,33 @@ Gates: `tsc` 0 · `eslint` 0 · root vitest **322** (was 284) · desktop vitest 
 
 ---
 
+## 0.8 Phase 4 — OpenCode 360° Middleware: COMPLETE
+
+Measured ledger in `docs/10-CHECKPOINT.md`. Four deliverables:
+
+- **Slash interpreter** — a leading `/` is never forwarded to the model. `/compact`,
+  `/new`, `/help` execute natively; anything else is refused *with the available
+  list*; a mid-sentence slash stays prose.
+- **`@` mention resolver** — validates against realpath, so an in-tree symlink
+  pointing out of the tree is rejected even though its literal path looks safely
+  relative. Also closes the old metacharacter guard's `..`/absolute-path blind
+  spots.
+- **Context gauge** — an additive `context` frame plus a HUD gauge that renders
+  only for the active session and **refuses to draw a bar without a known
+  denominator**.
+- **Session manager** — `sessionContext` and `createSession` commands, the latter
+  using the daemon's project directory rather than one from the payload.
+
+**Three real bugs were caught by writing the tests, not by review:** an email
+address was being stripped as a mention; trailing prose punctuation after a
+mention was being deleted; and Windows path separators were leaking into
+agent-facing paths.
+
+Gates: root vitest **372** (was 322) · desktop vitest **135** (was 125) ·
+`cargo test` 26 · E2E 18/18 · tsc/eslint 0.
+
+---
+
 ## 1. Executive Diagnostic Summary — what the recent run actually shows
 
 ### Live runtime ground truth (captured during this audit)

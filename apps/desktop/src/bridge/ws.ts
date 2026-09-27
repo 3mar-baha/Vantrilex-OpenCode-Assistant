@@ -40,6 +40,30 @@ export interface VoiceMsg {
   readonly transcript?: string;
 }
 
+/** Phase 4: context-window occupancy. `limit`/`percent` null when unknown. */
+export interface ContextMsg {
+  readonly type: 'context';
+  readonly seq: number;
+  readonly sessionId: string;
+  readonly used: number;
+  readonly limit: number | null;
+  readonly percent: number | null;
+  readonly messageCount: number;
+}
+
+function isContextMsg(m: ContextMsg): boolean {
+  const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+  return (
+    m.type === 'context' &&
+    typeof m.sessionId === 'string' &&
+    /^ses_[A-Za-z0-9_-]{1,120}$/.test(m.sessionId) &&
+    isInt(m.used) &&
+    isInt(m.messageCount) &&
+    (m.limit === null || (typeof m.limit === 'number' && m.limit > 0)) &&
+    (m.percent === null || (typeof m.percent === 'number' && m.percent >= 0 && m.percent <= 100))
+  );
+}
+
 export type CommandKind =
   | 'abort'
   | 'mute'
@@ -52,7 +76,9 @@ export type CommandKind =
   | 'toggleSessionSkill'
   | 'execSessionShell'
   | 'saveApiKeys'
-  | 'confirm';
+  | 'confirm'
+  | 'sessionContext'
+  | 'createSession';
 
 export interface CommandMsg {
   readonly id: string;
@@ -178,6 +204,8 @@ export interface BridgeOptions {
   /** Fired when a hello arrives with a lower seq — the daemon restarted. */
   readonly onGap?: () => void;
   readonly onClose?: () => void;
+  /** Phase 4: context-window telemetry for the HUD gauge. */
+  readonly onContext?: (ctx: ContextMsg) => void;
   /**
    * Fired once when the bridge is torn down for good (component unmount).
    * Distinct from `onClose`, which fires on every socket drop and is followed
@@ -412,6 +440,19 @@ export class VoxauraBridge {
       const seq = (msg as { seq?: unknown })['seq'];
       if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq;
       this.opts.onAgents?.(agents);
+      return;
+    }
+    if (msg['type'] === 'context') {
+      // Phase 4: context-window occupancy. Validated whole-shape; a malformed
+      // frame surfaces an error and never touches state.
+      const ctx = msg as unknown as ContextMsg;
+      if (!isContextMsg(ctx)) {
+        this.opts.onErrorFrame?.('malformed context frame');
+        return;
+      }
+      const seq = (msg as { seq?: unknown })['seq'];
+      if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq;
+      this.opts.onContext?.(ctx);
       return;
     }
     if (msg['type'] === 'notice') {

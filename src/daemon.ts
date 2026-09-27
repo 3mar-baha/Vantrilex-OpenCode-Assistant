@@ -80,6 +80,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
   ui.onCommand = createCommandHandler({
     client,
+    // Phase 4: the project root serve is scoped to, and the directory a new
+    // session is created in. Never taken from the command payload.
+    projectDirectory: () => options.directory ?? process.cwd(),
+    onContext: (sessionId, usage) => {
+      ui.context(sessionId, usage.used, usage.limit, usage.percent, usage.messageCount);
+    },
     switchSession: (id) => {
       activeSession = id;
       audio?.reset();

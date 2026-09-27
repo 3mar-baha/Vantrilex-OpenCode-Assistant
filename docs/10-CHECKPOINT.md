@@ -473,4 +473,19 @@ decode, one `GainNode` at 0.9) and were not redone.
 | Gates | `tsc` 0 · `eslint --max-warnings 0` 0 · root vitest **322** (was 284) · desktop vitest **125** (was 120) · `cargo test` 26 · E2E **18/18** |
 | Explicitly not done | the O(n²) ingest rewrite into a true ring buffer — the observable contract (bounded memory, truthful count, identical window geometry) is pinned and the cap bounds the copy at 6 windows, so a full rewrite buys no measurable behaviour. L13 dead supervision code, L15/L16/L17, L20, L22, L24 remain open |
 
+## Phase 4 — OpenCode 360° middleware (session manager, context gauge, slash, mentions)
+
+| Item | Evidence |
+|---|---|
+| **Slash interpreter** | `parseSlashCommand` is a pure parser; `slashCommandError` is the policy. `/compact`, `/new`, `/help` are implemented natively; anything else is refused **with the available list**. A leading `/` is never forwarded to the model as prose — a mid-sentence slash (`use /compact here`) is treated as prose. Args are rejected on zero-arg commands (a silent ignore is a bug), length-capped, and control-char screened |
+| **`@` mention resolver** | resolves `@file` / `@agent` / `@skill` in one pass. Traversal, absolute paths, directories, unknowns, and **symlinks that escape the tree** are rejected; the realpath is checked, not just the literal path. Capped at 20 files / 60 tokens so one message cannot enumerate a project |
+| **Mention bugs caught by tests** | (a) `user@example.com` was being stripped as a mention — an `@` glued to a word character is now left alone; (b) trailing prose punctuation (`@README.md.`) was being deleted — it is now preserved; (c) Windows separators leaked into agent-facing paths — output is posix-normalised |
+| **Context frame (additive)** | new `context` frame: `sessionId`, `used`, `limit`, `percent`, `messageCount`. `limit`/`percent` are **nullable and never guessed** — an unknown window renders a count and "الحد غير معروف", not a bar with an invented denominator |
+| **Context gauge (HUD)** | `ContextGauge` next to the session chip. Renders only for the **active** session (a frame arriving after a switch would otherwise label the new session with the old numbers). `data-level` flips at 70 %/85 %; the bar width is clamped to 0–100 |
+| **Session manager commands** | `sessionContext` and `createSession` WS commands. `createSession` uses the **daemon's** project directory, never one from the payload. Both degrade cleanly when the client lacks the capability rather than throwing |
+| **Window-fill vs lifetime-spend** | `contextUsage()` reads `GET /api/session/{id}/context`; the session row's `tokens` stays lifetime spend. Confusing the two makes a gauge climb forever after a compaction — pinned by test |
+| Latent error fixed | a Phase 1 dead branch in `SiriWaveCanvas` (`CURVES.length === 1`, provably false on a const tuple) was a real desktop `tsc` error the root typecheck never covered |
+| Gates | `tsc` 0 (root + desktop) · `eslint --max-warnings 0` 0 · root vitest **372** (was 322) · desktop vitest **135** (was 125) · `cargo test` 26 · E2E **18/18** |
+| Not done here | the prompt-optimisation layer (Phase 5) — it must sit downstream of a trustworthy sanitiser, and the observability `events.jsonl` writer still needs wiring. The GUI to *send* `/compact` and `@mentions` is not built: both are reachable from the voice/command path, but no text input exists in the HUD today, so slash commands currently arrive only via the command channel |
+
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
