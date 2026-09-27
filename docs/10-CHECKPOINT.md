@@ -524,6 +524,43 @@ reachable, so the HUD showed nothing in real use.
 | Tests | root **448** (was 441) · desktop 135 · `cargo test` 26 · E2E 18/18 |
 | Two Phase 1 tests updated | They asserted `limit: null` with no argument — i.e. they pinned the *broken* behaviour. Replaced with tests for the catalog lookup, so the inert state cannot come back |
 
+## First-run `KEYS_MISSING` — investigated, NOT a defect
+
+Recorded because the intermediate conclusion was wrong and the correction is the
+useful part. While verifying the v0.7.0 install I saw a `KEYS_MISSING` telemetry
+row on a vault that provably held three keys, and flagged it as a packaging defect.
+It is not. Controlled experiment on the installed build, using the per-branch
+`resolve: vault=` logging added in the same investigation:
+
+| Scenario | `resolve: vault=` branch | `KEYS_MISSING` | Ports |
+|---|---|---|---|
+| 3-key vault, 3 consecutive cold launches | `ancestor` | **no** — voice live | 4096 + 4097 bound, `daemon.log` 0 B |
+| vault deleted (true first run) | `install default` | **yes** | 4096 + 4097 bound, `daemon.log` 0 B |
+| 3-key vault restored | `ancestor` | **no** — voice live | 4096 + 4097 bound, `daemon.log` 0 B |
+
+**Conclusion.** `KEYS_MISSING` with an empty vault is the designed first-run state:
+the control plane comes up, only voice is disabled, and the HUD shows the
+first-run call to action. `resolve_vault_dir` creates
+`%LOCALAPPDATA%\Voxaura\vault` and seeds it only from a `vault/keyring.dat`
+found among the daemon entrypoint's ancestors; for a real install none exists, so
+a fresh install correctly has no keys until they are saved through the UI. 4 of 4
+launches with keys present were clean. The single original observation did not
+reproduce and is most likely transient on the first launch after an install.
+
+**The `\\?\` prefix theory was wrong, twice.** `plain_path()` is applied to the node
+binary and the daemon entrypoint but not to the vault, which is handed to Node raw
+via `.env()`. That is the documented Rust-to-Node gotcha and it looked like the
+cause — but the resolved path *is* `\\?\`-prefixed and loads correctly, as the log
+line now shows on every run.
+
+**What survived the investigation, and earned its place:** the
+`resolve: vault=` log line on all three branches, plus a non-vacuous Rust test.
+A voice-dead install previously reported one ambiguous row and nothing else, so
+the only available remedy — re-enter the keys — is wrong whenever the path is
+wrong. The new logging diagnosed a real mistake within minutes of being added (a
+restored vault nested as `vault\vault\keyring.dat`, invisible to `Test-Path` on the
+outer path).
+
 ## v0.7.0 — the code that actually ships (2026-09-27)
 
 Version metadata corrected across all nine carriers: `package.json`,
