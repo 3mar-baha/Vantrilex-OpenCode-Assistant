@@ -22,7 +22,7 @@ Windows-first Tauri v2 desktop companion + Node daemon that drives OpenCode v2 (
 
 ```bash
 npm install && npm run build          # tsc -> dist/ (daemon)
-npm run test:vantrilex                # typecheck -> eslint -> oxlint -> vitest(root) -> vitest(desktop)
+npm run test:vantrilex                # typecheck -> typecheck:tests -> eslint -> oxlint -> vitest(root) -> vitest(desktop) -> e2e
 node dist/cli.js live                 # REAL provider round-trip (needs vault keys; burns quota)
 node dist/cli.js doctor               # env presence (never values) + serve health
 
@@ -51,22 +51,11 @@ NSIS (`makensis`) must be installed. Silent install: `Voxaura_<v>_x64-setup.exe 
 ## Gates & their blind spots
 
 - `test:vantrilex` is **typecheck → typecheck:tests → eslint → oxlint → root vitest → desktop vitest → `npm run test:e2e`**. E2E **is** part of it (`package.json`). An earlier version of this file claimed otherwise and was wrong. It needs ports 4096/4097/4197 free, so it fails with `EADDRINUSE` if an installed build is running.
-- Current counts (keep these moving up, never down): root **573 passed + 0 skipped** (46 files) · desktop **153** (24 files) · `cargo test` **27** · E2E **18** across 14 specs. `npm run test:vantrilex` exits 0 on all of these. Measured 2026-09-28 after the Wave-1 remediation swarm. The root count went 491 → 498 *while 70 tests were deleted* (44 unreachable modules quarantined, 30 seam tests added), then 525 → 568 when `src/knowledge/` landed, then 572 → 573 when the 62 latent test type errors were cleared. A falling count is not automatically a regression — check `git log` before "fixing" it.
-- `cargo check --no-default-features` and `cargo build --release` are separate. **No test runner covers `main.rs` token generation**: `ipc.token` and `serve.pass` come from an xorshift64\* seeded with `nanos ^ pid`, not a CSPRNG (`main.rs:460-476`, `:501-517`), and the `fs::write` calls set no restrictive mode (`:478`, `:519`). The daemon's own `randomBytes(32)` (`daemon.ts:746`) is stronger than the supervisor's.
+- Current counts (keep these moving up, never down): root **657 passed + 0 skipped** (53 files) · desktop **142** (24 files) · `cargo test` **48** · E2E **18** across 14 specs. `npm run test:vantrilex` exits 0 on all of these. Measured 2026-09-28. The count moved 491 → 498 *while 70 tests were deleted*, 525 → 568 when `src/knowledge/` landed, 572 → 573 when 62 latent test type errors were cleared, then 655 → 657 in the M0 cleanup. Desktop fell 153 → 141 when 3 dead components were deleted *with their tests* — a legitimate fall, and the only kind worth accepting. A falling count is not automatically a regression — check `git log` before "fixing" it.
+- `cargo check --no-default-features` and `cargo build --release` are separate. **`main.rs` token generation is covered by no gate stage, which is exactly how a real CSPRNG defect survived**: `ipc.token` and `serve.pass` were built from an xorshift64\* seeded `nanos ^ pid`. Now `getrandom` (`main.rs:471`), and permissions are a real Windows **owner-only protected DACL** via `SetEntriesInAclW`/`SetNamedSecurityInfoW` — `fs::set_permissions(0o600)` is a **silent no-op** on Windows (it is `SetFileAttributes`, toggles only `READONLY`, returns `Ok`, changes no ACL). The load-bearing flag is `PROTECTED_DACL_SECURITY_INFORMATION`, which blocks parent inheritance.
 - Almost all network clients are **injected mocks**. E2E drives `stub-daemon.mjs` (real `UiServer` + router, fake control port `:4197`, no providers/vault). Only `node dist/cli.js live` and `scripts/live_console_test.ts` touch real APIs — neither is in the gate, so **green CI does not mean the live loop works**. v0.6.0 is the proof: every gate green, daemon could not boot.
 - Desktop unit tests run in `happy-dom`; root in node.
-- **No stage typechecks the test files.** Root `tsconfig.json` sets
-  `exclude: ["**/*.test.ts"]`, and Vitest transpiles without checking types, so
-  all 46 root test files and the desktop renderer compile under *no* type
-  checker. Run `npm run typecheck:tests` (`tsconfig.tests.json`) to see it:
-  **it currently reports 62 errors across 9 files** — 20 × `TS2554` in
-  `narrator.test.ts` ("Expected 3-4 arguments, but got 2"), 19 × `TS18047` in
-  `opencode-bridge.test.ts`, plus `brain`, `tts`, `command-router`, `client`,
-  `stt`, `audio-pipeline-reset` and `fr12-route`. The script is deliberately
-  **not** in `test:vantrilex`, because adding it would turn the gate red on
-  pre-existing debt. That is a decision, not an oversight — see
-  `dossier/PROJECT_MASTER_DOSSIER.md` §7.8. Note the `narrator.test.ts` cluster
-  sits on the exact signature `docs/personas/WIRING.md` proposes to change.
+- **Test files were typechecked by nothing until v0.7.2.** Root `tsconfig.json` sets `exclude: ["**/*.test.ts"]` and Vitest transpiles without checking types, so all 53 root test files compiled under *no* type checker. That hid **62 real type errors across 9 files** (20 × `TS2554` in `narrator.test.ts` — tests calling `narrate()` one argument short — 19 × `TS18047` in `opencode-bridge.test.ts`, plus `brain`, `tts`, `command-router`, `client`, `stt`, `audio-pipeline-reset`, `fr12-route`). `npm run typecheck:tests` (`tsconfig.tests.json`) now runs in the gate and is at **0**. Two things to carry forward: the errors were **layered**, because a wrong-arity call fails `TS2554` and stops checking later arguments, so fixing arity revealed `errorDetail: undefined` violating `exactOptionalPropertyTypes`; and `exactOptionalPropertyTypes` errors in *tests* are the same class as in production — do not "fix" them by excluding test files again.
 - **Coverage config is dead.** `vitest.config.ts` declares
   `thresholds: { lines: 80 }` but nothing sets `coverage.enabled`, no manifest
   passes `--coverage`, and there is no CI. The threshold has never executed and
@@ -99,17 +88,19 @@ Routing table (every slug is `:free`; the 100%-free constraint is a product deci
 
 Measured free-tier latency (same day, same key): intake p50 **901 ms** · inkling plan p50 **1,950 ms** / max 3,987 · narration p50 **2,615 ms** / max 5,463 · STT 726 ms · TTS 3,196+1,267 ms. Free tiers are slow and lossy — re-measure, don't assume.
 
-## Dead code — `src/` is at 0%, and reachability is measured
+## Dead code — reachability is measured, and `src/` is NOT currently at 0%
 
-**This section replaced a 24.6 % dead-code warning. As of v0.7.0 there is none.**
 Resolve every relative import transitively from `src/daemon.ts` and `src/cli.ts`:
 
 ```
 LIVE production modules : 51
-DEAD production modules : 0
-live source lines       : 8056
-dead source lines       : 0
+DEAD production modules : 7   (all of src/runtime/laya/*)
+live source lines       : 8618
 ```
+
+**The 7 are `src/runtime/laya/*`, and they are dead by decision, not by accident.** The Laya dynamic-import seam is deliberately *not* installed in `daemon.ts`, because `models/laya-m7-int8.onnx` is **294 MB** and `layaLoad` has zero consumers — wiring it would load a 294 MB model on every daemon start to change nothing. `ui-server.ts` therefore reports `layaReady: false`, because a frame that asserts a feature is live when it is not is the exact defect class this project keeps hunting. An earlier revision of this file claimed **0 dead**; that went false when Laya was restored, and it is why the number is re-derived here rather than carried.
+
+**No ONNX ships at all, including VAD.** `tauri.conf.json` bundles only the sidecar and `models/*.onnx` is gitignored, so installed builds have always used the RMS energy fallback at `daemon.ts:509` — Silero has never actually run in a shipped build.
 
 **The reachability scan MUST follow dynamic imports too.** A static-only scan
 (`from './x.js'`) reports `src/runtime/vad.ts` as dead code. It is not: `daemon.ts:338`
@@ -138,6 +129,12 @@ the only trace is a `'mobile'` union member in `runtime/client.ts`) and
 supersession banners. `opencode.json` is **this repo's own dev-session config**, not product
 config. iOS/Android icon sets under `src-tauri/icons/` are inert scaffold. `pnpm-lock.yaml` is
 vestigial; npm is the real package manager.
+
+## Personas and knowledge — what actually reaches the user
+
+**Nour and Kareem currently produce IDENTICAL narration.** Persona reference counts in the four system-prompt files — `narrator.ts`, `coordinator.ts`, `prompt-optimizer.ts`, `brain.ts` — are **all 0**. The only persona effects in the shipped product are the TTS voice id (`daemon.ts:607`), the earcon pitch, and the wave colour. The only interpolation into any system prompt is `'{max}'` → word count. Dialect is locked **Ammani / White Jordanian** with English technical terms preserved; `brain.ts:108` bans newsreader MSA and Beirusi. Do not claim the two assistants speak differently — a Tier-1 chunk once asserted exactly that, and the corpus is supposed to be the source of truth.
+
+**`src/knowledge/` is typechecked, linted, tested and reachable — and influences no spoken word.** Its only production importer is the `knowledge` CLI subcommand. It is deliberately not on the narration path; `docs/personas/WIRING.md` is the reviewed proposal for connecting it, and it has not been done. Retrieval p99 is **0.0128 ms against a 10 ms budget** (780× headroom), measured against minisearch, which lost 3.1× on speed with identical recall — so "optimise the retriever" is a solved non-problem. The real gap is **corpus coverage**: queries like `إيش سويت` return nothing because the fact is not in `capabilities.ts`, not because scoring failed.
 
 ## Vault — the single credential source
 
@@ -177,7 +174,12 @@ Never print/log/commit key material; `doctor` reports counts only. To rotate a k
 - The Windows **taskbar icon is cached** by Explorer keyed on the exe path. Replacing icons does nothing until you stop `explorer.exe`, delete `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db`, and restart it (`ie4uinit.exe -show` is not sufficient).
 - Rust resolves `resource_dir` with a `\\?\` prefix; Node's resolver rejects it — the supervisor strips it before handing paths to the child.
 - A helper that both **prints and returns** in PowerShell captures its diagnostic *strings* as the return value. That silently produced a gate reporting "30/30 ORPHAN" from a number it never measured. Separate `Write-Host` from `return`.
-- **Verify a guard test by breaking the guard.** Disabling the fix and confirming the test fails is the only way to know it isn't vacuous. Several tests here were vacuous until checked.
+- **Verify a guard test by breaking the guard.** Disabling the fix and confirming the test fails is the only way to know it isn't vacuous. Several tests here were vacuous until checked. Two were worse — they **pinned bugs as features**: `capture-permission.test.ts` asserts an idempotency guard that makes every mic-recovery path a silent no-op, and a `ws.test.ts` case *named* "resumes seq" asserted that **no** resume param was sent. A test whose name contradicts its assertion is a smell worth reading for.
+- **A test can be vacuous because your injection silently no-opped.** Twice now, a break-the-guard passed only because the anchor string didn't exist in the file. Always print a confirmation line that the injection landed before trusting a green break.
+- **`scripts/provision-sidecar.mjs` writes its OWN manifest** (and runs its own `npm install`), so **removing a dependency from root `package.json` does not remove it from the installer**. That is how `pino` and `eventsource` kept shipping after being deleted at the root. Change both places, then verify eradication rather than assuming it: `node -e` over the lock, and `npm ls` for extraneous.
+- **`ui.notice()` is the redaction sink and it is the only channel a user can see.** `daemon.ts` interpolates raw provider `err.message` into notices; redaction lives in `UiServer.notice()`, not at those call sites, so a new call site cannot leak. Do not "helpfully" move redaction outward to the callers.
+- **The shell needs `?lastSeq=` on the FIRST connect, not just reconnects.** `lastSeq` is initialised to `-1` as a "never connected" sentinel; keying the query param off `>= 0` omits it on connect #1, the server's `lastSeqOf` then returns `NaN`, and `ui-server.ts` skips the entire replay block. Measured cost: a cold launch sat with an empty session list and agent selector for 25+ s. Floor the value with `Math.max(0, …)` and keep the sentinel.
+- **`normalizeArabic` must not be widened by a dash range.** The class was `U+064B-U+0672`, which swallows the Arabic-Indic digits `U+0660-U+0669`; `المنفذ ٤٠٩٦ مشغول` lost its port number before it was ever scored. Classes are `\u`-escaped so the gaps *are* the comment. Also: minisearch and most JS search libs ship **no** Arabic orthographic handling at all, so a normalizer must be passed in at both index and query time or Arabic recall silently goes to zero.
 
 ## Conventions for changes
 
