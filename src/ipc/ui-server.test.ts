@@ -130,6 +130,21 @@ describe('UiServer authentication (fail-closed)', () => {
     sock.end();
   });
 
+  test('hello does not claim Laya is ready while the seam is uninstalled', async () => {
+    // The frame is the only place a shell learns what the daemon has loaded, so
+    // a value that disagrees with reality is worse than an absent field. This was
+    // a hardcoded `true` with Laya entirely unwired. Flipping it to `true`
+    // without installing the dynamic-import seam must fail here.
+    const server = new UiServer({ token: 'secret-token', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('secret-token'));
+    const hello = JSON.parse(await sock.readText()) as { layaReady: boolean };
+    expect(hello.layaReady).toBe(false);
+    sock.end();
+  });
+
   test('bearer carried as subprotocol token (browser path) upgrades + hello', async () => {
     const server = new UiServer({ token: 'secret-token', contractVersion: '3.1.0' });
     servers.push(server);

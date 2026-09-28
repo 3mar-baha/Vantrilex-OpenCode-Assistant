@@ -85,13 +85,43 @@ describe('VoxauraBridge handshake', () => {
     });
     bridge.connect();
     expect(created).toHaveLength(1);
-    expect(created[0]!.url).toBe(UI_WS_URL);
+    // A FIRST connect must already carry the resume cursor. This assertion used
+    // to be `toBe(UI_WS_URL)` — in a test named "resumes seq" — which pinned the
+    // bug: with no `?lastSeq=`, the server's `lastSeqOf` returns NaN and
+    // `ui-server.ts` skips the whole replay block, so a cold launch received
+    // `hello` and nothing else. Measured live: 25 s, hello only, no inventory and
+    // no agents, because the inventory interval only pushes on change.
+    expect(created[0]!.url).toBe(`${UI_WS_URL}?lastSeq=0`);
     expect(created[0]!.protocols).toEqual([UI_SUBPROTOCOL, 'tok']);
 
     // A hello carrying seq advances the resume cursor.
     created[0]!.peerText(JSON.stringify(hello(7)));
     bridge.dispose();
     expect(created[0]!.closed).toBe(true);
+  });
+
+  test('the resume cursor is sent on the very first connect, not only on reconnect', () => {
+    // Dedicated guard for the first-paint defect. `lastSeq` is initialised to -1
+    // as a "never connected" sentinel, so any code that keys the query param off
+    // `>= 0` silently omits it on connect #1 and the shell starts empty. The
+    // sentinel must stay -1 for the backwards-seq check; only the wire value is
+    // floored. Verified by breaking it: reverting to the `>= 0` form leaves every
+    // other test in this file green, so this test is the only thing holding it.
+    const created: FakeSocket[] = [];
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      createSocket: (url, protocols) => {
+        const s = new FakeSocket(url, protocols);
+        created.push(s);
+        return s;
+      },
+    });
+    bridge.connect();
+    expect(created[0]!.url).toContain('lastSeq=0');
+    // The cursor-advance-on-reconnect half is already covered by
+    // "close schedules one reconnect with resume query" below.
+    bridge.dispose();
   });
 
   test('version mismatch triggers refusal: close, no reconnect', () => {

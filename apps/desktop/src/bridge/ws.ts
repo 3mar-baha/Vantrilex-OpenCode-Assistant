@@ -271,7 +271,14 @@ export class VoxauraBridge {
   connect(): void {
     if (this.disposed || this.refused || this.socket !== null) return;
     const base = this.opts.url ?? UI_WS_URL;
-    const url = this.lastSeq >= 0 ? withQuery(base, 'lastSeq', String(this.lastSeq)) : base;
+    // Always send the resume cursor, floored at 0. Without the param the server's
+    // `lastSeqOf` returns NaN and `ui-server.ts` skips the ENTIRE replay block, so
+    // a first-ever connect received `hello` and nothing else — no inventory, no
+    // agents — and the inventory interval only pushes on change, so a cold launch
+    // sat with an empty session list and agent selector. Measured: 25 s, hello
+    // only. `Math.max(0, ...)` keeps `-1` as the "never connected" sentinel used
+    // by the backwards-seq check below, so only the wire format changes.
+    const url = withQuery(base, 'lastSeq', String(Math.max(0, this.lastSeq)));
     const create = this.opts.createSocket ?? ((u, p) => adaptWebSocket(new WebSocket(u, p)));
     const socket = create(url, [UI_SUBPROTOCOL, this.opts.token]);
     this.socket = socket;

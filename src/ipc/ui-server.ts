@@ -378,7 +378,15 @@ export class UiServer {
       contractVersion: this.contractVersion,
       nodePid: process.pid,
       servePort: SERVE_PORT,
-      layaReady: true,
+      // HONEST BY DEFAULT. This used to be a hardcoded `true`, which told every
+    // shell that Laya System-1 was ready while the daemon never loaded it: the
+    // dynamic-import seam is deliberately NOT installed (laya-m7-int8.onnx is
+    // 294 MB and layaLoad has zero consumers, so wiring it would cost a model
+    // load per daemon start for no behaviour change). A frame that asserts a
+    // feature is live when it is not is the exact defect class this project
+    // keeps hunting, so the default must be the truth. Flip this to `true` in
+    // the same commit that installs the seam, and only once it is verified.
+    layaReady: false,
       seq: this.seq,
       // L22: the daemon is the single source for persona, so a shell that
       // connects after a change must be told, not left on the default.
