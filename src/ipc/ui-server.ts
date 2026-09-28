@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
+import { redactString } from '../common/logger.js';
 import {
   ACK_KIND,
   buildAgentFrame,
@@ -207,8 +208,26 @@ export class UiServer {
     return sent;
   }
 
+  /**
+   * Publish a notice to every connected shell.
+   *
+   * `detail` is REDACTED HERE, at the single sink, rather than at each call
+   * site. Three sites interpolated a raw provider `err.message` into user-facing
+   * Arabic text (daemon.ts:584 STT, :738 brain, :789 TTS), and a provider error
+   * string is untrusted input: it can echo the Authorization header, the key
+   * prefix, or a request URL carrying a credential. The telemetry writer and the
+   * JSON-lines logger were both redacted in Wave 2, but this path was not — so
+   * the one channel that reaches the user's screen was the one that would have
+   * shown a secret. Redacting here covers those three AND any future caller,
+   * which site-by-site wrapping cannot promise.
+   *
+   * `redactString` is idempotent on its own `[REDACTED]` output, so a caller that
+   * pre-redacts is not double-processed.
+   */
   notice(code: string, detail: string, level: 'info' | 'warn' | 'error' = 'warn'): number {
-    return this.broadcastFrame(NoticeFrameSchema.parse({ type: 'notice', seq: 0, code, detail, level }));
+    return this.broadcastFrame(
+      NoticeFrameSchema.parse({ type: 'notice', seq: 0, code, detail: redactString(detail), level }),
+    );
   }
 
   voice(phase: VoicePhase, transcript?: string): number {

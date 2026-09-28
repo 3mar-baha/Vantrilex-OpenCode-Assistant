@@ -145,6 +145,31 @@ describe('UiServer authentication (fail-closed)', () => {
     sock.end();
   });
 
+  test('a notice carrying a provider error is redacted before it reaches a shell', async () => {
+    // The HUD is the one channel a user can see, so an unredacted provider
+    // message is the worst possible leak. The three daemon sites that interpolate
+    // `err.message` (daemon.ts:584 STT, :738 brain, :789 TTS) all flow through
+    // this one sink, so a guard here covers them and any future caller.
+    // Synthetic key material only — never a real credential.
+    const server = new UiServer({ token: 'secret-token', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('secret-token'));
+    await sock.readText(); // hello
+
+    const detail = 'تعذّر تحويل الكلام إلى نص: 401 from https://api.groq.com with sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    server.notice('stt-failed', detail, 'error');
+    const frame = JSON.parse(await sock.readText()) as { type: string; detail: string };
+
+    expect(frame.type).toBe('notice');
+    expect(frame.detail).not.toContain('sk-or-v1-AAAAAAAA');
+    expect(frame.detail).toContain('[REDACTED]');
+    // The useful part of the message must survive, or the notice is useless.
+    expect(frame.detail).toContain('تعذّر تحويل الكلام إلى نص');
+    sock.end();
+  });
+
   test('bearer carried as subprotocol token (browser path) upgrades + hello', async () => {
     const server = new UiServer({ token: 'secret-token', contractVersion: '3.1.0' });
     servers.push(server);
