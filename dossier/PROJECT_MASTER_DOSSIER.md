@@ -693,23 +693,23 @@ Every latent finding from `dossier/COMPREHENSIVE_AUDIT_REPORT.md`, re-verified a
 | L3 | Dead `FileAudioOut` never pruned | **CLOSED** | `sweepOldPlaybackFiles` + `PLAYBACK_RETENTION_MS` |
 | L4 | `AudioContext` never closed | **CLOSED** | disposal path in `App.tsx` unmount effect |
 | L5 | Suspended `AudioContext`, no `resume()` | **CLOSED** | resume on first interaction/enqueue |
-| **L6** | `AudioPipeline` windows `await`-serial; no concurrency cap; `reset()` does not abort in-flight STT | **OPEN** | — |
+| L6 | `AudioPipeline` windows are `await`-serial; no in-flight abort on reset | **CLOSED** (v0.7.0) | generation counter in `reset()`, re-checked after every `await`; 6 tests fail when removed, 15 pre-existing pass either way |
 | L7 | O(n²) buffer concat | **CLOSED** | chunked ingest |
 | L8 | Dead awaited `speakSentences` | **CLOSED** (D4) | `coordinator.ts` fire-and-forget with mandatory `.catch()` |
 | L9 | Fish fetch had no timeout | **CLOSED** | `fetchWithTimeout`, `TtsTimeoutError` |
 | L10 | Persona captured mid-reply | **CLOSED** | `daemon.ts:413-415` snapshots `voiceId` per utterance |
 | L11 | "busy" indistinguishable from "failed" | **CLOSED** | `BringUpStatus` enum, shell retries `in_flight` |
 | L12 | Child that never binds left running | **CLOSED** | `spawn_and_wait_for_port` kills on timeout |
-| **L13** | `SupervisedLauncher`/sweeper looked like supervision but were dead | **CLOSED** | Deleted; `src/launcher` is now 41 L, `probeHealth` only; `docs/26` banner-marked |
+| L13 | `SupervisedLauncher` / `resolvePort` / `siblings.ts` unreachable | **CLOSED** | deleted; `docs/26-AGENT-LAUNCHER.md` carries a supersession banner |
 | L14 | 15 s of blocked webview tears the socket | **CLOSED** | hysteretic limit |
 | L15 | Unbounded WS connections | **CLOSED** | `MAX_CONNECTIONS` 8, oldest-first eviction |
-| L16 | Key rollover counts never surfaced | **OPEN** | — |
-| **L17** | 401/403 advances the key and never surfaces | **OPEN** | *(we hit this: a stale Groq key presented as "keyed")* |
+| L16 | Key rollover counts never surfaced | **CLOSED** (v0.7.0) | `remediationAttempted: 'KeyAdvanced'` now has a producer via `keyAdvanced()`; `doctor` reads the vault instead of env |
+| L17 | Every key release reported success unconditionally | **CLOSED** (v0.7.0) | `withKey()` + `httpStatusOf()`; all 7 call sites release the real status; 6 tests fail when reverted |
 | L18 | No microphone permission surface | **PARTIAL** | distinct failure notices added; grant still unverified (SEC-7) |
 | L19 | Mic stayed hot on blur/minimise | **CLOSED** | `micPolicy` releases on `hidden`; `startMic` is a `useCallback` so restore really re-acquires |
 | L20 | Parked-command map unbounded by TTL sweep | **CLOSED** | `MAX_PARKED` 8; both caps proven non-vacuous by disabling them |
 | L21 | Shell metacharacter guard incomplete | **CLOSED** | `DESTRUCTIVE_KINDS` + confirmation gate |
-| **L22** | Persona not broadcast back to the HUD | **OPEN** | — |
+| L22 | Persona set in Settings is not broadcast back to the HUD | **CLOSED** (v0.7.0) | daemon is the single source; `persona-changed` notice + `hello.persona`; equality guard makes the echo loop unrepresentable |
 | L23 | `UiCommandSchema` not `.strict()` | **CLOSED** | `.strict()` + per-field validation |
 | L24 | 401/403 and non-2xx both `BRAIN_TIMEOUT` | **CLOSED** | `BRAIN_AUTH` / `RATE_LIMITED` / `BRAIN_REJECTED`, applied to **both** chat paths |
 
