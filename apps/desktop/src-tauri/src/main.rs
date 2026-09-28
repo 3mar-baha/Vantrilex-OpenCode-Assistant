@@ -21,7 +21,7 @@
 // through the `ipc_token` command below. The file is NOT created with Unix
 // `0600` — see `restrict_to_owner` for what it actually gets, which is a
 // protected, owner-only DACL, because on Windows `0o600` is a silent no-op.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
@@ -103,11 +103,48 @@ enum AdoptionAction {
     Kill,
 }
 
-fn adoption_action(ok: bool) -> AdoptionAction {
-    if ok {
-        AdoptionAction::Keep
-    } else {
-        AdoptionAction::Kill
+/// What actually happened when we tried to put a child in the job.
+///
+/// C7: this used to be a bare `bool`, computed as
+/// `self.job().is_none_or(|job| job.adopt(&child))`. `is_none_or` returns
+/// `true` when the receiver is `None` — and `None` is precisely what
+/// `Supervisor::job()` yields when `CreateJobObjectW` FAILED. So on a machine
+/// that could not create the job at all, every child reported `adopted = true`,
+/// was pushed into `children`, and left `unadopted` at 0. The graceful reap
+/// became the only net, and the child outlived us holding 4096 — the exact
+/// outcome the note above `adoption_action` says has no safe "ignore".
+///
+/// A three-variant enum makes the swallowed case unrepresentable: mapping "we
+/// have no job" onto "the kernel took it" now has to be written on purpose,
+/// with the pid in hand, in a place a test can reach.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Adoption {
+    /// In the job: the kernel kills it when this process dies.
+    Adopted,
+    /// The job exists and the kernel refused this child.
+    Refused { pid: u32 },
+    /// C7: the job object itself could not be created, so there was nothing to
+    /// adopt into. Reported separately from `Refused` because the two have
+    /// different causes and different fixes — this one makes every future
+    /// child untrackable too, not just this one.
+    NoJob { pid: u32 },
+}
+
+impl Adoption {
+    fn from_bool(ok: bool, pid: u32) -> Self {
+        if ok {
+            Adoption::Adopted
+        } else {
+            Adoption::Refused { pid }
+        }
+    }
+}
+
+fn adoption_action(outcome: Adoption) -> AdoptionAction {
+    match outcome {
+        Adoption::Adopted => AdoptionAction::Keep,
+        // Both failures leave the child outside the job, so both must die now.
+        Adoption::Refused { .. } | Adoption::NoJob { .. } => AdoptionAction::Kill,
     }
 }
 
@@ -343,6 +380,11 @@ struct Supervisor {
     /// the count is retained because a non-zero value is the signature of a
     /// broken Job Object and belongs in the log.
     unadopted: Mutex<usize>,
+    /// C7: children we could not track because `CreateJobObjectW` itself
+    /// failed. Kept apart from `unadopted` because it is a different fault with
+    /// a different blast radius — this one affects every child, now and later,
+    /// so a zero `unadopted` no longer means "supervision is working".
+    no_job: Mutex<usize>,
     #[cfg(windows)]
     job: std::sync::OnceLock<Option<KillOnCloseJob>>,
 }
@@ -361,34 +403,81 @@ impl Supervisor {
     fn own(&self, child: Child) -> bool {
         #[cfg(windows)]
         {
-            let ok = self.job().is_none_or(|job| job.adopt(&child));
-            self.own_with_adoption(child, ok)
+            let outcome = self.adoption_of(&child);
+            self.own_with_adoption(child, outcome)
         }
         #[cfg(not(windows))]
         {
-            self.own_with_adoption(child, true)
+            self.own_with_adoption(child, Adoption::Adopted)
+        }
+    }
+
+    /// C7: the decision, including the case where there IS no job.
+    ///
+    /// Split out of `own` so the `None` arm is reachable from a test. A real
+    /// `CreateJobObjectW` cannot be made to fail portably, so
+    /// `with_unavailable_job` injects a supervisor whose job slot already holds
+    /// `None` — which is byte-for-byte the state of the machine this defect was
+    /// written for.
+    #[cfg(windows)]
+    fn adoption_of(&self, child: &Child) -> Adoption {
+        match self.job() {
+            Some(job) => Adoption::from_bool(job.adopt(child), child.id()),
+            // No job exists. `is_none_or` used to read this as success; the
+            // child would then have been recorded as supervised and would have
+            // outlived us.
+            None => Adoption::NoJob { pid: child.id() },
         }
     }
 
     /// Split out so the failure branch is testable without provoking a real
     /// `AssignProcessToJobObject` error, which cannot be forced portably.
-    fn own_with_adoption(&self, mut child: Child, adopted: bool) -> bool {
-        if adoption_action(adopted) == AdoptionAction::Kill {
+    fn own_with_adoption(&self, mut child: Child, outcome: Adoption) -> bool {
+        if adoption_action(outcome) == AdoptionAction::Kill {
+            let pid = child.id();
             let _ = child.kill();
             let _ = child.wait();
-            if let Ok(mut n) = self.unadopted.lock() {
-                *n += 1;
+            match outcome {
+                // C7: surfaced, not folded into `unadopted`. The two log lines
+                // differ because the operator action differs — one is a retry
+                // of a single child, the other is "this machine cannot create
+                // Job Objects at all".
+                Adoption::NoJob { .. } => {
+                    if let Ok(mut n) = self.no_job.lock() {
+                        *n += 1;
+                    }
+                    log_line(&format!(
+                        "supervisor: JOB-CREATE-FAILED pid={pid} — no job object exists, so the child \
+                         cannot be supervised; it was killed immediately and no future child will be \
+                         tracked either"
+                    ));
+                }
+                _ => {
+                    if let Ok(mut n) = self.unadopted.lock() {
+                        *n += 1;
+                    }
+                    log_line(&format!(
+                        "supervisor: job-adopt-failed pid={pid} — killed immediately (it would have outlived us)"
+                    ));
+                }
             }
-            log_line(&format!(
-                "supervisor: job-adopt-failed pid={} — killed immediately (it would have outlived us)",
-                child.id()
-            ));
             return false;
         }
         if let Ok(mut kids) = self.children.lock() {
             kids.push(child);
         }
         true
+    }
+
+    /// Test-only: a supervisor on a machine where `CreateJobObjectW` failed.
+    #[cfg(all(test, windows))]
+    fn with_unavailable_job() -> Self {
+        let sup = Self::default();
+        // `OnceLock::set` is stable and the cell is never written again, so this
+        // is a faithful stand-in for a failed creation rather than an
+        // uninitialised cell.
+        let _ = sup.job.set(None);
+        sup
     }
 
     /// Test-only: production reports the unadopted count, not the child count.
@@ -404,6 +493,12 @@ impl Supervisor {
 
     fn unadopted(&self) -> usize {
         self.unadopted.lock().map(|n| *n).unwrap_or(0)
+    }
+
+    /// C7: how many children this supervisor could not track because the job
+    /// object does not exist. Zero is the only healthy value.
+    fn no_job(&self) -> usize {
+        self.no_job.lock().map(|n| *n).unwrap_or(0)
     }
 
     fn reap(&self) {
@@ -753,6 +848,211 @@ fn ensure_serve_password() -> Result<String, String> {
     Ok(password)
 }
 
+// ---------------------------------------------------------------------------
+// C2: WHO holds 4097.
+//
+// `port_open()` is a bare TCP connect, so `ensure_daemon` used to return
+// "daemon already on 4097" for ANY process that had the socket — a leftover
+// `python -m http.server`, an unrelated dev server, a second user's app, a
+// half-dead daemon's socket still in TIME_WAIT with a live holder. The status
+// was then `ready`, so the shell asserted a control plane it did not have, and
+// EADDRINUSE was unreachable from this path: a daemon we *did* spawn and fail
+// to bind is reported by `spawn_and_wait_for_port`, not by the port probe.
+//
+// A TCP connect cannot tell those apart, so the holder now carries an identity.
+// The daemon publishes `<runtime>/daemon.owner` AFTER it has bound, containing
+// the owner key this process handed it in its environment. The key is
+// per-install and lives in an owner-only-DACL file exactly like `serve.pass`; a
+// process that never received it cannot write a marker that verifies, which is
+// what turns "something is listening" into "this install's daemon, pid N, is
+// listening".
+//
+// Deliberately NOT used: the IPC token itself. Copying a live credential to a
+// second file to answer a liveness question would double the blast radius of
+// every leak for no gain, and this key authorises nothing but "I am the daemon
+// this shell started".
+// ---------------------------------------------------------------------------
+
+/// Bumped only if the marker shape changes incompatibly.
+const DAEMON_OWNER_VERSION: u32 = 1;
+/// How long a launch waits for a holder that has bound but not yet published.
+const OWNER_SETTLE: Duration = Duration::from_millis(1500);
+
+fn owner_file_path() -> Option<PathBuf> {
+    Some(runtime_dir()?.join("daemon.owner"))
+}
+
+/// Per-install identity handed to the daemon through its environment.
+///
+/// Precedence mirrors `ensure_serve_password`: explicit env, then the
+/// per-install file, then a fresh CSPRNG secret. The value is never logged —
+/// only the fact that one exists.
+///
+/// The key is a NON-CREDENTIAL. It authorises nothing except the statement "I
+/// am the daemon this shell launched", and it is not a substitute for the IPC
+/// token anywhere. It is nevertheless written into `daemon.owner` verbatim, so
+/// that file is created here with the same protected owner-only DACL
+/// (`write_protected_secret`) rather than being created fresh by the daemon,
+/// which has no way to set one — a file created by Node inherits the parent
+/// directory's ACL instead of getting its own.
+///
+/// Note the marker is then overwritten IN PLACE by the daemon rather than
+/// replaced via a temp file + rename, because replacing a file resets its
+/// security descriptor and would throw that DACL away.
+fn ensure_owner_key() -> Result<String, String> {
+    if let Ok(explicit) = std::env::var("VOXAURA_OWNER_KEY") {
+        if !explicit.trim().is_empty() {
+            return Ok(explicit);
+        }
+    }
+    let dir = runtime_dir().ok_or_else(|| "no home directory".to_string())?;
+    let path = dir.join("owner.key");
+    if let Ok(existing) = fs::read_to_string(&path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    let key = generate_secret()?;
+    fs::create_dir_all(&dir).map_err(|e| format!("runtime dir: {e}"))?;
+    write_protected_secret(&path, &key, "owner.key")?;
+    // Only when absent: this runs before the holder probe, and truncating an
+    // existing marker would erase the identity of the very daemon we are about
+    // to adopt.
+    let marker = dir.join("daemon.owner");
+    if !marker.exists() {
+        write_protected_secret(&marker, "", "daemon.owner")?;
+    }
+    Ok(key)
+}
+
+/// The published holder identity. Only the fields this side acts on are
+/// deserialized; `serde` ignores the rest, so a newer daemon that adds a field
+/// still verifies.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaemonOwnerFile {
+    v: u32,
+    pid: u32,
+    owner_key: String,
+}
+
+/// Who is holding 4097.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum DaemonHolder {
+    /// Nothing is listening: spawn.
+    Cold,
+    /// This install's own daemon, alive, holding the port. Adopting it is
+    /// correct and is what a second window of the same app must do.
+    Ours { pid: u32 },
+    /// Something IS listening and it is not provably this install's daemon.
+    Foreign { reason: String },
+}
+
+/// C2: the decision, as a pure function of what the probe found.
+///
+/// `alive` is injected so the "marker names a dead process" case is reachable
+/// without waiting for a real one to die — which is exactly the silent-adoption
+/// case: our daemon is gone, the port has a new holder, and the file on disk
+/// still names the old pid.
+fn holder_from_probe(
+    port_open: bool,
+    raw: Option<&str>,
+    owner_key: &str,
+    alive: &dyn Fn(u32) -> bool,
+) -> DaemonHolder {
+    if !port_open {
+        return DaemonHolder::Cold;
+    }
+    let Some(raw) = raw else {
+        return DaemonHolder::Foreign {
+            reason: "no daemon.owner file, so the holder never received this install's identity"
+                .to_string(),
+        };
+    };
+    let parsed: DaemonOwnerFile = match serde_json::from_str(raw) {
+        Ok(p) => p,
+        Err(e) => {
+            return DaemonHolder::Foreign {
+                reason: format!("daemon.owner is unreadable ({e})"),
+            }
+        }
+    };
+    if parsed.v != DAEMON_OWNER_VERSION {
+        return DaemonHolder::Foreign {
+            reason: format!(
+                "daemon.owner is version {} and this shell speaks version {DAEMON_OWNER_VERSION}",
+                parsed.v
+            ),
+        };
+    }
+    // The key is checked BEFORE the pid is used for anything, so a file written
+    // by anything other than a daemon this shell started cannot influence the
+    // decision beyond "not ours".
+    if parsed.owner_key != owner_key {
+        return DaemonHolder::Foreign {
+            reason: "daemon.owner carries a different install identity (another user, or another Voxaura install)"
+                .to_string(),
+        };
+    }
+    if parsed.pid == 0 {
+        return DaemonHolder::Foreign { reason: "daemon.owner names pid 0".to_string() };
+    }
+    if !alive(parsed.pid) {
+        return DaemonHolder::Foreign {
+            reason: format!(
+                "daemon.owner names pid {}, which is not running — our daemon is gone and something else took the port",
+                parsed.pid
+            ),
+        };
+    }
+    DaemonHolder::Ours { pid: parsed.pid }
+}
+
+/// Is a process with this pid alive? Test-only before C2; now production, because
+/// a marker left behind by a dead daemon is the case `holder_from_probe` exists
+/// to refuse. `tasklist` by PID — no extra crate, and the same bet the rest of
+/// this file already makes for `opencode_pids`.
+fn process_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        let Ok(out) = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+        else {
+            return false;
+        };
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+    }
+    #[cfg(not(windows))]
+    {
+        Path::new(&format!("/proc/{pid}")).exists()
+    }
+}
+
+/// C2: the real probe — reachability, then the published identity.
+fn classify_daemon_holder(port: u16, owner_key: &str) -> DaemonHolder {
+    let deadline = Instant::now() + OWNER_SETTLE;
+    loop {
+        // Cold is the common case on a first launch and must not pay the settle.
+        if !port_open(port) {
+            return DaemonHolder::Cold;
+        }
+        let raw = owner_file_path().and_then(|p| fs::read_to_string(p).ok());
+        let holder = holder_from_probe(true, raw.as_deref(), owner_key, &process_alive);
+        if matches!(holder, DaemonHolder::Ours { .. }) {
+            return holder;
+        }
+        // A holder publishes its identity AFTER binding, so a launch landing in
+        // that window sees a live port and no file. Poll instead of crying
+        // wolf; after the budget, whatever we see is the answer.
+        if Instant::now() >= deadline {
+            return holder;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Return the daemon's IPC token. Fails closed when the token file is absent —
 /// the shell then renders its disconnected state instead of inventing a
 /// credential.
@@ -1003,8 +1303,17 @@ fn ensure_opencode(app: &tauri::AppHandle) -> Result<String, String> {
     match spawn_and_wait_for_port(&mut cmd, OPENCODE_PORT, Duration::from_secs(20)) {
         BindOutcome::Bound(child) => {
             let supervised = app.state::<Supervisor>().own(child);
+            // C7: the child we just spawned was killed because the kernel would
+            // not take it, so there is no serve. The old code logged a WARNING
+            // and returned Ok("started"), which is the same silent-adoption lie
+            // as C2 in a different place: a green step for a process that is
+            // already dead.
             if !supervised {
-                log_line("ensure_opencode: WARNING spawned serve could not be job-adopted and was killed");
+                let msg = format!(
+                    "opencode serve could not be job-supervised and was killed; it is NOT running on {OPENCODE_PORT}"
+                );
+                log_line(&format!("ensure_opencode: WARNING {msg}"));
+                return Err(msg);
             }
             Ok(format!("opencode serve started on {OPENCODE_PORT}"))
         }
@@ -1025,9 +1334,35 @@ fn ensure_opencode(app: &tauri::AppHandle) -> Result<String, String> {
 }
 
 /// Spawn the Node daemon when 4097 is cold. Requires a resolvable entrypoint.
+///
+/// C2: the "already there" branch used to be `port_open(DAEMON_PORT)`, which
+/// adopts ANY holder and reports success. It now asks who the holder is, and an
+/// unidentifiable holder is a FAILURE, not an adoption: claiming `ready` on a
+/// port held by something that cannot answer the WS-4097 contract leaves the
+/// user staring at a disconnected HUD with a green light, and spawning a second
+/// daemon there is worse — it can only fail to bind.
 fn ensure_daemon(app: &tauri::AppHandle, ipc_token: &str) -> Result<String, String> {
-    if port_open(DAEMON_PORT) {
-        return Ok(format!("daemon already on {DAEMON_PORT}"));
+    // Resolved before the port probe because the probe needs it to recognise
+    // our own daemon, and a key that cannot be created must not be a silent
+    // downgrade to "adopt anything".
+    let owner_key = ensure_owner_key()?;
+    match classify_daemon_holder(DAEMON_PORT, &owner_key) {
+        DaemonHolder::Cold => {}
+        DaemonHolder::Ours { pid } => {
+            log_line(&format!(
+                "ensure_daemon: adopted this install's own daemon (pid {pid}) on {DAEMON_PORT}"
+            ));
+            return Ok(format!("adopted our daemon (pid {pid}) already on {DAEMON_PORT}"));
+        }
+        DaemonHolder::Foreign { reason } => {
+            let msg = format!(
+                "something is listening on {DAEMON_PORT} and it is not this install's daemon \
+                 ({reason}); refusing to adopt it and refusing to spawn a second daemon over it — \
+                 close whatever holds the port (another Voxaura window, a leftover dev server) and retry"
+            );
+            log_line(&format!("ensure_daemon: REFUSING to adopt {DAEMON_PORT}: {reason}"));
+            return Err(msg);
+        }
     }
     let resource_dir = app.path().resource_dir().ok();
     log_line(&format!(
@@ -1046,6 +1381,9 @@ fn ensure_daemon(app: &tauri::AppHandle, ipc_token: &str) -> Result<String, Stri
         .stdin(Stdio::null())
         .env("OPENCODE_SERVER_PASSWORD", &password)
         .env("VOICE_RUNTIME_IPC_TOKEN", ipc_token)
+        // C2: the identity the daemon republishes so a LATER launch can tell
+        // this daemon apart from anything else holding 4097. Never logged.
+        .env("VOXAURA_OWNER_KEY", &owner_key)
         .env("VOXAURA_VAULT_DIR", resolve_vault_dir(Some(&entry)));
     // D12: capture BOTH streams. The failure mode this replaces was a silently
     // swallowed File::create error degrading to Stdio::null(), which left a
@@ -1075,8 +1413,14 @@ fn ensure_daemon(app: &tauri::AppHandle, ipc_token: &str) -> Result<String, Stri
     match spawn_and_wait_for_port(&mut cmd, DAEMON_PORT, Duration::from_secs(20)) {
         BindOutcome::Bound(child) => {
             let supervised = app.state::<Supervisor>().own(child);
+            // C7: see `ensure_opencode`. A killed child is not a started daemon,
+            // and `ready` must never describe a control plane that is not there.
             if !supervised {
-                log_line("ensure_daemon: WARNING spawned daemon could not be job-adopted and was killed");
+                let msg = format!(
+                    "daemon could not be job-supervised and was killed; it is NOT running on {DAEMON_PORT}"
+                );
+                log_line(&format!("ensure_daemon: WARNING {msg}"));
+                return Err(msg);
             }
             Ok(format!("daemon started on {DAEMON_PORT}"))
         }
@@ -1121,6 +1465,15 @@ fn ensure_all_services(app: tauri::AppHandle) -> Result<BringUpStatus, String> {
                     sup.unadopted()
                 ));
             }
+            // C7: `unadopted == 0` used to be read as "supervision is fine". It
+            // is not: a machine that could not create the Job Object at all never
+            // increments it, because there is nothing to refuse a child from.
+            if sup.no_job() > 0 {
+                log_line(&format!(
+                    "ensure_all_services: CreateJobObjectW failed — {} child(ren) were unsupervisable and every future child will be too",
+                    sup.no_job()
+                ));
+            }
             Ok(BringUpStatus::failed(&err))
         }
     }
@@ -1161,12 +1514,87 @@ mod phase2_tests {
         // The historical code was `let _ = AssignProcessToJobObject(..)`, so a
         // child that failed to join the job was still tracked and still
         // believed to be supervised.
-        assert_eq!(adoption_action(true), AdoptionAction::Keep);
+        assert_eq!(adoption_action(Adoption::from_bool(true, 1)), AdoptionAction::Keep);
     }
 
     #[test]
     fn adoption_failure_kills_the_child() {
-        assert_eq!(adoption_action(false), AdoptionAction::Kill);
+        assert_eq!(adoption_action(Adoption::from_bool(false, 1)), AdoptionAction::Kill);
+    }
+
+    /// C7: the swallowed case. A `None` job is a FAILURE to adopt, and this is
+    /// the assertion the old `is_none_or` code contradicts: `None` used to be
+    /// read as "adopted".
+    #[test]
+    fn c7_a_missing_job_is_never_reported_as_an_adoption() {
+        assert_eq!(
+            adoption_action(Adoption::NoJob { pid: 4242 }),
+            AdoptionAction::Kill,
+            "a job object that could not be created cannot adopt anything; reporting Keep here is \
+             exactly the C7 defect"
+        );
+        assert_ne!(Adoption::NoJob { pid: 1 }, Adoption::Adopted);
+        assert_ne!(Adoption::Refused { pid: 1 }, Adoption::NoJob { pid: 1 });
+    }
+
+    /// C7, behavioural and against a REAL child. `with_unavailable_job` puts the
+    /// supervisor in the state of a machine where `CreateJobObjectW` failed, so
+    /// `own()` walks the real `None` arm. Reinstating `is_none_or` makes this
+    /// fail on the very first assertion (`supervised` was `true`) and again on
+    /// the child count, which is the orphan the defect produced.
+    #[cfg(windows)]
+    #[test]
+    fn c7_a_job_that_cannot_be_created_is_surfaced_and_the_child_is_killed() {
+        let sup = Supervisor::with_unavailable_job();
+        let child = Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 >nul"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn probe child");
+        let pid = child.id();
+        let supervised = sup.own(child);
+        assert!(
+            !supervised,
+            "a supervisor with no job object must NOT report the child as supervised"
+        );
+        assert_eq!(
+            sup.no_job(),
+            1,
+            "the creation failure must be surfaced in its own counter, not folded into `unadopted`"
+        );
+        assert_eq!(
+            sup.unadopted(),
+            0,
+            "`unadopted` counts kernel refusals; a creation failure is a different fault and \
+             leaving this at 0 is what made the failure invisible"
+        );
+        assert_eq!(
+            sup.child_count(),
+            0,
+            "an unsupervisable child must not be recorded as supervised"
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!process_alive(pid), "an unsupervisable child must be killed, not left running");
+    }
+
+    /// C7, control: a machine that CAN create the job still adopts normally, so
+    /// the guard above is not a blanket "always refuse".
+    #[cfg(windows)]
+    #[test]
+    fn c7_a_healthy_job_is_still_adopted_and_counts_no_failure() {
+        let sup = Supervisor::default();
+        let child = Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 >nul"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn probe child");
+        assert!(sup.own(child), "a working Job Object must still adopt a live child");
+        assert_eq!(sup.no_job(), 0);
+        assert_eq!(sup.unadopted(), 0);
+        assert_eq!(sup.child_count(), 1);
+        sup.reap();
     }
 
     #[test]
@@ -1208,12 +1636,195 @@ mod phase2_tests {
             .expect("spawn probe child");
         let pid = child.id();
         // Simulate the failure branch without needing a real assignment error.
-        sup.own_with_adoption(child, false);
+        sup.own_with_adoption(child, Adoption::Refused { pid });
         assert_eq!(sup.unadopted(), 1);
+        assert_eq!(
+            sup.no_job(),
+            0,
+            "a kernel refusal is not a job-creation failure; the two must not share a counter"
+        );
         assert_eq!(sup.child_count(), 0, "an unadopted child must not be tracked as supervised");
         // Give the kernel a moment to reap it, then assert the PID is gone.
         std::thread::sleep(Duration::from_millis(400));
         assert!(!process_alive(pid), "an unadopted child must be killed, not left running");
+    }
+
+    // ---- C2: "something is on 4097" is not "our daemon is on 4097" --------
+
+    /// A marker as the daemon publishes it. `owner` is the install key.
+    fn owner_json(pid: u32, owner: &str) -> String {
+        format!(
+            r#"{{"v":{DAEMON_OWNER_VERSION},"pid":{pid},"ipcPort":4097,"contractVersion":"3.1.0","ownerKey":"{owner}"}}"#
+        )
+    }
+
+    const KEY: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
+
+    #[test]
+    fn c2_a_cold_port_is_cold() {
+        assert_eq!(
+            holder_from_probe(false, None, KEY, &|_| true),
+            DaemonHolder::Cold
+        );
+        // A marker left over from a dead daemon must not make a COLD port look
+        // occupied — that would spawn nothing and report a healthy daemon.
+        assert_eq!(
+            holder_from_probe(false, Some(&owner_json(4242, KEY)), KEY, &|_| true),
+            DaemonHolder::Cold
+        );
+    }
+
+    /// The two cases the defect merged, in one test so the distinction cannot
+    /// be narrowed away later.
+    #[test]
+    fn c2_our_own_live_daemon_is_told_apart_from_a_bare_tcp_holder() {
+        let ours = holder_from_probe(true, Some(&owner_json(4242, KEY)), KEY, &|p| p == 4242);
+        assert_eq!(ours, DaemonHolder::Ours { pid: 4242 }, "a marker that matches this install and names a live pid IS our daemon");
+
+        // The exact live defect: the port answers, nothing published an identity.
+        // `port_open` alone said "daemon already on 4097" and the status was
+        // `ready`.
+        let squatter = holder_from_probe(true, None, KEY, &|_| true);
+        assert!(
+            matches!(squatter, DaemonHolder::Foreign { .. }),
+            "a holder that never received this install's identity must not be adopted"
+        );
+    }
+
+    #[test]
+    fn c2_a_marker_from_another_install_is_refused() {
+        // Another user's Voxaura, or a second install on this machine. It IS a
+        // daemon, but not OURS, and adopting it means the webview would present
+        // a token this install cannot use.
+        let holder = holder_from_probe(true, Some(&owner_json(4242, "some-other-key")), KEY, &|p| {
+            p == 4242
+        });
+        match holder {
+            DaemonHolder::Foreign { reason } => {
+                assert!(reason.contains("identity"), "the reason must say why: {reason}");
+            }
+            other => panic!("expected Foreign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn c2_a_stale_marker_naming_a_dead_pid_is_refused() {
+        // Our daemon is gone; something else has the port; the file on disk still
+        // names the old pid. This is silent adoption wearing a live marker.
+        let holder = holder_from_probe(true, Some(&owner_json(4242, KEY)), KEY, &|_| false);
+        match holder {
+            DaemonHolder::Foreign { reason } => {
+                assert!(reason.contains("not running"), "the reason must say why: {reason}");
+            }
+            other => panic!("expected Foreign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn c2_a_malformed_or_wrong_version_marker_is_refused_not_parsed_loosely() {
+        for raw in [
+            "",
+            "not json at all",
+            r#"{"v":1,"pid":4242}"#,                       // no ownerKey
+            r#"{"pid":4242,"ownerKey":"k"}"#,               // no version
+            r#"{"v":99,"pid":4242,"ownerKey":"k"}"#,        // future version
+            r#"{"v":1,"pid":0,"ownerKey":"k"}"#,            // impossible pid
+        ] {
+            let holder = holder_from_probe(true, Some(raw), KEY, &|_| true);
+            assert!(
+                matches!(holder, DaemonHolder::Foreign { .. }),
+                "marker {raw:?} must be refused, got {holder:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn c2_a_real_listener_with_no_marker_classifies_as_foreign() {
+        // The end-to-end form: a REAL process holds a REAL port and the decision
+        // is made through the production probe. Nothing is mocked, so this is
+        // the case the defect described rather than a description of it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind squatter port");
+        let port = listener.local_addr().unwrap().port();
+        // A bare accept-loop stands in for "any process with the socket": it
+        // speaks no protocol, but it makes `port_open` true, which is the whole
+        // of what the old probe knew. The loop (not a single accept) is load
+        // bearing — one accept and the listener is dropped, which closes the
+        // port and turns the case back into `Cold`.
+        std::thread::spawn(move || {
+            while listener.accept().is_ok() {}
+        });
+
+        let open = port_open(port);
+        assert!(open, "the probe must see the real holder");
+        let holder = holder_from_probe(open, None, KEY, &process_alive);
+        match holder {
+            DaemonHolder::Foreign { reason } => {
+                assert!(reason.contains("identity"), "unexpected reason: {reason}");
+            }
+            other => panic!("a bare TCP holder must never be adopted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn c2_the_ensure_daemon_status_words_are_distinguishable() {
+        // A refusal has to reach the UI as a failure. `Ok("daemon already on
+        // 4097")` for a stranger is the lie; the refusal must therefore be an
+        // `Err` string that names the port and the reason.
+        let holder = holder_from_probe(true, None, KEY, &|_| true);
+        let DaemonHolder::Foreign { reason } = holder else {
+            panic!("expected a foreign holder");
+        };
+        let msg = format!(
+            "something is listening on {DAEMON_PORT} and it is not this install's daemon ({reason}); refusing to adopt it"
+        );
+        assert!(msg.contains("4097"), "the message must name the port: {msg}");
+        assert!(!msg.contains("ready"), "a refusal must not read as a success: {msg}");
+    }
+
+    /// The liveness leg, against the real kernel — and the one place where the
+    /// naive implementation is wrong.
+    ///
+    /// Measured on this machine: `tasklist /FI "PID eq 0" /NH /FO CSV` prints
+    /// `"System Idle Process","0","Services","0","8 K"`, so `process_alive(0)`
+    /// is TRUE on Windows even though pid 0 is not a process anything can be.
+    /// A marker naming pid 0 would therefore sail through a liveness check,
+    /// which is why `holder_from_probe` rejects it before asking. Deleting that
+    /// guard makes this test fail.
+    #[cfg(windows)]
+    #[test]
+    fn c2_pid_zero_is_refused_even_though_the_os_calls_it_alive() {
+        assert!(
+            process_alive(0),
+            "tasklist really does report System Idle Process as pid 0 — if this ever stops \
+             holding, the pid-0 guard is merely belt-and-braces, not load-bearing"
+        );
+        let holder = holder_from_probe(true, Some(&owner_json(0, KEY)), KEY, &process_alive);
+        match holder {
+            DaemonHolder::Foreign { reason } => {
+                assert!(reason.contains("pid 0"), "the reason must name the pid: {reason}");
+            }
+            other => panic!("a marker naming pid 0 must be refused, got {other:?}"),
+        }
+    }
+
+    /// The liveness leg against a real death, not a fake pid: a child we spawn
+    /// and reap must read as gone, or the stale-marker refusal is theatre.
+    #[cfg(windows)]
+    #[test]
+    fn c2_a_reaped_child_reads_as_not_running() {
+        let mut child = Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 >nul"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn probe child");
+        let pid = child.id();
+        assert!(process_alive(pid), "a running child must read as alive");
+        let _ = child.kill();
+        let _ = child.wait();
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!process_alive(pid), "a reaped child must read as gone");
     }
 
     // ---- D12: child stdout AND stderr must land somewhere diagnosable ----
@@ -1559,24 +2170,11 @@ mod phase2_tests {
     }
 
     // ---- helpers -------------------------------------------------------
-
-    fn process_alive(pid: u32) -> bool {
-        #[cfg(windows)]
-        {
-            // `tasklist` by PID: no extra crates, and this is a test-only path.
-            let out = Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-                .output();
-            match out {
-                Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")),
-                Err(_) => false,
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            Path::new(&format!("/proc/{pid}")).exists()
-        }
-    }
+    //
+    // `process_alive` used to live here. It is production code now (C2): a
+    // `daemon.owner` left behind by a dead daemon is exactly the case the
+    // holder classification must refuse, so it sits at module scope beside the
+    // probe that uses it and is shared by the tests.
 }
 
 // ---------------------------------------------------------------------------

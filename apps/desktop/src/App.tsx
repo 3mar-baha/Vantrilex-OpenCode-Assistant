@@ -68,10 +68,26 @@ export function App(): JSX.Element {
   useAutoSize(cardRef, { paddingY: 16 });
   const lastFrameAt = useRef<number>(Date.now());
   const personaRef = useRef(persona);
+  const botMutedRef = useRef(botMuted);
   const cmdCounter = useRef(0);
   useEffect(() => {
     personaRef.current = persona;
   }, [persona]);
+
+  /**
+   * W6 — the assistant-mute button used to flip a boolean and send a command
+   * the daemon discarded, so it muted nothing and acked `ok:true`.
+   *
+   * The ref exists because the player is created LAZILY, on the first downlink
+   * chunk: a mute pressed before the assistant had ever spoken would otherwise
+   * be lost, and the very next chunk would play through an "unmuted" player.
+   * The effect is the player sync (an external system); the indicator is reset
+   * in the event that caused the change, not here.
+   */
+  useEffect(() => {
+    botMutedRef.current = botMuted;
+    playerRef.current?.setMuted(botMuted);
+  }, [botMuted]);
 
   const nextCmdId = (): string => {
     cmdCounter.current += 1;
@@ -148,6 +164,9 @@ export function App(): JSX.Element {
                   window.setTimeout(() => setSpeakingState(false), 1500);
                 },
               });
+              // The player did not exist when the user pressed mute, so it was
+              // never told. Apply the persisted state before any chunk lands.
+              playerRef.current.setMuted(botMutedRef.current);
             } catch {
               return;
             }
@@ -380,10 +399,32 @@ export function App(): JSX.Element {
     send({ id: nextCmdId(), kind: 'deafen' }, 'تعذّر تغيير حالة الميكروفون');
   };
 
+  /**
+   * W6 — assistant mute is now RENDERER-LOCAL, and that is the whole fix.
+   *
+   * It used to `send({kind:'mute'})`. The daemon's router answers `mute`,
+   * `deafen` and `arm` in one arm with no side effect at all
+   * (`src/orchestrator/command-router.ts:227-230`) and returns `ok:true`, so
+   * the button acknowledged a success it did not deliver and then cost a free-
+   * tier Inkling narration describing a microphone that was never silenced.
+   * A control the daemon does not own cannot be confirmed by the daemon, so
+   * the renderer applies the mute itself and confirms it the only honest way:
+   * the audio stops. No `ok:true`, no model call, no canned success string
+   * (Phase 5 forbids those) — the glyph, the tooltip and `aria-pressed` are
+   * the whole confirmation.
+   */
   const toggleBotMute = (): void => {
     const next = !botMuted;
     setBotMuted(next);
-    send({ id: nextCmdId(), kind: 'mute' }, 'تعذّر تغيير حالة الصوت');
+    // Applied here as well as in the effect so the gate moves on the same tick
+    // as the click, and so a mute pressed before the player exists is still
+    // recorded for the lazy `onAudio` path.
+    botMutedRef.current = next;
+    playerRef.current?.setMuted(next);
+    // `setMuted` fires `onEnd`, which only clears the indicator after a 1500 ms
+    // latch — so for a second and a half a silenced shell would still claim to
+    // be talking. Barge-in clears it outright for the same reason (`:235-236`).
+    if (next) setSpeakingState(false);
   };
 
   /**
@@ -412,12 +453,19 @@ export function App(): JSX.Element {
   // D8: the thread wears the active speaker's gradient. While the assistant
   // speaks it takes the persona's palette; otherwise the thread belongs to the
   // human at the microphone.
-  const waveSpeaker: WaveSpeaker = speaking || voicePhase === 'speaking' ? (persona === 'nour' ? 'nour' : 'kareem') : 'user';
+  //
+  // W6: gated on `botMuted`. `speaking` already stays false while muted (the
+  // player drops the chunk before `started` flips), but the daemon's `voice`
+  // phase keeps reporting `speaking` for as long as it synthesises — so without
+  // this the shell announces the assistant is talking out loud while the user
+  // has explicitly silenced it. Muting must stop more than the sound.
+  const audible = !botMuted && (speaking || voicePhase === 'speaking');
+  const waveSpeaker: WaveSpeaker = audible ? (persona === 'nour' ? 'nour' : 'kareem') : 'user';
 
   const statusPill =
     bridge !== 'live'
       ? { text: '● غير متصل', state: 'offline' }
-      : speaking || voicePhase === 'speaking'
+      : audible
         ? { text: '● يتحدث الآن…', state: 'speaking' }
         : voicePhase === 'thinking'
           ? { text: '● جارٍ التفكير…', state: 'processing' }

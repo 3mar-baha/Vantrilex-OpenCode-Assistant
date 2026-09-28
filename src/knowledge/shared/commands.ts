@@ -68,12 +68,20 @@ export const COMMAND_CHUNKS: readonly SharedChunk[] = [
   },
   {
     id: 'cmd-persona-effect',
-    source: 'src/daemon.ts:607; apps/desktop/src/audio/earcons.ts; src/orchestrator/narrator.ts',
+    // W6: `apps/desktop/src/audio/earcons.ts` was deleted as dead code (zero
+    // production importers, proven by an import-graph scan). The provenance had
+    // to move with it, AND the two sentences that asserted a persona-specific
+    // "completion earcon tone" had to go: fixing the citation while leaving the
+    // claim would have left Tier 1 asserting a deleted feature — the exact
+    // defect class this corpus exists to prevent. The two surviving effects are
+    // the Fish voice id (`daemon.ts:607` -> `common/brands.ts:22`) and the wave
+    // gradient (`SiriWaveCanvas.tsx:20`, selected by persona in `App.tsx`).
+    source: 'src/daemon.ts:607; src/common/brands.ts:22; apps/desktop/src/components/waveform/SiriWaveCanvas.tsx:20; src/orchestrator/narrator.ts',
     text:
-      'اختيار الشخصية يغيّر الصوت ونغمة التنبيه ولون الموجة فقط. ' +
+      'اختيار الشخصية يغيّر الصوت ولون الموجة فقط. ' +
       'العبارة المنطوقة نفسها متطابقة بين الشخصيتين اليوم. ' +
-      'Selecting a persona changes only the voice id, the completion earcon tone and the ' +
-      'wave colour. The spoken wording is currently IDENTICAL for both personas: narrator.ts ' +
+      'Selecting a persona changes only the voice id and the wave colour. ' +
+      'The spoken wording is currently IDENTICAL for both personas: narrator.ts ' +
       'contains no persona reference at all, and the dossier instructions are NOT yet ' +
       'injected into it. Never claim the two assistants speak differently.',
   },

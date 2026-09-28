@@ -2,7 +2,6 @@ import { act } from 'react-dom/test-utils';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ConfirmPortal } from './ConfirmPortal.js';
-import { CredentialPortal } from './CredentialPortal.js';
 
 // G2 TDD — portal behavior under happy-dom: mount outside app root, focus
 // trap, Esc closes, accessible names. No network, no daemon.
@@ -50,13 +49,10 @@ describe('ConfirmPortal (FR-12 T2 surface)', () => {
   });
 });
 
-describe('CredentialPortal (counts only)', () => {
-  test('shows pool counts and never key material', () => {
-    mount(<CredentialPortal groqKeys={3} fishKeys={2} openrouterKeys={1} onClose={() => undefined} />);
-    const text = document.body.textContent ?? '';
-    expect(document.body.querySelector('[data-testid="groq-count"]')?.textContent).toContain('3');
-    expect(document.body.querySelector('[data-testid="fish-count"]')?.textContent).toContain('2');
-    expect(document.body.querySelector('[data-testid="openrouter-count"]')?.textContent).toContain('1');
-    expect(text).not.toMatch(/gsk_|sk-fish_|sk-or-|Bearer /);
-  });
-});
+// W6 — `CredentialPortal.tsx` was deleted. It rendered key POOL COUNTS, and no
+// channel carries counts to the renderer: the only place they exist is CLI
+// console output (`src/cli.ts:71`, `src/voice/key-store.ts:71`). The API-keys
+// window renders `ApiKeysModal` (KeysView.tsx:93), which shows per-field
+// presence, not counts. Wiring it would have meant a new daemon->renderer frame,
+// which is outside the desktop write set. Its test went with it: a green test
+// on unreachable code is the defect, not the mitigation.

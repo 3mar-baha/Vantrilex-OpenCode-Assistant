@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
+import { createLogger, redactObject, type Logger } from '../common/logger.js';
 
 // Machine diagnostics bus — G4C. Target: ~/.opencode/logs/voice-runtime.jsonl.
 // Anti-injection invariant: there is NO transcript or free-text field anywhere
@@ -75,6 +76,12 @@ export type TelemetryInput = z.infer<typeof RecordInputSchema>;
 export interface TelemetryWriterOptions {
   readonly flushMs?: number;
   readonly maxBytes?: number;
+  /**
+   * Diagnostic sink for writer-level failures. Defaults to a redacting stderr
+   * logger. Injectable so a test can assert what was said without capturing
+   * the process's streams.
+   */
+  readonly logger?: Logger;
 }
 
 export class TelemetryWriter {
@@ -83,6 +90,7 @@ export class TelemetryWriter {
   private timer: NodeJS.Timeout | null = null;
   private readonly flushMs: number;
   private readonly maxBytes: number;
+  private readonly logger: Logger;
 
   constructor(
     private readonly file: string,
@@ -90,16 +98,27 @@ export class TelemetryWriter {
   ) {
     this.flushMs = options.flushMs ?? 500;
     this.maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
+    this.logger = options.logger ?? createLogger('warn', { bindings: { scope: 'telemetry' } });
   }
 
-  /** Validate (throws on any unvalidated value) and buffer one row. */
+  /**
+   * Validate (throws on any unvalidated value) and buffer one row.
+   *
+   * The schema closes every enum and has no free-text field, which is what makes
+   * injection impossible on this channel — but `sessionId` is `z.string().min(1)`,
+   * so a caller that passes a session id derived from an error string could still
+   * land provider key material in `~/.opencode-voice-runtime/voice-runtime.jsonl`,
+   * a file that persists on disk indefinitely. The row is therefore redacted
+   * STRUCTURALLY, before `JSON.stringify`, which also guarantees the scrubbed
+   * field values stay quoted and the line stays parseable JSONL.
+   */
   record(input: TelemetryInput): number {
     const parsed = RecordInputSchema.parse(input);
-    const row = JSON.stringify({
+    const row = JSON.stringify(redactObject({
       timestamp: new Date().toISOString(),
       seq: this.seq,
       ...parsed,
-    });
+    }));
     this.pending.push(row);
     const assigned = this.seq;
     this.seq += 1;
@@ -119,7 +138,20 @@ export class TelemetryWriter {
     this.rotateIfNeeded();
     const batch = this.pending.join('\n') + '\n';
     this.pending = [];
-    appendFileSync(this.file, batch, 'utf8');
+    try {
+      appendFileSync(this.file, batch, 'utf8');
+    } catch (err) {
+      // The batch is already dequeued, so these rows are gone. Both the daemon's
+      // timer (`.catch(() => undefined)`) and `close()` swallow this, which made
+      // a full disk or a revoked ACL in `~/.opencode-voice-runtime/` completely
+      // silent. One redacted line per failure is bounded and diagnosable.
+      this.logger.warn('telemetry flush failed; batch dropped', {
+        file: this.file,
+        rows: batch.split('\n').length - 1,
+        error: err,
+      });
+      throw err;
+    }
   }
 
   async close(): Promise<void> {

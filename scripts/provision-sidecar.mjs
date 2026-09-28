@@ -46,11 +46,17 @@ const manifest = {
   private: true,
   version: '0.7.2',
   type: 'module',
+  // This manifest is INDEPENDENT of the root package.json: it is written here
+  // and `npm install` runs against it, so a dependency removed from the root is
+  // still shipped inside the installer until it is removed from BOTH places.
+  // That is how `pino` survived the v0.7.2 payload despite `createLogger` having
+  // no callers: the root rewrite (Wave 2) freed it, and this line is what
+  // actually prunes it. `eventsource` was the same case, removed at root in the
+  // same wave. Both were verified to have zero static importers in the built
+  // `dist/` output before removal.
   dependencies: {
     'groq-sdk': '^0.9.0',
-    'eventsource': '^3.0.0',
     'lru-cache': '^11.0.0',
-    'pino': '^9.0.0',
     'zod': '^3.23.0',
   },
 };

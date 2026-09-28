@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { OrchestratorError } from './common/errors.js';
@@ -56,6 +56,12 @@ export interface DaemonOptions {
   readonly inventoryIntervalMs?: number;
   readonly vaultPath: string;
   readonly directory?: string;
+  /**
+   * Where the runtime state lives (token, logs, telemetry, the `daemon.owner`
+   * marker). Defaults to `~/.opencode-voice-runtime` and is overridden only by
+   * tests, which would otherwise write into the real install's directory.
+   */
+  readonly runtimeDir?: string;
 }
 
 export interface DaemonHandle {
@@ -67,6 +73,104 @@ export interface DaemonHandle {
   /** The persona the daemon currently speaks with (real server-side state). */
   activePersona(): 'kareem' | 'nour';
   stop(): Promise<void>;
+}
+
+/** Contract version of the `daemon.owner` marker. Bumped on an incompatible change. */
+export const DAEMON_OWNER_VERSION = 1;
+/** The marker the Tauri shell reads to tell "our daemon" from "a stranger on 4097". */
+export const DAEMON_OWNER_FILE = 'daemon.owner';
+/** The install identity the shell hands the daemon in its environment. */
+export const DAEMON_OWNER_KEY_ENV = 'VOXAURA_OWNER_KEY';
+
+export interface DaemonOwnerMarker {
+  readonly v: number;
+  readonly pid: number;
+  readonly ipcPort: number;
+  readonly contractVersion: string;
+  /**
+   * The install identity verbatim. NOT a credential: it authorises nothing but
+   * the statement "I am the daemon this shell launched", and the shell holds the
+   * real WS-4097 bearer separately. It is stored plainly because a one-way
+   * transform would need a hash in two languages, and a hash nobody gains
+   * anything from on a loopback liveness question.
+   */
+  readonly ownerKey: string;
+}
+
+export function daemonOwnerMarker(fields: {
+  readonly pid: number;
+  readonly ipcPort: number;
+  readonly contractVersion: string;
+  readonly ownerKey: string;
+}): DaemonOwnerMarker {
+  return {
+    v: DAEMON_OWNER_VERSION,
+    pid: fields.pid,
+    ipcPort: fields.ipcPort,
+    contractVersion: fields.contractVersion,
+    ownerKey: fields.ownerKey,
+  };
+}
+
+/**
+ * Validate a marker against the identity WE hold. Returns `null` for anything
+ * that is not provably our own live daemon — and never throws, because a
+ * truncated or hostile file on the port path must degrade to "not ours", not to
+ * a crash on launch.
+ *
+ * This is the Node mirror of `holder_from_probe` in
+ * `apps/desktop/src-tauri/src/main.rs`; the two must agree on every shape or a
+ * launch will refuse its own daemon. The tests in `daemon.test.ts` and
+ * `phase2_tests` assert the same shapes on both sides.
+ */
+export function parseDaemonOwnerMarker(raw: string, expectedKey: string): DaemonOwnerMarker | null {
+  if (expectedKey.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const m = parsed as Partial<Record<'v' | 'pid' | 'ipcPort' | 'contractVersion' | 'ownerKey', unknown>>;
+  if (m['v'] !== DAEMON_OWNER_VERSION) return null;
+  if (typeof m['pid'] !== 'number' || !Number.isInteger(m['pid']) || m['pid'] <= 0) return null;
+  if (typeof m['ipcPort'] !== 'number' || !Number.isInteger(m['ipcPort']) || m['ipcPort'] <= 0) return null;
+  if (typeof m['contractVersion'] !== 'string') return null;
+  if (m['ownerKey'] !== expectedKey) return null;
+  return {
+    v: DAEMON_OWNER_VERSION,
+    pid: m['pid'],
+    ipcPort: m['ipcPort'],
+    contractVersion: m['contractVersion'],
+    ownerKey: expectedKey,
+  };
+}
+
+/** The TTS half of barge-in. Structural, so the seam is testable with the real class. */
+export interface SpeechGateLike {
+  abort(): void;
+}
+
+/**
+ * Barge-in: what an `abort` command actually does.
+ *
+ * C4. This used to be `() => speechGate.abort()` — one line that only stopped
+ * PLAYBACK. The turn itself was left running: a `think()` already parked in the
+ * planner finished, its answer was discarded by the pipeline's post-await
+ * generation check, and the user paid for a planning call whose result was never
+ * spoken. Cancelling means the request, not the audio.
+ *
+ * Two generations, deliberately, because they guard different awaits:
+ *   * `gate`     — TTS sentence synthesis and broadcast, per sentence;
+ *   * `pipeline` — the STT → think → dispatch turn, per await.
+ *
+ * `pipeline` is a getter because `rebuildVoice` can replace the pipeline while
+ * a command is in flight, and an abort must reach the CURRENT one.
+ */
+export function abortTurn(gate: SpeechGateLike, pipeline: () => { cancel(): void } | null): void {
+  gate.abort();
+  pipeline()?.cancel();
 }
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
@@ -102,10 +206,68 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
     return envCachePromise;
   };
+  const runtimeDir = options.runtimeDir ?? join(homedir(), '.opencode-voice-runtime');
+  const contractVersion = options.contractVersion ?? '3.1.0';
   const ui = new UiServer({
     token: options.ipcToken,
-    contractVersion: options.contractVersion ?? '3.1.0',
+    contractVersion,
   });
+  /**
+   * C2: publish who owns the IPC port, so the shell can tell this daemon from
+   * anything else that has bound 4097.
+   *
+   * The shell used to answer that question with a bare TCP connect, so it
+   * adopted ANY holder and reported `ready` — including a leftover dev server
+   * that cannot answer the WS-4097 contract at all. The marker is written AFTER
+   * `ui.start()` resolves, i.e. only by a daemon that really is listening, and
+   * it is removed on `stop()` so a clean exit leaves no stale claim.
+   *
+   * With no key in the environment (a hand-started `cli.js serve`, a dev script)
+   * nothing is published: such a daemon cannot prove it is ours, and a later
+   * launch will say so instead of silently adopting it. That is the correct
+   * answer, not a degraded one.
+   */
+  const ownerKey = (process.env[DAEMON_OWNER_KEY_ENV] ?? '').trim();
+  const ownerPath = join(runtimeDir, DAEMON_OWNER_FILE);
+  const publishOwner = (boundPort: number): void => {
+    if (ownerKey.length === 0) return;
+    const marker = daemonOwnerMarker({
+      pid: process.pid,
+      ipcPort: boundPort,
+      contractVersion,
+      ownerKey,
+    });
+    try {
+      mkdirSync(runtimeDir, { recursive: true });
+      // In place, never temp-file + rename: a rename REPLACES the file and
+      // resets its security descriptor, which would discard the owner-only DACL
+      // the shell applied when it pre-created this path (main.rs,
+      // `ensure_owner_key`). A torn read can only make the shell refuse, which
+      // is the fail-closed direction.
+      writeFileSync(ownerPath, JSON.stringify(marker), { mode: 0o600 });
+    } catch (err) {
+      // Not fatal: the daemon is listening and serving. But the next launch will
+      // be told 4097 is held by a stranger, so say so rather than leaving the
+      // user to work it out from a refused bring-up.
+      ui.notice(
+        'daemon-owner-unpublished',
+        'تعذّر نشر هوية الخدمة على المنفذ — سيُبلّغ التطبيق التالي أن المنفذ مشغول من قبل عملية أخرى.',
+        'warn',
+      );
+      console.error('daemon: could not publish daemon.owner:', err instanceof Error ? err.message : err);
+    }
+  };
+  /** Only ever removes OUR claim: a successor that already replaced it wins. */
+  const clearOwner = (): void => {
+    if (ownerKey.length === 0) return;
+    try {
+      const raw = readFileSync(ownerPath, 'utf8');
+      if (parseDaemonOwnerMarker(raw, ownerKey) === null) return;
+      rmSync(ownerPath, { force: true });
+    } catch {
+      // Already gone, or unreadable. Nothing to clear.
+    }
+  };
 
   let activeSession: SessionId | undefined;
   // Prompt optimization is bounded: it is a cosmetic improvement on top of an
@@ -258,7 +420,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ui.setPersona(persona);
       ui.notice('persona-changed', persona, 'info');
     },
-    onAbort: () => speechGate.abort(),
+    onAbort: () => abortTurn(speechGate, () => audio),
     saveKeys: {
       saveKeys: async (keys) => {
         writeKeyPools(vault, {
@@ -289,7 +451,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
    * measuring, and a diagnostics bus that can crash the product is worse than
    * none.
    */
-  const telemetry = new TelemetryWriter(join(homedir(), '.opencode-voice-runtime', 'voice-runtime.jsonl'));
+  const telemetry = new TelemetryWriter(join(runtimeDir, 'voice-runtime.jsonl'));
   const record = (input: Omit<TelemetryInput, 'sessionId' | 'eventId'>): void => {
     try {
       telemetry.record({ sessionId: activeSession ?? 'none', eventId: randomUUID(), ...input });
@@ -675,6 +837,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   });
 
   const boundPort = await ui.start(options.ipcPort);
+  // C2: only now, with the socket actually bound, does this daemon have a claim
+  // worth making.
+  publishOwner(boundPort);
 
   // Discover agents for the active project so the shell's selector is real.
   const directory = options.directory ?? process.cwd();
@@ -702,6 +867,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // few rows — usually the ones explaining WHY the user is shutting down —
       // are lost.
       await telemetry.close().catch(() => undefined);
+      // C2: drop the claim before the socket goes away, so the next launch sees a
+      // cold port rather than a marker naming a process that is shutting down.
+      clearOwner();
       await ui.close();
     },
   };

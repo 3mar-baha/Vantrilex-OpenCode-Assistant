@@ -49,48 +49,66 @@ describe('sidecar-safe VAD wiring (v0.6.0 regression)', () => {
     // A module reached only through `import()` is safe: the failure is lazy and
     // catchable, which is the entire point of the v0.6.1 fix. A module reached
     // through a static `import ... from` is fatal — it must resolve at load time.
-    const staticReach = new Set<string>();
     const anyReach = new Set<string>();
     const offenders: string[] = [];
-    // [file, isStaticEdge]
-    const queue: Array<[string, boolean]> = [[resolve('src/daemon.ts'), true]];
 
-    const enqueue = (from: string, spec: string, isStatic: boolean): void => {
-      if (!spec.startsWith('.')) return;
+    const resolveSpec = (from: string, spec: string): string[] => {
+      if (!spec.startsWith('.')) return [];
       const base = resolve(dirname(from), spec.replace(/\.js$/, ''));
-      for (const cand of [`${base}.ts`, join(base, 'index.ts')]) {
-        if (!existsSync(cand)) continue;
-        anyReach.add(cand);
-        if (isStatic) staticReach.add(cand);
-        // Revisit if we learn a static edge to a module already seen only
-        // dynamically — that changes its reachability class.
-        const known = queue.some(([f]) => f === cand);
-        if (!known || (isStatic && !anyReach.has(cand))) {
-          queue.push([cand, isStatic]);
-        }
-      }
+      return [`${base}.ts`, join(base, 'index.ts')].filter((c) => existsSync(c));
     };
 
-    while (queue.length > 0) {
-      const [file] = queue.pop() as [string, boolean];
-      if (!existsSync(file)) continue;
-      const src = readFileSync(file, 'utf8');
+    // TWO INDEPENDENT BFS PASSES.
+    //
+    // The invariant this test needs is "is this file reachable from daemon.ts
+    // following ONLY static edges". That is independent of full reachability,
+    // so the two do not need to be computed together — and computing them
+    // together is exactly what made the previous version diverge.
+    //
+    // The old walker de-duplicated with `queue.some(([f]) => f === cand)`: an
+    // O(n) scan of the CURRENT queue, which cannot see a node that has already
+    // been popped. Any import cycle therefore re-enqueued its members forever.
+    // Measured on this graph before the fix: 16 ms / 45 pops with the VAD edge
+    // alone, then no termination in 300 s at a 3M-pop cap once a cycle-bearing
+    // edge (the Laya loader) was added, OOM-killing a vitest worker at 4 GB.
+    // A per-pass `seen` set bounds each walk to one visit per file, which is
+    // all reachability requires.
+    const walk = (followDynamic: boolean): Set<string> => {
+      const root = resolve('src/daemon.ts');
+      const seen = new Set<string>([root]);
+      const stack: string[] = [root];
+      while (stack.length > 0) {
+        const file = stack.pop() as string;
+        const src = readFileSync(file, 'utf8');
+        for (const m of src.matchAll(STATIC_IMPORT)) {
+          for (const cand of resolveSpec(file, m[1] as string)) {
+            if (!seen.has(cand)) { seen.add(cand); stack.push(cand); }
+          }
+        }
+        if (followDynamic) {
+          for (const m of src.matchAll(DYNAMIC_IMPORT)) {
+            for (const cand of resolveSpec(file, m[1] as string)) {
+              if (!seen.has(cand)) { seen.add(cand); stack.push(cand); }
+            }
+          }
+        }
+      }
+      return seen;
+    };
 
+    // Pass 1 — static edges only. Every module in this set must resolve at
+    // daemon load time, so none of them may pull a native package.
+    const staticReach = walk(false);
+    for (const file of staticReach) {
+      const src = readFileSync(file, 'utf8');
       for (const m of src.matchAll(STATIC_IMPORT)) {
         const spec = m[1] as string;
-        if (NATIVE.has(spec)) {
-          if (staticReach.has(file)) offenders.push(`${file} -> ${spec} (statically reachable)`);
-          continue;
-        }
-        enqueue(file, spec, true);
-      }
-      for (const m of src.matchAll(DYNAMIC_IMPORT)) {
-        const spec = m[1] as string;
-        if (NATIVE.has(spec)) continue;
-        // A dynamic edge is LAZY by definition, whatever the parent looked like.
-        enqueue(file, spec, false);
+        if (NATIVE.has(spec)) offenders.push(`${file} -> ${spec} (statically reachable)`);
       }
     }
+    // Pass 2 — every edge, so the sanity assertions below can prove the walk
+    // really did traverse the graph rather than returning an empty set.
+    for (const f of walk(true)) anyReach.add(f);
 
     expect(
       offenders,

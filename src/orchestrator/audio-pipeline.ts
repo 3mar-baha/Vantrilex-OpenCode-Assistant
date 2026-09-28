@@ -59,8 +59,8 @@ export class AudioPipeline {
   private repeatCount = 0;
   private sttTimeouts = 0;
   /**
-   * L6: bumped by every `reset()`. `pushChunk` captures it on entry and
-   * re-checks after each await.
+   * L6: bumped by every `reset()` and every `cancel()`. `pushChunk` captures
+   * it on entry and re-checks after each await.
    *
    * `reset()` used to clear the ingest buffer and the repeat memory and
    * nothing else, so a `pushChunk` already parked on `transcribe` or `think`
@@ -71,6 +71,11 @@ export class AudioPipeline {
    * the way back out.
    */
   private generation = 0;
+
+  /** The generation the next `pushChunk` will capture. */
+  get turnGeneration(): number {
+    return this.generation;
+  }
 
   constructor(deps: AudioPipelineDeps) {
     this.deps = deps;
@@ -105,12 +110,38 @@ export class AudioPipeline {
     return this.sttTimeouts;
   }
 
-  reset(): void {
+  /**
+   * Abandon the turn in flight. C4.
+   *
+   * `abort` (barge-in) used to trip the daemon's `SpeechGate` and nothing
+   * else, so the *audio* of a cancelled turn stopped but the turn itself did
+   * not: the `think()` already parked in the planner ran to completion, its
+   * answer was thrown away by the post-await generation check, and the user
+   * paid for a model call whose result was never spoken. Cancelling means the
+   * request, not the playback — so the pipeline generation is bumped here, and
+   * everything the turn accumulated goes with it:
+   *
+   *   * the ingest buffer, because the tail of a retracted sentence is not an
+   *     utterance;
+   *   * the repeat memory, because `remember()` runs BEFORE `think`, so a
+   *     cancelled turn's transcript is in there. Keeping it means the user
+   *     re-speaking the same phrase after the barge-in is silently dropped as
+   *     a duplicate — the reply they were trying to get, swallowed. (This is
+   *     the case `audio-pipeline-reset.test.ts` already called out for
+   *     `reset()`; barge-in is the same event seen from the other end.)
+   *
+   * `reset()` is the session-switch name for exactly this operation and now
+   * delegates, so there is one implementation and one behaviour.
+   */
+  cancel(): void {
     this.ingest.reset();
     this.recent = [];
-    // L6: abandon whatever is in flight. The generation is the only thing that
-    // can stop an already-dispatched provider call from coming back as a turn.
     this.generation += 1;
+  }
+
+  /** Session switched / pipeline restarted. See `cancel` — the same operation. */
+  reset(): void {
+    this.cancel();
   }
 
   async pushChunk(chunk: Uint8Array): Promise<void> {

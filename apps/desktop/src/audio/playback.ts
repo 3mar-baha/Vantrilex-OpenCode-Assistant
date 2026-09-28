@@ -31,6 +31,7 @@ export class AudioPlayer {
   private readonly queue: Uint8Array[] = [];
   private draining = false;
   private started = false;
+  private muted = false;
   private generation = 0;
   private droppedCount = 0;
 
@@ -51,7 +52,33 @@ export class AudioPlayer {
     return this.droppedCount;
   }
 
+  /**
+   * Assistant mute — the `bot-toggle` control in the HUD.
+   *
+   * The gate belongs HERE, at the front door, rather than at the renderer's
+   * call site: `onAudio` is not the only way a chunk can reach a sink, and a
+   * gate that covers one entry point is a gate that leaks. Muting returns
+   * BEFORE `started` flips, so the speaking indicator never claims audible
+   * speech that is not happening.
+   *
+   * It also flushes: a mute that lets the current sentence finish is not a
+   * mute, and leaving the queue primed means un-muting would replay speech the
+   * user muted out seconds ago.
+   *
+   * Deliberately silent on the wire. This used to be paired with a
+   * `{kind:'mute'}` command, which the daemon answers `ok:true` while doing
+   * nothing at all (`src/orchestrator/command-router.ts:227-230`) and then pays
+   * an Inkling call to narrate silencing a microphone it never silenced. A mute
+   * the daemon does not own cannot honestly be reported by the daemon.
+   */
+  setMuted(muted: boolean): void {
+    if (muted === this.muted) return;
+    this.muted = muted;
+    if (muted) this.stop();
+  }
+
   enqueue(bytes: Uint8Array): void {
+    if (this.muted) return;
     if (bytes.byteLength === 0) return;
     this.queue.push(bytes);
     // Drop the OLDEST on overflow: the tail is what the user is waiting to

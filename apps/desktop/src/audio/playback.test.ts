@@ -101,6 +101,51 @@ describe('AudioPlayer', () => {
   });
 });
 
+// W6 — the assistant-mute button. It used to flip a boolean in the HUD and
+// send a `{kind:'mute'}` command the daemon discarded, so it muted nothing and
+// acked `ok:true`. The gate now lives on the player, and these three tests are
+// the guard: `App.test.tsx` proves the HUD actually reaches it.
+describe('AudioPlayer assistant mute (W6)', () => {
+  test('a muted player drops downlink chunks: nothing decodes, plays, or signals start', async () => {
+    const h = harness();
+    h.player.setMuted(true);
+    h.player.enqueue(new Uint8Array([1]));
+    h.player.enqueue(new Uint8Array([2]));
+    await flush();
+    expect(h.decoded).toHaveLength(0);
+    expect(h.played).toHaveLength(0);
+    // No `start` is the point: the HUD's speaking indicator is driven by it, and
+    // a muted shell that still lights up would be the same lie one layer up.
+    expect(h.events).toHaveLength(0);
+    expect(h.player.playing).toBe(false);
+  });
+
+  test('muting mid-reply flushes what is already queued', async () => {
+    const h = harness();
+    h.player.enqueue(new Uint8Array([1]));
+    expect(h.player.playing).toBe(true);
+    h.player.setMuted(true);
+    expect(h.player.queued).toBe(0);
+    expect(h.player.playing).toBe(false);
+    // A mute that lets the current sentence finish is not a mute.
+    expect(h.events).toEqual(['start', 'end']);
+    await flush();
+    expect(h.played).toHaveLength(0);
+  });
+
+  test('un-muting restores playback, and the gate is idempotent', async () => {
+    const h = harness();
+    h.player.setMuted(true);
+    h.player.setMuted(true); // no second flush, so no duplicate `end`
+    h.player.setMuted(false);
+    h.player.enqueue(new Uint8Array([7]));
+    await flush();
+    expect(h.decoded).toEqual([7]);
+    expect(h.played).toEqual(['buf-1']);
+    expect(h.events).toEqual(['start', 'end']);
+  });
+});
+
 // L1 — the downlink queue was an unbounded array. A slow decode under a
 // sustained reply grew the heap without limit, and nothing reported it.
 describe('AudioPlayer queue cap (L1)', () => {
