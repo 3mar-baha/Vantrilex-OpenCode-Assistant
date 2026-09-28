@@ -656,3 +656,89 @@ answered before G2 executes are in `docs/PLAN.md` §4–§5.
 ---
 
 *End of `16-WORKFLOWS.md`. Next canonical file: `17-CATALOG-INGESTION.md` (Batch 3).*
+
+## 16.12 — Dual-Phase Master Workflow (P1 remediation, then bounded audit)
+
+**Authored 2026-09-28, immediately after v0.7.0.** The 5-gate lifecycle above
+governs getting a change into a release. This governs what happens *after* a
+release: close the highest-priority known items, cut a patch, then audit with
+the released code as the baseline.
+
+The two phases are sequential and non-overlapping. Stage 1 changes code and ends
+in a published artifact. Stage 2 changes nothing — it produces a report, and every
+candidate fix in that report is a *proposal* until a human accepts it.
+
+### 16.12.1 — Stage 1: P1 remediation, verification, patch release
+
+P1 is defined as: correctness or robustness gaps that are live in the shipped
+product. Anything reachable by a user, anything that can fail silently, anything
+where a gate reports success while a defect is present.
+
+| Step | Action | Done when |
+|---|---|---|
+| 1.1 | Remediate each P1 item in isolation | Each has a test that fails without the fix |
+| 1.2 | Non-vacuity check | Each fix is disabled and the test is observed failing |
+| 1.3 | Full verification | `test:vantrilex`, `cargo test`, E2E, secret scan all exit 0 |
+| 1.4 | Version bump | Every carrier asserted to contain the old version exactly once |
+| 1.5 | Build + install + cold launch | 4096 + 4097 bound, `daemon.log` 0 bytes, voice live |
+| 1.6 | Commit, tag, push, release | `git rev-list -n 1 <tag>` equals `git rev-parse HEAD` |
+| 1.7 | Download the published asset and hash it | Matches the local build byte for byte |
+
+**Step 1.7 is not optional.** `gh release create` auto-tags at whatever HEAD is at
+the moment it runs, and a release can be published from a stale tree. Downloading
+the asset back is the only check that proves the bytes on GitHub are the bytes that
+were verified locally.
+
+### 16.12.2 — Stage 2: bounded autonomous forensic audit
+
+**Operational mode: READ-ONLY FORENSIC DISCOVERY.** No code refactors, no file
+deletions, no behaviour changes. The audit exists to produce findings and
+reproducible tests; implementing them is a separate, human-approved phase.
+
+This mode is not caution for its own sake. An autonomous agent editing a codebase
+it is simultaneously auditing destroys the baseline it is reasoning about, and the
+audit findings become unreproducible against the changed tree.
+
+**Mandate.** Audit raw source from first principles, distrusting stale
+documentation. Every claim in `docs/`, the dossier, or the changelog is treated as
+a hypothesis until re-derived from the code.
+
+Primary surfaces: `src/orchestrator/`, `src/voice/`, `apps/desktop/src/audio/`.
+
+Classes examined, in order:
+
+1. Race conditions and TOCTOU across async boundaries
+2. Unhandled promise rejections and floating promises
+3. Memory and buffer growth boundaries (unbounded collections, caches, queues)
+4. Edge-case error propagation (does a partial failure degrade or deadlock?)
+
+**Circuit breakers — strict halting conditions.**
+
+| Breaker | Condition | Action |
+|---|---|---|
+| CB-1 | Cycle cap | Stop after 3 discrete cycles, even mid-cycle |
+| CB-2 | Context saturation approaching 80 % | Halt immediately; do not start another cycle |
+| CB-3 | No structural defects found in a full cycle | Halt. Do not manufacture findings to fill the report |
+| CB-4 | Any action would require editing `src/` or the renderer | Record it as a candidate fix; do not apply |
+
+CB-3 deserves emphasis. An audit that always produces findings is not auditing, it
+is generating work. A clean cycle is a valid and reportable result.
+
+**Per-finding evidence requirements.** Every finding must carry: a file and line, a
+concrete failure sequence (not a style opinion), the blast radius, and a proposed
+reproducible test. A finding that cannot be made to fail on demand is not a
+finding — it is a hunch, and it is labelled as one.
+
+### 16.12.3 — Deliverables
+
+- `dossier/PHASE2_AUDIT_REPORT.md` — findings, root causes, candidate fixes
+- `docs/10-CHECKPOINT.md` — final status, written for review on return
+- Every guard test written during the sprint is verified non-vacuous, or discarded
+
+### 16.12.4 — Why the phases are separated
+
+Mixing them creates a specific failure: the audit refactors a module, the next
+cycle audits the refactored module, and the original defect is no longer
+reproducible — so it is neither fixed nor reported. Sequencing also keeps the
+release baseline stable, which means every Stage 2 finding is stated against an
+exact, immutable commit.
