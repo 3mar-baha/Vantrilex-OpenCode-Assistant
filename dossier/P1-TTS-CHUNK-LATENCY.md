@@ -9,6 +9,53 @@ with everything else held at the production setting, on both a short greeting
 and a multi-clause sentence, since split behaviour only shows with more than one
 clause.
 
+## CORRECTION (2026-09-28) — superseded by `dossier/FISH-AUDIO-COMPLIANCE-AUDIT.md`
+
+Two claims below are wrong. Both were re-checked against the official
+`fish-audio-api` skill and by re-measuring against the live API.
+
+**1. The `chunk_length: 50` row was invalid.** The documented range is
+`100-300`. A request at 50 is malformed, so that row measured a rejected
+request, not a slow one. It was then used to argue "the effect is smaller than
+the noise" — a conclusion drawn from a set containing a bad sample.
+
+Re-measured inside the valid range:
+
+| `chunk_length` | first chunk | whole |
+|---|---|---|
+| 100 | 1,065 ms | 1,078 ms |
+| 200 | 1,259 ms | 1,336 ms |
+| 300 (shipped) | 1,405 ms | 1,437 ms |
+
+So there *is* a real effect — 100 is ~24 % faster to first chunk than 300. The
+conclusion that `chunk_length` was not worth changing still stands, but for a
+different reason than originally given, and the original table should not be
+used.
+
+**2. "buffered" was the wrong word.** The official spec states that `POST /v1/tts`
+returns "streaming audio bytes (`Transfer-Encoding: chunked`)". The code was
+already streaming; the ~90 ms figure belongs to the WebSocket endpoint
+`/v1/tts/live`, not to a buffering choice in this code. That part of the
+conclusion was right for the wrong reason.
+
+**What the audit then found, which this note missed entirely:** the `latency`
+parameter was never swept. It is the dominant lever, and it is one string.
+
+| `latency` | first chunk |
+|---|---|
+| `balanced` | 426–556 ms |
+| `normal` (shipped) | 1,405–1,432 ms |
+| `low` | 443–1,376 ms (high variance) |
+
+That is a reproducible ~3× improvement available today without touching the
+architecture. Full analysis, compliance table and recommendations in
+`dossier/FISH-AUDIO-COMPLIANCE-AUDIT.md`.
+
+**No change has been made to `src/voice/tts.ts`.** This is an audit deliverable
+awaiting review.
+
+---
+
 ## Results
 
 `chunk_length`, short text (`"مرحبا، كيف حالك اليوم؟"`):
