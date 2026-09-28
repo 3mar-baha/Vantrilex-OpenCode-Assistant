@@ -681,3 +681,67 @@ root **498 passed + 0 skipped** (39 files), desktop **149** (23 files).
 | Gates | tsc 0 · root vitest **491** · desktop vitest **149** (growth is additions only: +7 extractJson, +7 narrator; nothing removed) |
 
 *End of `10-CHECKPOINT.md`. Next: `11-TESTING.md`.*
+
+## Checkpoint 1 — Dual-Phase Master Workflow, complete
+
+**2026-09-28.** v0.7.1 released at `b0d51ba`. Full detail in `CHANGELOG.md`
+and `dossier/PHASE2_AUDIT_REPORT.md`.
+
+### Stage 1 — P1 remediation: 3 of 4 closed, 1 negative result
+
+| Item | Outcome |
+|---|---|
+| 3. Narration ceiling | **CLOSED** — 8,000 → 12,000 ms, ~2.4× the measured 5,010–5,015 ms. Named constant with the measurement in the comment. Optimizer ceiling deliberately unchanged at 8,000 (bounded cosmetic pass, 2,796–5,193 ms). |
+| 4. TTS first-chunk latency | **NO CHANGE — negative result.** `chunk_length` swept live: no monotonic relationship, and run-to-run variance (1,407–2,051 ms) exceeds the between-config spread. Tuning would be cargo-culting. The ~90 ms figure is most likely for Fish's WebSocket endpoint, an architecture change not started. See `dossier/P1-TTS-CHUNK-LATENCY.md`. |
+| 5. Lint gate cannot fail | **CLOSED** — `--deny-warnings` tried and rejected (8 known warnings ⇒ permanently red ⇒ gets disabled). Replaced with exact-threshold enforcement in `scripts/lint-baseline.mjs`, which fails if the count rises **and** if the baseline goes stale. Non-vacuous both ways. |
+| 6. E2E outside the gate | **CLOSED** — `test:vantrilex` now ends with `test:e2e`. |
+
+### Stage 2 — bounded audit: 2 cycles, 1 structural finding, halted by CB-3
+
+- **F-01 (LOW, latent)** `AudioPlayer.drain()` has `try/finally` with no `catch`;
+  a throw from the caller-supplied `onEnd` inside the `finally` escapes a
+  `void`-ed promise. **Not reachable today** — the only `onEnd` is
+  `App.tsx:147`, a bare `setTimeout`. Candidate fix and test recorded, not
+  applied (CB-4).
+- **F-02 (MEDIUM)** `oxlint` is declared in `devDependencies` but is **not in
+  `node_modules`** — every run resolved to a global v1.85.0. A clean `npm ci`
+  produces no oxlint, so the gate strengthened in item 5 runs an unpinned
+  binary. The baseline script now warns loudly on fallback. Fix needs a
+  dependency decision.
+- **Cycle 2 found nothing.** Eight further candidates were examined and cleared
+  on inspection, including three that a grep flagged and that turned out to be
+  correct (`inventory.ts` `pollOnce` has an internal catch; both `brain.ts`
+  abort timers are cleared; `recent` is capped by `REPEAT_MEMORY`). CB-3
+  forbids manufacturing findings to fill a report, so the sprint halted.
+
+### Verification for this checkpoint
+
+`test:vantrilex` exit 0 **with E2E included** — oxlint 8/8 baseline · root
+**509 passed + 0 skipped** (41 files) · desktop **149** (23 files) · E2E
+**18** across 14 specs · `cargo test` **27** · secret scan clean.
+
+Installed and cold-launched before tagging: 4096 + 4097 bound, `daemon.log`
+0 bytes, `resolve: vault= (ancestor)`, no `KEYS_MISSING`, voice live.
+Published artifact downloaded back and hashed — byte-identical to the local
+build.
+
+`Voxaura_0.7.1_x64-setup.exe` · 26,179,227 B ·
+sha256 `9E77E4C8915BAEE91966B0568F8A3EFE3D9BA16BE5394F0EA27AD0AD8B714896`
+
+### Carried forward, unchanged by this checkpoint
+
+- **Fish free tier expires 2026-11-30** — the only hard deadline. ~63 days.
+- **SEC-7 / L18** — packaged microphone grant unverified; the only PARTIAL
+  finding in the L1–L24 ledger. Blocked on hardware with a microphone.
+- **44 quarantined modules** (~1,639 lines) await a wire/delete decision.
+- **TTS 1,157 ms first chunk** — architectural, not a tuning question.
+
+### L1–L24 ledger
+
+The table was corrected this session: L6, L13, L17 and L22 had been closed but
+were never added as rows, and L16 still read OPEN with an empty fix column. An
+inventory taken from it would have reported four fixed findings as unlisted and
+a fifth as open. Now covers L1–L24 with no gaps; **L18 is the only non-CLOSED
+row.** That is the third documentation-versus-reality gap this project has
+produced, which is the strongest argument yet for adding CI.
+

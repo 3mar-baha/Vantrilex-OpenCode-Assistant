@@ -1,5 +1,82 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.7.1 — gates that can fail, and a measured narration ceiling (2026-09-28)
+
+## Gates that can fail, and a narration ceiling that isn't a coin flip
+
+A patch release, because the last one shipped a defect the gates could not see.
+
+### A lint regression shipped in v0.7.0, because the gate could not fail
+
+`react(refs)` — a ref assigned during render in `SettingsView` — went out inside
+v0.7.0. oxlint reports it, and oxlint exits 0. It surfaced only by diffing the
+warning count against a remembered baseline, which is not a process, it is luck.
+
+`--deny-warnings` was tried first and **rejected**: with 8 known warnings it makes
+the gate permanently red, and a permanently red gate gets disabled. Instead the
+count is pinned in `scripts/lint-baseline.json` and fails in **both** directions —
+if the count rises, and if the recorded baseline goes stale — so a new warning
+cannot be traded against an unrelated fix. Verified non-vacuous both ways.
+
+### E2E is inside `test:vantrilex` now
+
+`chain-nemotron` was renamed by the Inkling switch. The unit test was updated and
+the E2E spec was not, so it stayed green purely because E2E was not run — the
+gate reported success over a suite containing a stale assertion. The gate now ends
+with it. A documented exclusion is not a fix; running it is.
+
+### Narration ceiling 8,000 → 12,000 ms
+
+Measured live against free-tier Inkling: 5,010 / 5,015 / 5,010 ms. Two runs 5 ms
+apart says that is typical latency rather than a tail — but the provider documents
+no SLA, so ~1.6× headroom was thin. Now ~2.4×.
+
+The cost of being wrong is bounded and small: a stuck narration holds a reply at
+most 4 s longer before the pipeline drops it. The cost of a timeout is a silent
+turn where the work was done and the answer never arrives. An asymmetric cost
+argues for the larger ceiling.
+
+It is a named constant with the measurement in the comment, because an unexplained
+magic literal is how 8,000 happened. The optimizer's 8,000 is deliberately
+unchanged — a bounded cosmetic pass measured at 2,796–5,193 ms, and conflating
+the two ceilings would have been the easy mistake.
+
+### What we did *not* change, and why
+
+TTS first-chunk latency is ~1,157 ms against Fish's advertised ~90 ms. The
+hypothesis was `chunk_length: 300` forcing a late split. Swept live: **no
+monotonic relationship in either direction**, and run-to-run variance
+(1,407–2,051 ms) exceeds the spread between configurations. The effect is smaller
+than free-tier noise, so tuning it would be cargo-culting a number.
+
+The ~90 ms figure is most likely for Fish's **WebSocket** endpoint, not REST —
+an architecture change, not a tuning change. Recorded in
+`dossier/P1-TTS-CHUNK-LATENCY.md` and deliberately not started.
+
+### Also found: the lint gate was not reproducible
+
+`oxlint` is declared in `devDependencies` (`^1.0.0`) but is **not installed in
+`node_modules`** — it resolves from a global install (v1.85.0). A clean `npm ci`
+would not have it, and the gate would run a different version on a different
+machine. The baseline script warns when it falls back. Not fixed here: it needs a
+dependency decision, not a patch.
+
+### Gates
+
+`test:vantrilex` exit 0 **with E2E included** — oxlint 8/8 baseline · root **509
+passed + 0 skipped** (41 files) · desktop **149** (23 files) · E2E **18** across 14
+specs · `cargo test` **27** · secret scan clean.
+
+Installed and cold-launched before tagging: 4096 + 4097 bound, `daemon.log` 0
+bytes, `resolve: vault= (ancestor)`, no `KEYS_MISSING`, voice live.
+
+`Voxaura_0.7.1_x64-setup.exe` · 26,179,227 B ·
+sha256 `9E77E4C8915BAEE91966B0568F8A3EFE3D9BA16BE5394F0EA27AD0AD8B714896`
+
+---
+
+Install v0.7.1 or later. **v0.6.0 is broken and must not be installed.**
+
 ## v0.7.0 — the code that actually ships (2026-09-27)
 
 Install v0.6.1 or later. v0.6.0 is broken and must not be installed.
