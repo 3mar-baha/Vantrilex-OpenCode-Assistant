@@ -15,30 +15,63 @@ const BASELINE = 8;
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const BASELINE_FILE = join(ROOT, 'scripts', 'lint-baseline.json');
 
-// Resolve oxlint robustly. Two traps, both hit while writing this:
+// Resolve oxlint. Audit finding F-02, and the fix is NOT what it looks like.
 //
-//   1. `npx` is a .cmd shim on Windows and is NOT spawnable from a Node child
-//      process (ENOENT). It works from a shell, not from execFileSync.
-//   2. `oxlint` is declared in devDependencies but was NOT present in
-//      node_modules - it resolved from a global install (v1.85.0). That is a
-//      reproducibility defect in its own right, recorded separately; here we
-//      prefer the local copy and fall back to PATH so the gate still runs.
+// `oxlint` is declared in devDependencies (pinned exact, no caret) but is absent
+// from node_modules, so every run was resolving an AMBIENT GLOBAL binary. Two
+// independent pre-existing blockers stop `npm install` from fixing it:
+//
+//   1. `eslint-plugin-prettier@4.2.5` peer-conflicts with
+//      `@eslint-community/eslint-utils@4.10.1` -> ERESOLVE. Present with oxlint
+//      removed entirely, so it is unrelated to oxlint.
+//   2. oxlint's OPTIONAL peer on `vite-plus` carries a `link:./src/types`
+//      dependency, which npm cannot fetch. `legacy-peer-deps=true` suppresses the
+//      peer error but then installs vite-plus and dies with EUNSUPPORTEDPROTOCOL.
+//
+// Pinning to 1.0.0 / 1.10.0 / 1.20.0 / 1.85.0 / 1.86.0 all still fail, so no
+// version of the 1.x line installs cleanly alongside vitest 2.x.
+//
+// So the local install is genuinely blocked, and the honest response is to make
+// the gate REFUSE to run on a global binary rather than quietly succeed on one.
+// A gate that appears to enforce something it is not enforcing is the exact
+// defect F-02 describes; failing loudly is strictly better than passing falsely.
+//
+// Override with VOXAURA_ALLOW_GLOBAL_OXLINT=1 when you deliberately want the
+// ambient binary, e.g. on a machine where the local install is known good.
 const localBin = join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'oxlint.cmd' : 'oxlint');
 const useLocal = existsSync(localBin);
-const cmd = useLocal ? localBin : 'oxlint';
-const args = useLocal ? [] : [];
-// On Windows a bare `oxlint` is a .ps1/.cmd shim, so it must go through the shell.
+const allowGlobal = process.env['VOXAURA_ALLOW_GLOBAL_OXLINT'] === '1';
+
+if (!useLocal && !allowGlobal) {
+  console.error(
+    'lint-baseline: oxlint is not installed in node_modules/.bin.\n' +
+      '\n' +
+      '  REFUSING to run the gate on an ambient global binary. A global oxlint is\n' +
+      '  not the version pinned in devDependencies, so the gate would be enforcing\n' +
+      '  something other than what the project declares - which is finding F-02.\n' +
+      '\n' +
+      '  `npm install` cannot currently fix this: the tree has two pre-existing\n' +
+      '  blockers (an eslint-plugin-prettier peer conflict, and oxlint\'s optional\n' +
+      '  vite-plus peer carrying a link: protocol npm cannot fetch). See\n' +
+      '  dossier/PHASE2_AUDIT_REPORT.md finding F-02.\n' +
+      '\n' +
+      '  To run deliberately on the ambient binary:\n' +
+      '    VOXAURA_ALLOW_GLOBAL_OXLINT=1 npm run lint:ox',
+  );
+  process.exit(1);
+}
+
 const run = () =>
-  process.platform === 'win32' && !useLocal
-    ? execFileSync('cmd', ['/c', 'oxlint'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
-    : execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  useLocal
+    ? execFileSync(localBin, [], { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+    : // Windows resolves a bare `oxlint` through a .cmd shim, which is not
+      // directly spawnable, so it has to go via the shell.
+      process.platform === 'win32'
+      ? execFileSync('cmd', ['/c', 'oxlint'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+      : execFileSync('oxlint', [], { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 
 if (!useLocal) {
-  console.warn(
-    'lint-baseline: oxlint not found in node_modules/.bin - falling back to PATH.\n' +
-      '  This means the gate is running a globally-installed oxlint, not the version\n' +
-      '  pinned in devDependencies. Run `npm install` to make the gate reproducible.',
-  );
+  console.warn('lint-baseline: VOXAURA_ALLOW_GLOBAL_OXLINT=1 - running an UNPINNED ambient oxlint.');
 }
 
 const out = run();

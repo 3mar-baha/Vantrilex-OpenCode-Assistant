@@ -110,11 +110,26 @@ export class AudioPlayer {
       }
     } finally {
       this.draining = false;
-      if (this.queue.length === 0 && this.started) {
-        this.started = false;
-        this.options.onEnd?.();
-      } else if (this.queue.length > 0) {
-        void this.drain();
+      // F-01: this is a `finally`, and the only statement here that can throw
+      // is the caller-supplied `onEnd`. Because `drain()` runs as a floating
+      // promise, a throwing consumer callback would reject it and surface as an
+      // unhandled rejection — in the WebView2 renderer a global
+      // `unhandledrejection` plus a missed UI reset, with nothing pointing at
+      // the cause.
+      //
+      // `draining` is reset BEFORE the try, not inside it: leaving it true would
+      // wedge the player permanently, which is a worse failure than the one this
+      // prevents. The queue is already consistent at this point, so swallowing a
+      // consumer throw is safe.
+      try {
+        if (this.queue.length === 0 && this.started) {
+          this.started = false;
+          this.options.onEnd?.();
+        } else if (this.queue.length > 0) {
+          void this.drain().catch(() => undefined);
+        }
+      } catch {
+        // A consumer callback must not reject the floating drain promise.
       }
     }
   }
