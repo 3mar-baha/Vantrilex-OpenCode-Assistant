@@ -254,7 +254,7 @@ Win32 Job Object with `KILL_ON_JOB_CLOSE`: force-killing the app reaps every
 child, zero orphaned processes.
 
 **Self-contained installer.** The NSIS setup
-([v0.7.1 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.2))
+([v0.7.2 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.2))
 bundles `node.exe` plus the pruned runtime sidecar — end users need no
 Node, npm, or repo checkout. Windows is the only supported target;
 macOS/Linux are deferred until Windows is long-term stable.
@@ -447,8 +447,8 @@ with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.
 VsDevCmd environment for the bundle build). `scripts/provision-sidecar.mjs`
 assembles `node.exe` + compiled `dist/` + pruned runtime deps (~100 MB) as
 Tauri bundle resources, and the NSIS installer ships it all. Current:
-`Voxaura_0.7.1_x64-setup.exe`, 26,179,227 B, sha256
-`9E77E4C8915BAEE91966B0568F8A3EFE3D9BA16BE5394F0EA27AD0AD8B714896` —
+`Voxaura_0.7.2_x64-setup.exe`, 26,186,272 B, sha256
+`2AA5CA20A3232B3D32EB0FF1BBC48E94F93696EDBDA51057F9476A615E0E3878` —
 verify with `Get-FileHash -Algorithm SHA256`. All setups are published with
 SHA-256 checksums on the
 [releases page](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases).

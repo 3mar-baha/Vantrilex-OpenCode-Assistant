@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.2"><img src="https://img.shields.io/badge/download-Voxaura_0.7.1_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
+  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.2"><img src="https://img.shields.io/badge/download-Voxaura_0.7.2_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
 </p>
 
 ## ما هو Voxaura؟
