@@ -128,6 +128,28 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // If the brain is unavailable the narration is simply skipped: a visible
   // silence beats a robotic sentence, and the notice banner still reports the
   // outcome.
+  /**
+   * Narration ceiling, raised from 8,000 ms on measured evidence.
+   *
+   * Measured live against free-tier Inkling (2026-09-27, three runs): 5,010 ms,
+   * 5,015 ms, 5,010 ms — first-token-to-whole-line latency for a ~20-word Arabic
+   * reply. Two runs landed 5 ms apart, which says this is the model's typical
+   * latency rather than a tail. Against the old 8,000 ms ceiling that is roughly
+   * 3,000 ms of headroom, but the two measurements differing by 5 ms is a warning
+   * sign, not a comfort: free-tier latency is not contractual and the provider
+   * documents no SLA for it.
+   *
+   * 12,000 ms gives ~2.4x the observed p50 instead of ~1.6x. The cost of being
+   * wrong is bounded and small — a stuck narration holds the reply for at most 4 s
+   * longer before the pipeline drops it and moves on. The cost of a timeout is a
+   * silent turn: the user spoke, the work was done, and the answer never arrives.
+   * An asymmetric cost like that argues for the larger ceiling.
+   *
+   * A named constant rather than an inline literal so the value is greppable and
+   * so the test has something stable to assert against.
+   */
+  const NARRATOR_TIMEOUT_MS = 12_000;
+
   const narratorChat: NarratorChat = async (model, system, user, options) => {
     const ring = Keyring.load(vault);
     // L17: released with the real outcome, so a 401/403 from OpenRouter rotates
@@ -145,7 +167,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           // ~20-word Arabic reply needs headroom: a truncation mid-JSON is an
           // unparseable reply, i.e. silence, so margin here is audibility.
           maxTokens: 120,
-          timeoutMs: 8_000,
+          timeoutMs: NARRATOR_TIMEOUT_MS,
           // Inkling is a reasoning model: without effort:none it spends the
           // token budget thinking and returns finish=length with content=null
           // (measured live). Same suppression the Dots3 intake uses.

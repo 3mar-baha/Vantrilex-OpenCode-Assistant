@@ -1,6 +1,6 @@
 {
   "name": "opencode-voice-runtime",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Decoupled ambient voice and runtime orchestrator over OpenCode v2 (opencode serve).",
   "license": "MIT",
   "type": "module",
@@ -18,13 +18,14 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "lint:ox": "oxlint",
+    "lint:ox": "node scripts/lint-baseline.mjs",
     "test": "vitest run",
     "test:desktop": "npm --prefix apps/desktop run test",
-    "test:vantrilex": "npm run typecheck && npm run lint && npm run lint:ox && npm run test && npm run test:desktop",
+    "test:vantrilex": "npm run typecheck && npm run lint && npm run lint:ox && npm run test && npm run test:desktop && npm run test:e2e",
     "dev": "npm --prefix apps/desktop run dev",
     "dev:web": "npm --prefix apps/desktop run dev:web",
-    "doctor": "node dist/cli.js doctor"
+    "doctor": "node dist/cli.js doctor",
+    "test:e2e": "npm --prefix apps/desktop run test:e2e"
   },
   "dependencies": {
     "@opencode/client": "^2.0.0",
