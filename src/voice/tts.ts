@@ -245,8 +245,12 @@ export interface FishTransport {
  * reviewable without reading the transport.
  *
  * Every field is a deliberate choice against a reported symptom:
- * - `latency: 'normal'` — docs: "normal: best quality, balanced: reduced
- *   latency". We were paying latency for a voice that came out shouting.
+ * - `latency: 'balanced'` — this WAS `'normal'`, justified by "we were paying
+ *   latency for a voice that came out shouting". That reasoning was reversed in
+ *   v0.7.2 after measuring both: `normal` 1405-1432 ms, `balanced` 426-556 ms to
+ *   first chunk. The shouting was not fixed by `normal`. This comment previously
+ *   still read `normal` while the code sent `balanced` 124 lines below it, and
+ *   three documents repeated the stale value.
  * - `prosody.volume: -2` — dB, negative is quieter. The documented,
  *   server-side headroom for an over-loud voice.
  * - `prosody.speed: 0.95` — a shade under normal pace.

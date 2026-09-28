@@ -61,9 +61,19 @@ export interface Transcript {
 }
 ```
 
-## 18.3 — Brain: Ammani Arabic Prompt System for `gpt-oss-120b` (normative)
+## 18.3 — Brain: Ammani Arabic Prompt System (normative)
 
-### 18.3.1 System prompt (canonical shape — full text lives in `src/voice/prompts/ammani.system.md`)
+> **Correction (2026-09-28).** This section was headed *"for `gpt-oss-120b`"* and
+> pointed at `src/voice/prompts/ammani.system.md`. **Neither is real.** The
+> string `gpt-oss-120b` does not appear anywhere in `src/`; the brain runs on
+> `BRAIN_OPENROUTER_MODEL = 'thinkingmachines/inkling:free'`
+> (`src/voice/brain.ts:177`). And there is no `src/voice/prompts/` directory —
+> the prompt is a `const` array in the module that uses it:
+> `AMMANI_SYSTEM_PROMPT` at `src/voice/brain.ts:105`, sent as the `system` role
+> at `src/voice/brain.ts:311`. The prose below is a paraphrase of that array,
+> not a copy of a file.
+
+### 18.3.1 System prompt (canonical location: `src/voice/brain.ts:105`, `AMMANI_SYSTEM_PROMPT`)
 
 ```
 You are the voice of the developer's ambient coding orchestrator — a peer, not a script.
@@ -87,11 +97,37 @@ Classify every input into exactly one intent: newSession | followUp | control.
 Reply ONLY with the JSON shape below. No prose outside JSON.
 ```
 
-**RAG grounding (normative):** phrasing calibration draws on Gheith-Abandah/JODA
-(59k sentences), UniversalDependencies UD South Levantine Arabic-MADAR, and
-CAMeL-Lab `camel_tools`; planning methodology on dair-ai Prompt-Engineering-Guide;
-BLUF summarization on csebuetnlp xl-sum. Corpora are ingested at prompt-build time;
-the corpora manifest (versions + digests) is ledger-recorded per release.
+**RAG grounding — RETRACTED as a description of the shipped system (2026-09-28).**
+
+The previous text here was marked *(normative)* and asserted that phrasing
+calibration draws on Gheith-Abandah/JODA (59k sentences), UD South Levantine
+Arabic-MADAR, CAMeL-Lab `camel_tools`, the dair-ai Prompt-Engineering-Guide and
+csebuetnlp xl-sum, and that "corpora are ingested at prompt-build time" with a
+ledger-recorded manifest of versions and digests per release. **None of that
+happens.** There is no corpus ingestion step, no manifest, and no ledger of
+corpus digests. The only occurrences of `joda` or `madar` in the entire shipped
+source tree are four inline string literals in one test file
+(`src/knowledge/retriever.test.ts:18-21`) used as BM25 fixtures.
+
+What is actually true, and much smaller:
+
+- `src/knowledge/` is **live and CLI-wired** — `node dist/cli.js knowledge
+  "<query>"`, reached from `src/cli.ts:205`. It is not dead and not quarantined.
+- Its entire index is **hand-authored Tier-1 chunks committed to the repo**
+  (`src/knowledge/build.ts:23`: architecture, capabilities, commands, failures,
+  lexicon) plus Tier-2/3 styling examples. Tier 1 is indexed; Tier 2/3 are
+  selected by `when` and never retrieved.
+- Retrieval is dependency-free BM25 over Arabic-normalized text
+  (`normalizeArabic` / `normalizeToken`). `SharedChunk` carries no persona
+  member by type; both personas call `buildIndex()` and get the same object, and
+  a digest + `assertParity` guard enforces that.
+- The Tier-D guard takes its blocklist as a **runtime-injected argument**;
+  `src/knowledge/guard.ts:2` states that "Tier-D corpora live outside the
+  repo". Nothing is bundled, downloaded or ingested.
+
+So the grounded, committed knowledge is the hand-written Tier-1 chunk set, and
+the external corpora are a real aspiration that has not been started. Cite
+`src/knowledge/` and the CLI, not a corpus manifest.
 
 ### 18.3.2 Model call
 

@@ -5,10 +5,15 @@
 
 ## 25.1 — Transport and Framing (normative)
 
-- **Requests:** HTTP/1.1 JSON to `http://127.0.0.1:<port>`; `Authorization: Bearer`
-  on every call; client timeout 10 s (reads) / 30 s (prompt dispatch); idempotency
-  keys on `POST /session` and `POST /session/{id}/prompt` (client-generated UUIDv4,
-  server echoes on 409 per F-09).
+- **Requests:** HTTP/1.1 JSON to `http://127.0.0.1:<port>`; HTTP **Basic**
+  auth on every call, as `Authorization: Basic base64("opencode:<password>")`
+  (see `basicAuth()` in `src/runtime/client.ts:14`). **Bearer is rejected by
+  serve** — the original text here said `Authorization: Bearer`, which was
+  wrong and contradicted the shipped client; the contract comment at
+  `src/runtime/client.ts:11` records *"Auth: HTTP Basic `opencode:<password>`
+  (Bearer is rejected)"*. Client timeout 10 s (reads) / 30 s (prompt dispatch);
+  idempotency keys on `POST /session` and `POST /session/{id}/prompt`
+  (client-generated UUIDv4, server echoes on 409 per F-09).
 - **Events:** SSE `GET /event` with `Accept: text/event-stream`; per-dispatch framing
   `event:` (lifecycle type — including `step:complete`) + `id:` (envelope id) + `data:`
   (JSON envelope); comment heartbeats (`: ping`) every 15 s; 3 missed heartbeats = dead

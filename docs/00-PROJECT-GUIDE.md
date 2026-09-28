@@ -131,13 +131,20 @@ are never overwritten. Secrets are banned from notes by rule.
 
 ## 8. How quality is proven
 
-| Gate | Command | Current score |
+| Gate | Command | Current score (measured 2026-09-28) |
 |---|---|---|
-| Unit + type + lint | `npm run test:vantrilex` | **309 pass** (220 root + 89 desktop), 0 warnings |
-| Shell E2E | `npm run test:e2e` (Playwright) | **15/15** |
+| Unit + type + lint | `npm run test:vantrilex` | **726 pass** (573 root + 153 desktop), 0 eslint warnings, oxlint ratchet 8 |
+| Shell E2E | `npm run test:e2e` (Playwright) | **18 across 14 specs** — counted from the spec files, not re-run for this row |
+| Rust unit | `cargo test` (needs MSVC `VsDevCmd.bat`) | **27** `#[test]` |
 | Pre-flight | `node dist/cli.js doctor` | environment + serve health |
 | Live console | `node scripts/live_console_test.ts` | real serve, TTS, STT, VAD |
 | Packaging | `node scripts/packaging-preflight.mjs` | 14/15 (only MSVC linker missing) |
+
+There is **no coverage floor** and no CI. `vitest.config.ts` used to declare
+`thresholds: { lines: 80 }` with coverage never enabled; that threshold had
+never been evaluated and has been deleted rather than left to read as a
+guarantee. See `11-TESTING.md` §11.1 for the exact steps to reinstate a real,
+measured one.
 
 Known live findings (Sept 2026 field test): transport fully healthy (serve
 200 in 125 ms; TTS/STT succeed every run); the Groq direct-brain path was

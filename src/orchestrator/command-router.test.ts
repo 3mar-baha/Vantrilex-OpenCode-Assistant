@@ -36,6 +36,7 @@ function harness(overrides: Partial<{ fail: boolean }> = {}): {
     client,
     switchSession: (id) => void switched.push(id),
     activeSessionId: () => 'ses_active' as SessionId,
+    projectDirectory: () => 'O:/project',
   });
   return { handler, calls, switched };
 }
@@ -246,6 +247,7 @@ describe('createCommandHandler', () => {
       switchSession: () => undefined,
       activeSessionId: () => undefined,
       saveKeys: { saveKeys: async (k) => void saved.push(k) },
+      projectDirectory: () => 'O:/project',
     });
     expect(await withSaver(cmd({ kind: 'saveApiKeys', groqKey: 'g', fishKey: 'f', openrouterKey: 'o' }))).toEqual({ ok: true });
     expect(saved).toEqual([{ groq: 'g', fish: 'f', openrouter: 'o' }]);
@@ -294,6 +296,7 @@ describe('createCommandHandler', () => {
       },
       switchSession: () => undefined,
       activeSessionId: () => undefined,
+      projectDirectory: () => 'O:/project',
     });
     expect(await handler(cmd({ kind: 'setSessionAgent', agent: 'x' }))).toEqual({ ok: false, detail: 'no active session' });
     expect(calls).toHaveLength(0);
@@ -323,6 +326,7 @@ describe('createCommandHandler', () => {
       switchSession: () => undefined,
       activeSessionId: () => undefined,
       onAbort: () => void aborted.push('abort'),
+      projectDirectory: () => 'O:/project',
     });
     expect(await withGate(cmd({ kind: 'abort' }))).toEqual({ ok: true });
     expect(aborted).toEqual(['abort']);

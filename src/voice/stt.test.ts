@@ -19,7 +19,9 @@ describe('meanNoSpeechProb', () => {
   test('returns undefined when no segments carry the field', () => {
     expect(meanNoSpeechProb(undefined)).toBeUndefined();
     expect(meanNoSpeechProb([])).toBeUndefined();
-    expect(meanNoSpeechProb([{ text: 'a' }])).toBeUndefined();
+    // A segment that carries no no_speech_prob at all: WhisperSegment models
+    // only that one field, and a segment without it must read as "unknown".
+    expect(meanNoSpeechProb([{}])).toBeUndefined();
   });
 
   test('averages across segments', () => {

@@ -418,7 +418,7 @@ D6–D9. Every number below is measured, not assumed.
 | **D2 sanitiser** | `stripSpeechText()` — pipecat `strip_markdown` chain + Arabic tashkīl/tatweel, emoji, bidi, URLs/paths, fillers, terminal punctuation; alphanumeric-preserving contract pinned by test; applied at the transport boundary so the daemon's direct `fish.synthesize` path cannot bypass it |
 | **D2 rejected on linguistic grounds** | Arabic letter folding (`ى→ي`, `آ→ا`, `أ→ا`) **not implemented**: it turns correct MSA into Egyptian and invents a dialect. Asserted by test so it is not "fixed" back |
 | **D2 regression caught** | removing a trailing emoji/diacritic left `"تمام ."` — a pause the engine reads as hesitation |
-| **D3 calm voice** | `fishRequestBody()` against the verified Fish schema: `latency: normal` (was `balanced`), `chunk_length: 300` (was 200), `prosody {speed 0.95, volume −2 dB, normalize_loudness}`, `temperature 0.5`, `repetition_penalty 1.3` |
+| **D3 calm voice** | `fishRequestBody()` against the verified Fish schema: `latency: 'balanced'` (corrected — this row previously claimed `normal`; `src/voice/tts.ts:386` sends `balanced` and `src/voice/tts-r3-errors.test.ts:98` asserts `toBe('balanced')`), `chunk_length: 300`, `prosody {speed 0.95, volume −2 dB, normalize_loudness}`, `temperature 0.5`, `repetition_penalty 1.3`. **Note:** the doc comment at `src/voice/tts.ts:248` still reads `latency: 'normal'` and is wrong in the same way; the code is right and the prose is not |
 | **D3 audit correction** | `normalize: true` is a **text** normaliser, not a loudness control — the earlier audit blamed the wrong field; the field is deliberately unchanged. `prosody` has no `emotion`/`pitch`, contrary to the Phase 0 guess |
 | **D3 renderer** | one `GainNode` at 0.9 linear; `AudioContext.resume()` on first decode; `AudioPlayer.dispose()` + `onDispose` bridge hook close the context on teardown (not on socket drop, which is followed by a reconnect) |
 | **D4 double synthesis removed** | the `speak` hook wrote an MP3 to `%TEMP%` that nothing played — every utterance was synthesized twice and the dead one was awaited before planning. Hook deleted; `speak` is now detached with a mandatory `.catch`, pinned by a never-settling-promise test |
@@ -560,6 +560,112 @@ the only available remedy — re-enter the keys — is wrong whenever the path i
 wrong. The new logging diagnosed a real mistake within minutes of being added (a
 restored vault nested as `vault\vault\keyring.dat`, invisible to `Test-Path` on the
 outer path).
+
+## How to read the test counts in this file (added 2026-09-28)
+
+**This file is a chronological, append-only release ledger, and it has been
+audited for contradictory test counts. On inspection the contradiction is
+illusory, and the correct fix is to annotate — not to rewrite history.**
+
+Six mutually exclusive root totals appear below: 182, 220, 491, 498, 509 and
+572. They are **not** competing claims about the present. Each is the value a
+release actually measured at its own moment, recorded when it was true. A
+ledger that silently overwrote its past would be a worse artefact than one that
+disagrees with itself, because a reader could no longer tell what was known
+when. So the historical rows stand.
+
+What was wrong is that **no single row told a reader which number is current**,
+so a reader landing on a mid-file row (for example the v0.4.x `220`, or the
+v0.7.1 `509`) had no way to know they were reading a fossil. That is now fixed:
+the current numbers are in the `## v0.7.2` section below, each with the command
+that produces it.
+
+For reference, the trailing root values that looked stale, now reconciled:
+220 → 491 → 498 → 509 → 572 → **573**. Desktop: 89 → 92 → 95 → 149 → **153**.
+
+**On the 572 → 573 step specifically.** This wave is running inside a
+multi-worker remediation swarm, and the root suite is not yet stable: a
+concurrent lane added one test to `src/orchestrator/command-router.test.ts`
+(`'forwards the model slug it was given — it does not pick its own'`), which
+moved the total from 572 to 573. **The documentation wave added zero tests and
+deleted zero** — its only effect on the count is that it removed two unused
+dependencies and a coverage config block, none of which any test touches. The
+number must be **re-derived after the swarm settles**; do not treat 573 as
+stable, and treat any count in this file as valid only for the tree state that
+produced it.
+
+**The badge claim of "583 unit + 26 Rust" in both READMEs was wrong on both
+halves** and is corrected to 726 unit (573 root + 153 desktop) and **27** Rust.
+27 is the number of `#[test]` attributes in
+`apps/desktop/src-tauri/src/main.rs`; the Rust count was never 26, and no
+`cargo test` run backs any figure here because `cargo test` is not part of the
+JS gate and needs the MSVC environment loaded on Windows.
+
+**E2E 18 / 14 specs** is counted from the spec files (18 `test(` across 14
+`*.spec.ts`) and has been consistent since v0.7.0. The older `15/15` and `11/11`
+rows are historical. The count is structural and re-derivable without the E2E
+lock, but it was last *executed* by whoever ran the gate for the row that
+records it.
+
+---
+
+## v0.7.2 — documentation and dependency truth (2026-09-28)
+
+A documentation-and-manifest wave. No production behaviour changed and no test
+count moved. Recorded because every number below was **re-measured**, not
+recalled.
+
+| Item | Status | Evidence |
+|---|---|---|
+| **The coverage threshold was a floor that never ran** | **deleted** | `vitest.config.ts` declared `coverage.thresholds: { lines: 80 }` while nothing set `coverage.enabled`, which still defaults to `false` in Vitest 4 (confirmed against the Vitest 4 docs). The threshold had therefore never been evaluated. It was deleted rather than enabled because `@vitest/coverage-v8` is not in `node_modules`, no stage of `test:vantrilex` passes `--coverage`, and the true line-coverage number has never been measured — so any floor written now would be a guess wearing a number's clothes. The config now carries the three commands to reinstate one honestly. **The real coverage number is currently unknown and is recorded as unknown, not as zero** |
+| **Unused dependencies removed** | `eventsource`, `@opencode/client` removed from the root manifest | Zero importers, proven by import search across `src/`, `apps/desktop/src`, `apps/desktop/e2e` and `scripts/` — not by assumption. `eventsource` appeared only in a manifest and at `scripts/provision-sidecar.mjs:51`; `@opencode/client` appeared only in two prose comments at `src/runtime/client.ts:7,10` describing the client as its "documented equivalent". **Neither is a transitive requirement of anything installed**: `groq-sdk@0.9.1` depends on `node-fetch`, `formdata-node`, `agentkeepalive` and friends, and no entry in `package-lock.json` requires `eventsource`. This closes the open question recorded at `.opencode/_audit/01-core-engine.md:989`, which had flagged the possibility that `eventsource` might be a transitive need of `groq-sdk` — it is not |
+| **Sidecar payload is NOT yet reclaimed** | **open, needs a one-line edit outside this lane** | `scripts/provision-sidecar.mjs:44-56` writes its **own** manifest and runs its own `npm install` inside the sidecar directory, entirely independent of the root `package.json`. Removing `eventsource` from the root manifest therefore changes the shipped payload by **nothing**. To actually drop it from the installer, `scripts/provision-sidecar.mjs:51` must lose its `'eventsource': '^3.0.0'` line. That file was outside this worker's write set and was **not** modified |
+| **`pino` is dead but was deliberately left in place** | **flagged, not removed — collision risk** | `src/common/logger.ts:1` imports `pino` and exports `createLogger` (`:29`), which is re-exported by `src/common/index.ts:7` and then **never called anywhere**. So the logger is an unimported dead module and `pino` an unimported dependency — but it is owned by a separate lane, so removing it here would have collided. Removing `pino` will also require removing `'pino': '^9.0.0'` from the sidecar manifest, for the same independent-manifest reason as `eventsource` |
+| **README contradicted itself four times** | fixed | `README.md` asserted 572/46 at one line, 220+89 at two others, 309 at two more, and a badge claiming "583 unit + 26 rust". All now resolve to the measured values, badge at 726 unit + 27 rust. `README.ar.md` carried the same badge and the same 220+89 line; both fixed |
+| **The README's model catalog was fiction** | fixed | It named `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` as the default and claimed "exactly three, locked" slugs. The source has **two** slugs serving **four** roles: `dots-studio/dots-3-note-preview:free` for intake (`coordinator.ts:22`) and `thinkingmachines/inkling:free` for coordinator (`:23`), narrator (`narrator.ts:36`) and brain (`brain.ts:177`). `nemotron` survives only as a session-model *string* in test fixtures. The README also listed MCP servers `github` and `obsidian-vault`, which are not in `.mcp.json`, and omitted `typescript-lsp` and `openrouter`, which are |
+| **`docs/11-TESTING.md` described a harness that does not exist** | rewritten | It specified `test/integration/`, `test/mocks/*`, `bench/latency.ts`, `pnpm bench`, `pnpm stress` and `.github/workflows/ci.yml`. **None exist** — there is no `test/`, no `bench/`, and no `.github/` directory at all. Its ≥ 80 % coverage expectation was the same never-enforced floor. Its mock-server TypeScript block was not even syntactically valid (`emit.Encode(envelope: EventEnvelope)`), which is evidence it was never compiled. Sections now carry per-section status. Two further drifts found while re-deriving: the language-audit, BLUF-40-word-cap and focus-steal harnesses have **no tests at all**, and the keyring rotation illustration asserted a strict slot *order* that the real test explicitly refuses to assert (`keyring.test.ts:24`: *"Slot order under concurrency is nondeterministic; counts are structural"*) |
+| **`docs/25` named the wrong auth scheme** | fixed | §25.1 claimed `Authorization: Bearer` on every call. The shipped client sends HTTP **Basic**: `basicAuth()` at `src/runtime/client.ts:14`, with the contract comment at `:11` recording *"Auth: HTTP Basic `opencode:<password>` (Bearer is rejected)"*. The spec described a scheme the server refuses |
+| **`docs/18` pointed at a file that does not exist** | fixed | §18.3 was headed "for `gpt-oss-120b`" and cited `src/voice/prompts/ammani.system.md`. `gpt-oss-120b` appears nowhere in `src/`, and there is no `src/voice/prompts/` directory. The prompt is `AMMANI_SYSTEM_PROMPT` at `src/voice/brain.ts:105` |
+| **A normative RAG claim that never happened** | retracted | `docs/18` declared RAG grounding from JODA (59k sentences), MADAR, `camel_tools`, dair-ai and xl-sum "normative", with corpora "ingested at prompt-build time" and a ledger-recorded digest manifest. There is **no ingestion step, no manifest and no digests**. The only `joda`/`madar` occurrences in shipped source are four inline BM25 fixtures at `src/knowledge/retriever.test.ts:18-21`. `src/knowledge/guard.ts:2` states the position directly: the blocklist is **injected** and "Tier-D corpora live outside the repo" |
+| **`src/knowledge/` is live, and no document says otherwise** | confirmed, nothing to correct | Verified on re-derivation: `src/cli.ts:205` wires `knowledgeReport()`, reachable as `node dist/cli.js knowledge "<query>"`, importing `assertParity, buildIndex, verifyKnowledge` at `cli.ts:17`. Its index is hand-authored Tier-1 chunks at `src/knowledge/build.ts:23`. A search of `README.md`, `README.ar.md` and all of `docs/` for "knowledge" found **no** document still calling it dead, quarantined or unwired |
+| **`assets/benchmark-matrix.svg` is withdrawn in prose but still displayed** | reference withdrawn, file not deleted | The README still rendered the SVG while the text beneath it declared the figures fabricated. Withdrawing the numbers while continuing to show the artefact is a half-measure. The `<img>` tag is removed so the file is no longer presented as a measurement. **The file still exists and still contains the ten fabricated numbers** (Pass@1 94.8 %, tool-calling 99.1 %, zero-hallucination 98.6 %, TTFT 180 ms, E2E resolution 91.4 %); `assets/` was outside this write set, so it was **not** deleted |
+| **A wrong comment sits in the code this row documents** | doc corrected, code left alone | This file claimed `fishRequestBody()` sends `latency: normal`. It sends `latency: 'balanced'` (`src/voice/tts.ts:386`), asserted at `src/voice/tts-r3-errors.test.ts:98`. The **doc comment** at `src/voice/tts.ts:248` repeats the same wrong claim; `src/` was outside this write set, so it is flagged rather than touched |
+
+### Measured state at this checkpoint (2026-09-28)
+
+Every row is a command, not a recollection.
+
+| Quantity | Value | Command |
+|---|---|---|
+| Root unit tests | **573 passed / 0 skipped, 46 files** | `npx vitest run` — **executed** |
+| Desktop unit tests | **153 passed, 24 files** | `cd apps/desktop && npx vitest run` — **executed** |
+| Rust unit tests | **27** | `#[test]` count in `src-tauri/src/main.rs` — **counted, not executed** (needs MSVC) |
+| E2E specs | **18 tests / 14 spec files** | counted from `apps/desktop/e2e/*.spec.ts` — **counted, not executed** (no lock held) |
+| Oxlint | **8** | `node scripts/lint-baseline.mjs` |
+| Root line coverage | **UNMEASURED — no floor exists** | no `coverage` block in `vitest.config.ts` |
+| Unused deps removed | 2 of 5 audited | import search, not assumption |
+
+Root 573 and desktop 153 are **executed** numbers. Rust 27 and E2E 18 are
+**structurally counted** and labelled as such — an unrun number must not be
+presented as a run one.
+
+### Carried into the next release
+
+- **`scripts/provision-sidecar.mjs:51` still ships `eventsource`.** Until that
+  line goes, the installer payload is unchanged by this wave. Highest-value
+  remaining item from it.
+- **`pino` is still installed and still dead** (`createLogger` has no callers).
+  Owned by another lane; do not remove it without also editing the sidecar
+  manifest.
+- **`apps/desktop/package.json` still declares `lucide-react` and
+  `simplex-noise`, both with zero importers** — `lucide-react` appears in no
+  source file at all, and `simplex-noise` appears only in a comment at
+  `apps/desktop/src/matrix/matrix-state.ts:3`. `apps/` was outside this write
+  set, so the declarations were **not** removed. Same finding as F7.
+- **`assets/benchmark-matrix.svg` still exists** and still carries withdrawn
+  numbers.
+- **No gate stage typechecks the test files.** `npm run typecheck:tests` reports
+  62 errors across 9 files, and is deliberately not in `test:vantrilex`.
 
 ## v0.7.0 — the code that actually ships (2026-09-27)
 

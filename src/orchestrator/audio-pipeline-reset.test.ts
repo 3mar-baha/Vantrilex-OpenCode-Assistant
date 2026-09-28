@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { AudioIngest, WINDOW_BYTES } from '../voice/ingest.js';
-import { AudioPipeline, type AudioPipelineDeps } from './audio-pipeline.js';
-import type { Utterance } from '../common/brands.js';
+import { AudioPipeline, type AudioPipelineDeps, type Utterance } from './audio-pipeline.js';
 
 // L6: `reset()` cleared the ingest buffer and the repeat memory and stopped
 // there. A `pushChunk` already parked on an await — the STT provider, the

@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-583%20unit%20%2B%2026%20rust-brightgreen" alt="Tests" /></a>
+  <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-726%20unit%20%2B%2027%20rust-brightgreen" alt="Tests" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.7.2-blueviolet" alt="Version" /></a>
@@ -310,30 +310,25 @@ end to end in `fr12.spec.ts`). Full ledger in `docs/10-CHECKPOINT.md`.
 
 ## 6. Measured behaviour
 
-<p align="center">
-  <img src="assets/benchmark-matrix.svg" alt="Measurement summary: what this repository actually measures today" width="100%" />
-</p>
-
-> **This section previously published five "empirical accuracy" percentages
-> against a "baseline agent" — Pass@1 94.8 %, tool-calling precision 99.1 %,
-> zero-hallucination 98.6 %, TTFT 180 ms, E2E resolution 91.4 %. All ten figures
-> were fabricated.** No baseline agent exists in this repository, no harness
-> produced them, and no artifact records how they were obtained. A 7-agent
-> forensic audit removed them on 2026-09-28. Numbers presented as measurements
-> must be traceable to a command; these were not, so they are not measurements.
->
-> `assets/benchmark-matrix.svg` was generated from the same unverified figures
-> and is likewise withdrawn until real data exists.
+> **Withdrawn: `assets/benchmark-matrix.svg`.** The image is deliberately *not*
+> rendered below. The file still exists and still contains the same ten
+> fabricated figures that were removed from this file on 2026-09-28 — Pass@1
+> 94.8 %, tool-calling precision 99.1 %, zero-hallucination 98.6 %, TTFT
+> 180 ms, E2E resolution 91.4 % — but withdrawing the prose while continuing to
+> display the artefact is a half-measure that still shows a reader the numbers.
+> Do not re-add the `<img>` tag until the file is regenerated from a real
+> harness, or deleted. See also the note in `docs/10-CHECKPOINT.md`.
 
 What this repository *does* measure, and what was measured when:
 
 | Quantity | Value | How it was obtained |
 |---|---|---|
-| Root unit tests | **572 passing / 46 files** | `npx vitest run` |
+| Root unit tests | **573 passing / 46 files** | `npx vitest run` |
 | Desktop unit tests | **153 passing / 24 files** | `cd apps/desktop && npx vitest run` |
 | End-to-end specs | **18 passing / 14 specs** | `npx playwright test` (fake control plane) |
 | Rust unit tests | **27** | `#[test]` in `src-tauri/src/main.rs` |
 | Oxlint warnings | **8** (ratchet baseline) | `scripts/lint-baseline.mjs` |
+| Line coverage | **NOT MEASURED — no floor exists** | `vitest.config.ts` declares no `coverage` block at all |
 | Dead code in `src/` | **0 of 51 live modules** | transitive import walk from `daemon.ts` + `cli.ts` |
 | TTS first-chunk latency | **426–556 ms** | live Fish Audio, `latency: balanced` |
 | STT latency | **421–688 ms** | live Groq `whisper-large-v3-turbo` |
@@ -342,6 +337,23 @@ What this repository *does* measure, and what was measured when:
 Every figure in the right-hand column is reproducible. The test rows run in
 `npm run test:vantrilex`; the latency rows require vault keys and burn free-tier
 quota, so they are not in any gate.
+
+**There is no coverage floor, deliberately.** `vitest.config.ts` used to declare
+`coverage.thresholds: { lines: 80 }` while nothing set `coverage.enabled`, so the
+threshold had never been evaluated and `coverage.enabled` still defaults to
+`false` in Vitest 4. It read like a guarantee and enforced nothing. It was
+deleted rather than enabled, because `@vitest/coverage-v8` is not installed, no
+gate stage passes `--coverage`, and the true number has never been measured —
+so any floor written today would be a guess. The config carries a comment with
+the exact three commands to reinstate one honestly.
+
+**Dependencies removed as dead** (zero importers, verified by import search, not
+assumed): `@opencode/client` and `eventsource` from the root manifest. Neither is
+required by any other installed package — `groq-sdk@0.9.1` depends on
+`node-fetch`, `formdata-node` and friends, and no lockfile entry requires
+`eventsource` — so both were pure dead weight. See
+`docs/10-CHECKPOINT.md` for the sidecar-payload consequence, which is **not yet
+reclaimed** and needs a `scripts/provision-sidecar.mjs` edit.
 
 <details>
 <summary>🔬 Evaluation methodology & harness</summary>
@@ -363,7 +375,7 @@ quota, so they are not in any gate.
   head-to-head TTFT comparison, and contributors should paste fresh percentile
   runs into `docs/10-CHECKPOINT.md` before citing them.
 - **Quality gates** (`npm run test:vantrilex` + `test:e2e`): tsc, eslint,
-  oxlint, 309 unit tests (220 root + 89 desktop), 15 Playwright E2E — all green, exit 0.
+  oxlint, 726 unit tests (573 root + 153 desktop), 18 Playwright E2E — all green, exit 0.
 - Engine-vs-baseline deltas are project-reported from these harnesses;
   reproduce with the quick-start commands and compare against the checkpoint
   ledger before citing.
@@ -428,8 +440,8 @@ Environment variables: `OPENCODE_SERVER_PASSWORD` (serve auth),
   <img src="assets/e2e-test-harness.svg" alt="doctor to test suites to checkpoint ledger pipeline" width="100%" />
 </p>
 
-Verification pipeline: `doctor` → `test:vantrilex` (309 green) → `test:e2e`
-(15/15 green) → checkpoint ledger row. Any red refuses the commit. Error
+Verification pipeline: `doctor` → `test:vantrilex` (726 green) → `test:e2e`
+(18/18 green) → checkpoint ledger row. Any red refuses the commit. Error
 recovery: `VAULT_CORRUPT` or empty vault → re-run `vault bootstrap`; serve
 unreachable → check password + `probeHealth`; 409 storms → backoff requeue is
 automatic; 401 → halt and rotate credentials, never retry blind.
@@ -440,8 +452,8 @@ automatic; 401 → halt and rotate credentials, never retry blind.
 |---|---|---|
 | Types | `tsc --noEmit` (via `test:vantrilex`) | strict contracts hold |
 | Lint | eslint + oxlint, zero warnings | style + Alicia rules |
-| Unit | vitest root (220) + desktop (89) | behavior at seams |
-| E2E | Playwright 15/15 | shell boots, bridge live, commands round-trip, barge-in aborts |
+| Unit | vitest root (573) + desktop (153) | behavior at seams |
+| E2E | Playwright 18/18 | shell boots, bridge live, commands round-trip, barge-in aborts |
 | Live | `live_console_test.ts` | real serve, real APIs, measured budgets |
 | Packaging | `packaging-preflight.mjs` | 14/15 (MSVC linker pending) |
 
@@ -449,12 +461,31 @@ automatic; 401 → halt and rotate credentials, never retry blind.
 
 ### Provider & model catalog
 
-Default model: `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` (promoted
-after a live HTTP 200 smoke with `msg_…` receipt and identity reply).
-Registered OpenRouter slugs — exactly three, locked: Nemotron coordinator,
-Dots3 intake, Inkling driver. Six MCP servers are
-wired — `sequential-thinking`, `memory`, `filesystem` (project-relative),
-`github`, `context7`, and `obsidian-vault` (project-relative `vault/`) —
+Every registered OpenRouter slug is `:free` — a product decision, not an
+accident. There are exactly **two** slugs serving **four** roles:
+
+| Role | Constant | Slug |
+|---|---|---|
+| Conversational intake | `INTAKE_MODEL` (`src/orchestrator/coordinator.ts:22`) | `dots-studio/dots-3-note-preview:free` |
+| Coordinator / planner | `COORDINATOR_MODEL` (`coordinator.ts:23`) | `thinkingmachines/inkling:free` |
+| Narrator (spoken confirmations) | `NARRATOR_MODEL` (`src/orchestrator/narrator.ts:36`) | `thinkingmachines/inkling:free` |
+| Brain / `cli live` | `BRAIN_OPENROUTER_MODEL` (`src/voice/brain.ts:177`) | `thinkingmachines/inkling:free` |
+
+TTS is Fish, not OpenRouter: `TTS_MODEL = 's2.1-pro-free'` (`src/voice/tts.ts:31`).
+
+Two Inkling requirements were found by live calls, not by reading docs, and both
+fail silently if dropped: the requests **must** send an agentic
+`User-Agent: opencode/1.0 (Voxaura)` (without it Inkling answers HTTP 403
+"only available on agentic harnesses") and **must** set
+`reasoning: { effort: 'none' }` (without it the model spends the budget
+reasoning and returns `finish=length` with `content: null`).
+
+There is no Nemotron slug. `nemotron` survives only as a *session model name*
+string inside test fixtures (`coordinator.test.ts:97`, `narrator.test.ts:57`),
+which is user-set state, not a routing default.
+
+`.mcp.json` wires six MCP servers — `context7`, `memory`, `filesystem`
+(project-relative), `sequential-thinking`, `typescript-lsp`, and `openrouter` —
 with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.
 
 ### Packaging & release

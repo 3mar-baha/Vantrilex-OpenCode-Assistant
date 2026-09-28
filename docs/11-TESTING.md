@@ -1,65 +1,87 @@
-# 11 — Testing: Vitest Strategy, Mock Servers, Latency Harness & Stress Suites
+# 11 — Testing: what actually runs, and what is still design intent
 
-> **Canonical status:** Governance. Quality truth; Gate-4 implementation detail (`16` §16.6.2).
-> Types: `05` · Chaos detail: `23` · Docs-gate checks: `16` §16.6.1.
+> **Canonical status:** Partly superseded. **Read this banner before the rest.**
+>
+> This document was written as a *specification* for a test harness that was
+> never built. On 2026-09-28 every claim below was re-checked against the
+> physical repository. Large parts of it describe files, scripts and CI that do
+> not exist. The aspirational text is retained below as design intent, but every
+> section now carries its real status. **Do not read this file as a description
+> of the gate.**
 
-## 11.1 — Test Pyramid (normative)
+## 11.0 — What actually exists (measured 2026-09-28)
 
-| Layer | Runner | Scope | Coverage expectation |
-|-------|--------|-------|---------------------|
-| Unit | `vitest run` (`src/**/*.test.ts`, colocated) | keyring slots, LRU cache, BLUF formatter, 3-Case classifier, validators, speech queue, 40-word cap | ≥ 80% lines, 100% of `keyring.ts` + `cache.ts` branches |
-| Integration | `vitest run` (`test/integration/`) | orchestrator vs mock `serve` (HTTP+SSE), voice vs mock Groq/Fish, vault round-trip on CI fixture, hot-restart drill | Every FR-1–FR-12 happy path + E-1–E-15 edge |
-| Benchmark | `pnpm bench` (harness below) | STT p50, brain p50/p99, TTS first-chunk, cache-hit start, barge-in cut | Budgets in `01` NFR-1/2/3/9/11 |
-| Chaos/stress | `pnpm stress` (see `23`) | kill -9, SSE gaps, 429 storms, 100k bursts, leak watch | SLAs in `10` §10.2, `23` |
-| Docs gates | PowerShell checks (`16` §16.6.1) | existence, placeholders, cross-refs, fences | Exact counts per batch |
+| Layer | Runner | Real status |
+|---|---|---|
+| Root unit | `npx vitest run` | **573 passing / 46 files**, colocated in `src/**/*.test.ts` |
+| Desktop unit | `cd apps/desktop && npx vitest run` | **153 passing / 24 files** |
+| Rust unit | `cargo test` | **27** `#[test]` in `src-tauri/src/main.rs` |
+| E2E | `npx playwright test` (in `apps/desktop`) | 18 `test(` across 14 spec files, driven against `e2e/stub-daemon.mjs` — a **fake** control plane, no providers and no vault |
+| Lint / types | `tsc --noEmit`, `eslint`, `oxlint` (8-warning ratchet) | all in `npm run test:vantrilex` |
+| **CI** | — | **does not exist.** No `.github/` directory, no workflow file, no runner. Every gate above is run by hand |
+| **Integration suite** | — | **does not exist.** There is no `test/` directory |
+| **Mock server harness** | — | **does not exist.** There is no `test/mocks/` |
+| **Benchmark harness** | — | **does not exist.** There is no `bench/` directory and no `bench` or `stress` npm script |
+| **Coverage floor** | — | **none.** See §11.1 |
 
-**Green gate:** `tsc --noEmit` (0 errors) + `eslint --max-warnings 0` + `vitest run`
-(100% pass) + benchmarks within budget + placeholder grep clean. Red returns to
-Gate 3 (`16` §16.6.2).
+`npm run test:vantrilex` is `typecheck && lint && lint:ox && test &&
+test:desktop && test:e2e`. It **does** include E2E, and it needs ports
+4096/4097/4197 free — an installed build holding them makes it fail with
+`EADDRINUSE`.
 
-## 11.2 — Mock Servers (normative fixtures)
+Note also that no stage typechecks the test files. Root `tsconfig.json` sets
+`exclude: ["**/*.test.ts"]` and Vitest transpiles without checking types, so all
+46 root test files and the whole desktop renderer compile under **no type
+checker at all**. `npm run typecheck:tests` exposes this: it currently reports
+**62 errors across 9 files**. It is deliberately not in the gate, because adding
+it would turn the gate red on pre-existing debt.
 
-All external I/O is mockable via interfaces; tests never touch live Groq/Fish/serve.
+## 11.1 — Test pyramid (aspirational; reality per §11.0)
+
+The original table claimed an integration tier at `test/integration/`, benchmark
+and stress tiers driven by `pnpm bench` and `pnpm stress`, and a **≥ 80 % line
+coverage** expectation. Three corrections:
+
+1. **`test/integration/`, `bench/`, `pnpm bench`, `pnpm stress` do not exist.**
+   npm is the package manager; `pnpm-lock.yaml` in the repo is vestigial.
+2. **The ≥ 80 % coverage expectation was never enforced and never measured.**
+   `vitest.config.ts` declared `coverage.thresholds: { lines: 80 }` while nothing
+   set `coverage.enabled`, which still defaults to `false` in Vitest 4 — so the
+   threshold had never been evaluated once. A floor that never runs is worse
+   than no floor, because it reads as a guarantee. It has been **deleted**, and
+   the true line-coverage number is currently **unknown**. To reinstate a real
+   floor: install `@vitest/coverage-v8`, run
+   `npx vitest run --coverage.enabled --coverage.provider=v8`, record the
+   result in `docs/10-CHECKPOINT.md`, and only then write the threshold and add
+   a `--coverage` stage to the gate.
+3. The unit tier is the only one that exists, and it is the one that carries the
+   project.
+
+## 11.2 — Mock servers — NOT IMPLEMENTED
+
+All external I/O is mockable via interfaces, and the unit suite honours that:
+Groq, Fish Audio and the OpenCode serve client are all injected. But there is no
+shared `MockServe` / `MockGroq` / `MockFish` harness, and there is no
+`test/mocks/` directory. The TypeScript interface block that used to stand here
+was never valid TypeScript (`emit.Encode(envelope: EventEnvelope)`), which is
+itself evidence it was never compiled or reviewed.
+
+The closest real equivalents are `apps/desktop/e2e/stub-daemon.mjs` (a real
+`UiServer` plus the real command router behind a fake control port `:4197`) and
+the per-module `*.test.ts` injected doubles in `src/`.
+
+## 11.3 — Latency benchmark harness — NOT IMPLEMENTED
+
+There is no `bench/latency.ts` and no percentile harness. Latency has instead
+been measured **live against real providers** and recorded in
+`docs/10-CHECKPOINT.md` and the README "Measured behaviour" table — the only
+numbers in this project that are not unit-test numbers. Those runs require vault
+keys, burn free-tier quota, and are in **no gate**, which is why the free-tier
+figures degrade over time without anything going red. The `BUDGETS` constant
+below is design intent:
 
 ```ts
-// test/mocks/serve.ts — mock opencode serve (HTTP + SSE)
-export interface MockServe {
-  readonly baseUrl: string;
-  createSession(dir: string): { sessionId: string };
-  emit.Encode(envelope: EventEnvelope): void; // inject SSE frame incl. duplicates/gaps
-  dropConnection(): void;                     // simulate E-2 / E-4
-  close(): Promise<void>;
-}
-
-// test/mocks/groq.ts — scripted Whisper + chat responses with programmable latency
-export interface MockGroq {
-  setSttLatencyMs(p50: number): void;
-  setBrainLatencyMs(p50: number, p99: number): void;
-  failNext(n: number, status: 429 | 500 | 'timeout'): void; // E-3 / E-8 drills
-}
-
-// test/mocks/fish.ts — scripted TTS chunks; first-chunk delay programmable
-export interface MockFish {
-  setFirstChunkMs(ms: number): void;
-  failWith(status: 429 | 500): void;          // E-7 drill
-}
-```
-
-**Contract fidelity rule:** mock payloads are generated from the same `zod` schemas as
-production validators — a mock that emits schema-invalid data fails the test setup,
-not the code under test.
-
-## 11.3 — Latency Benchmark Harness (normative)
-
-```ts
-// bench/latency.ts — 200 samples per subsystem, reference network profile
-export interface LatencyReport {
-  readonly subsystem: 'stt' | 'brain' | 'tts-first-chunk' | 'cache-hit';
-  readonly samples: number;                   // ≥ 200 (docs), ≥ 1000 (release)
-  readonly p50Ms: number; readonly p99Ms: number;
-  readonly budget: { readonly p50Ms: number; readonly p99Ms?: number };
-  readonly pass: boolean;
-}
+// NOT PRESENT IN THE REPO — target budgets for a future harness.
 export const BUDGETS = {
   stt:            { p50Ms: 500 },
   brain:          { p50Ms: 2000, p99Ms: 5000 },
@@ -68,64 +90,65 @@ export const BUDGETS = {
 } as const;
 ```
 
-Procedure: warm the path (10 samples discarded) → collect N samples through mocks at
-reference latency (NFR-11 profile: Win11 x64, fiber-class loopback shim, Groq TTFT
-250–350 ms, Fish TTFB 400–600 ms) → compute percentiles → assert `pass`. Release runs
-repeat against live providers (sandbox keys, `27-CREDENTIALS.md`) and record
-before/after in the tuning log (`08` M5).
+## 11.4 — Rotation distribution proof — IMPLEMENTED
 
-## 11.4 — Rotation Distribution Proof (normative, ADR-005 proof)
+`src/voice/keyring.test.ts:11` implements the 25-acquisition rotation proof:
+`test('25 concurrent acquisitions resolve slots 0-9/10-19/20-24', …)`.
 
-```ts
-// src/voice/keyring.test.ts (illustrative core — lock-free, no mutex helper)
-test('25 concurrent acquisitions over 3-key pool resolve slots 0-9/10-19/20-24', async () => {
-  const ring = await Keyring.load(fixtureVault(3));
-  const used: string[] = await Promise.all(
-    Array.from({ length: 25 }, () => ring.acquire('groq').then(async (k) => {
-      await ring.release('groq', true); return k.id;
-    })));
-  expect(used.slice(0, 10)).toEqual(all('K1'));
-  expect(used.slice(10, 20)).toEqual(all('K2'));
-  expect(used.slice(20, 25)).toEqual(all('K3'));
-});
-```
+One correction to the illustration that used to stand here. It asserted a
+strict **order** — `expect(used.slice(0, 10)).toEqual(all('K1'))` — which is
+wrong and was never what the test does. `keyring.test.ts:24` says so explicitly:
+*"Slot order under concurrency is nondeterministic; counts are structural."*
+The real invariant is that each pool yields its own count, not that pool 1
+happens to win the race. Do not "fix" the test to match the old doc.
 
-Concurrency: 25-way parallel dispatch with no lock — fetch-and-add ordering makes
-slot assignment structural. Failure injection: scripted 429 on K1 at slot 5 → forced
-advance asserted (`lastRolloverReason: 'rate-limited'`).
+## 11.5 — Language audit — NOT IMPLEMENTED
 
-## 11.5 — Language-Audit Test (normative, `02` §2.3.3 proof)
+The 100-briefing bilingual corpus, the non-technical-English scan, the
+code-span/Arabic-script check and the trust-breaker scan described here **do not
+exist**. There is no language-audit test in `src/`. The dialect itself *is*
+locked and *is* asserted, but by much narrower tests in
+`src/knowledge/personas.test.ts` and `src/knowledge/corpus.test.ts` — those
+check the persona fixtures stay Ammani and keep English technical terms. That is
+not the same guarantee, and this section should not be cited as if it were.
 
-Brain outputs are scanned: narrative spans must contain zero non-technical English
-words (allowlist: code identifiers, paths, error codes, session names); code spans
-must contain zero Arabic-script characters; zero MSA broadcast phrasing and zero
-foreign-dialect particles; trust-breaker scan (no hallucinated completion claims,
-tone matched to severity, no lectures). Fixture corpus: 100 representative
-briefings, bilingual. One violation fails the suite.
+## 11.5A — Excerpt-cap, barge-in, destructive-intent and mute drills — PARTIALLY IMPLEMENTED
 
-## 11.5A — Excerpt-Cap, Barge-in, Destructive-Intent and Mute Drills (normative)
+- **40-word cap:** not implemented as a test. There is no `bluf()` function.
+  What exists is a `briefings: 'bluf' | 'full'` config enum
+  (`src/common/config.ts:26`) and a BLUF instruction inside the brain system
+  prompt (`src/voice/brain.ts:110`). The ≤ 45 s / ≤ 15-word limits are prompt
+  instructions to a model, not an enforced invariant.
+- **Barge-in:** implemented and gated — see the L6 row in
+  `docs/10-CHECKPOINT.md` (generation counter re-checked after every await).
+- **Destructive intent:** implemented via FR-12 two-way confirmation in
+  `src/orchestrator/command-router.ts`, with parked-command caps recorded as L20.
+- **Meeting mute:** see §11.6 — a real defect here was found, not a harness.
 
-- **40-word cap:** `bluf()` outputs quoting logs assert ≤ 40 spoken words per excerpt.
-- **Barge-in:** hotkey/verbal stop cuts playback in < 50 ms; session parks to idle.
-- **Destructive intent:** 50 ambiguous + 50 explicit destructive prompts — zero
-  executions without two-way confirmation, 100% ask-rate on ambiguous input (FR-12).
-- **Meeting mute:** simulated mic-in-use by a comms tool asserts zero speech output
-  with desktop-notification fallback delivered instead.
+## 11.6 — Focus-steal harness — NOT IMPLEMENTED, and the concern is real
 
-## 11.6 — Focus-Steal Harness (normative, `02` §2.2 proof)
+There is no focus-log hook and no 50-injection drill. Note that
+`src/voice/tts.ts:12` records the design position directly: no focus APIs are
+used. This remains an **unverified** claim about packaged behaviour, not a
+measured one, and is the same class as the open SEC-7 / L18 microphone-grant
+row. It is listed as unverified rather than closed.
 
-50 completion injections on Windows reference host with a focus-log hook: asserts zero
-foreground window activations and zero focus-API calls (spy on the audio/focus
-boundary). Any activation fails the suite.
+## 11.7 — CI gates — NOT IMPLEMENTED
 
-## 11.7 — CI Gates (normative)
+There is no `.github/` directory, no `ci.yml`, and no runner of any kind. The
+yaml block that used to stand here was a shape sketch, not a file.
 
-```yaml
-# .github/workflows/ci.yml (shape — full file in implementation milestone)
-# jobs: typecheck (tsc --noEmit) → lint (eslint --max-warnings 0) →
-#       unit+integration (vitest run) → bench (budgets) → docs-gates (counts/grep/refs)
-# Docs-only changes run docs-gates + typecheck; code changes run the full chain.
-```
+The real gate is a single manual command, `npm run test:vantrilex`, described in
+§11.0. Its known blind spots, all of which have produced shipped defects:
+
+- Every network client is an injected mock, and E2E drives a fake control
+  plane, so **no gate stage exercises a real provider**. v0.6.0 passed every
+  gate and could not boot at all.
+- Test files are not typechecked (62 latent errors, §11.0).
+- `oxlint` exits 0 on its warnings; the ratchet is a separate script that
+  compares a count against a baseline file.
+- `cargo test` is not part of the JS gate at all and needs the MSVC environment
+  loaded via `VsDevCmd.bat` on Windows.
 
 ---
 

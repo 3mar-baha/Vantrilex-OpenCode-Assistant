@@ -23,6 +23,7 @@ function harness(nowRef: { value: number }): {
       },
       switchSession: () => undefined,
       activeSessionId: () => 'ses_active' as SessionId,
+      projectDirectory: () => 'O:/project',
     },
     { now: () => nowRef.value },
   );

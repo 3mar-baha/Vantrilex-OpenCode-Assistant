@@ -22,15 +22,13 @@
     "lint:ox": "node scripts/lint-baseline.mjs",
     "test": "vitest run",
     "test:desktop": "npm --prefix apps/desktop run test",
-    "test:vantrilex": "npm run typecheck && npm run lint && npm run lint:ox && npm run test && npm run test:desktop && npm run test:e2e",
+    "test:vantrilex": "npm run typecheck && npm run typecheck:tests && npm run lint && npm run lint:ox && npm run test && npm run test:desktop && npm run test:e2e",
     "dev": "npm --prefix apps/desktop run dev",
     "dev:web": "npm --prefix apps/desktop run dev:web",
     "doctor": "node dist/cli.js doctor",
     "test:e2e": "npm --prefix apps/desktop run test:e2e"
   },
   "dependencies": {
-    "@opencode/client": "^2.0.0",
-    "eventsource": "^3.0.0",
     "groq-sdk": "^0.9.0",
     "lru-cache": "^11.0.0",
     "onnxruntime-node": "1.30.0",

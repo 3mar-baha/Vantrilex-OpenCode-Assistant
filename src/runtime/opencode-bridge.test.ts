@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { basicAuth, ServeClient } from './client.js';
-import { OpenCodeBridge } from './opencode-bridge.js';
+import { OpenCodeBridge, type SessionDetails } from './opencode-bridge.js';
 import { fuzzyPick } from './fuzzy-match.js';
 
 // Phase 5 — OpenCode 360° omnipotent control.
@@ -109,9 +109,21 @@ function bridge(): OpenCodeBridge {
   return new OpenCodeBridge(new ServeClient(baseUrl, 'test-password'), 'O:/project');
 }
 
+/**
+ * `getSessionDetails` returns `SessionDetails | null` because a missing session
+ * must not throw (see the last test in this block, which pins that). Every test
+ * below is about a session the mock serve DOES have, so null there is a broken
+ * fixture, not an expected result — fail loudly instead of dereferencing it.
+ */
+async function sesADetails(windowMax?: number): Promise<SessionDetails> {
+  const d = await bridge().getSessionDetails('ses_a' as never, windowMax);
+  if (d === null) throw new Error('expected details for ses_a');
+  return d;
+}
+
 describe('OpenCodeBridge.getSessionDetails', () => {
   test('returns identity, model, agent and window occupancy', async () => {
-    const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
+    const d = await sesADetails(200_000);
     expect(d.id).toBe('ses_a');
     expect(d.title).toBe('إصلاح خطأ الصوت');
     expect(d.model).toBe('muse-spark');
@@ -123,18 +135,18 @@ describe('OpenCodeBridge.getSessionDetails', () => {
   test('reads the live flat message shape, not the {info} wrapper', async () => {
     // The wrapper the SDK types implied does not exist on the real serve; the
     // old reader returned null and the timestamp was always missing.
-    const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
+    const d = await sesADetails(200_000);
     expect(d.lastMessageAt).toBe(1_700_000_400_000);
   });
 
   test('reports peak alongside the current fill', async () => {
-    const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
+    const d = await sesADetails(200_000);
     expect(d.tokens.peak).toBeGreaterThan(0);
     expect(d.tokens.messageCount).toBeGreaterThan(0);
   });
 
   test('windowFill is the LAST step including cache, not a sum', async () => {
-    const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
+    const d = await sesADetails(200_000);
     // Last step in the mock: 400000 + 60000 + 20000 + cache.read 200000 + write 2000
     expect(d.tokens.windowFill).toBe(682_000);
     // Row: 120000 + 30000 + 9000 is lifetime spend and is a DIFFERENT number.
@@ -144,19 +156,19 @@ describe('OpenCodeBridge.getSessionDetails', () => {
   });
 
   test('percent is derived from the limit and clamped to 0..100', async () => {
-    const d = await bridge().getSessionDetails('ses_a' as never, 400_000);
+    const d = await sesADetails(400_000);
     expect(d.tokens.percent).toBe(100);
     expect(d.tokens.windowMax).toBe(400_000);
   });
 
   test('an unknown limit yields null percent rather than a guess', async () => {
-    const d = await bridge().getSessionDetails('ses_a' as never);
+    const d = await sesADetails();
     expect(d.tokens.windowMax).toBeNull();
     expect(d.tokens.percent).toBeNull();
   });
 
   test('effort is null when serve did not report one', async () => {
-    const d = await bridge().getSessionDetails('ses_a' as never, 200_000);
+    const d = await sesADetails(200_000);
     expect(d.effort === null || typeof d.effort === 'string').toBe(true);
   });
 
@@ -193,8 +205,10 @@ describe('OpenCodeBridge model/agent switching (fuzzy)', () => {
   });
 
   test('model switching validates the target before sending it', async () => {
-    // An unresolvable name must not be forwarded to serve at all.
-    await expect(bridge().setSessionModel('ses_a' as never, 'zzz-not-real')).rejects.toThrow();
+    // An unresolvable name must not be forwarded to serve at all. The catalog
+    // is the live model list; `zzz-not-real` is in none of it, so the bridge
+    // throws on the resolve and never reaches the client.
+    await expect(bridge().setSessionModel('ses_a' as never, 'zzz-not-real', ['muse-spark'])).rejects.toThrow();
   });
 });
 

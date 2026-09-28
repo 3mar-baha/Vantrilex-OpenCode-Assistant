@@ -19,6 +19,7 @@ import {
 } from './tts.js';
 import type { FishTransport } from './tts.js';
 import type { VoiceId } from '../common/brands.js';
+import type { AudioCacheConfig } from './cache.js';
 
 // Directive 5 TDD: sentence-level streaming. The first sentence must be
 // dispatched to Fish Audio immediately — never buffered behind the full
@@ -241,7 +242,7 @@ describe('fetchWithTimeout (L9)', () => {
     const ring = {
       acquire: () => ({ material: new Uint8Array([1]) }),
       release: () => undefined,
-    } as unknown as Parameters<typeof FishHttpTransport>[0];
+    } as unknown as ConstructorParameters<typeof FishHttpTransport>[0];
     const transport = new FishHttpTransport(ring, 'https://fish.invalid', {
       fetchImpl: (_u, init) => {
         captured.push(init?.signal);
@@ -321,7 +322,7 @@ describe('Fish request policy (D3)', () => {
 // L2 — speakSentences accumulated every sentence's audio into one blob to build
 // a single cache entry, so peak memory equalled the whole reply with no ceiling.
 describe('TtsEngine cache ceiling (L2)', () => {
-  const cfg = {
+  const cfg: AudioCacheConfig = {
     dir: 'C:/Users/omarb/AppData/Local/Temp/opencode/tts-l2-cache',
     maxEntries: 50,
     maxBytes: 1_000_000,
@@ -388,9 +389,13 @@ describe('FileAudioOut pruning (L3)', () => {
 });
 
 describe('TtsEngine sanitisation (D2 integration)', () => {
-  const cfg = {
+  const cfg: AudioCacheConfig = {
     dir: 'C:/Users/omarb/AppData/Local/Temp/opencode/tts-d2-cache',
-    maxEntries: 10,
+    // AudioCacheConfig types maxEntries as the literal `50` (cache.ts:32) and
+    // AudioCache hardcodes `max: 50` (cache.ts:55) — the field is never read,
+    // so the value is not load-bearing here. See the report: that is a
+    // production defect, not a test preference.
+    maxEntries: 50,
     maxBytes: 1_000_000,
     maxEntryBytes: 500_000,
   };

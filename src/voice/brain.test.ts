@@ -91,9 +91,9 @@ describe('OpenRouterBrainClient', () => {
 
   test('HTTP 429 is RATE_LIMITED and is never retried', async () => {
     let calls = 0;
-    const counting = ((...args: unknown[]) => {
+    const counting = ((...args: Parameters<typeof fetch>) => {
       calls += 1;
-      return mockFetch([{ status: 429, body: {} }])(...(args as []));
+      return mockFetch([{ status: 429, body: {} }])(...args);
     }) as unknown as typeof fetch;
     const c = new OpenRouterBrainClient('k', undefined, counting);
     await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'RATE_LIMITED', retryable: false });
@@ -206,18 +206,18 @@ describe('brain output normalization tolerates a non-deterministic model', () =>
 
 describe('openRouterChat (shared P5 transport)', () => {
   test('posts model/system/user with json_object format and returns content', async () => {
-    let seen = null;
-    const fetchImpl = (async (url, init) => {
+    let seen: { url: string; init: RequestInit } | null = null;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
       seen = { url, init };
       return new Response(JSON.stringify({ choices: [{ message: { content: '{"a":1}' } }] }), { status: 200 });
-    });
+    }) as typeof fetch;
     const content = await openRouterChat('k', 'm/slug', 'sys', 'hi', fetchImpl);
     expect(content).toBe('{"a":1}');
-    expect(seen.url).toBe('https://openrouter.ai/api/v1/chat/completions');
-    const body = JSON.parse(seen.init.body);
+    expect(seen!.url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    const body = JSON.parse(seen!.init.body as string);
     expect(body).toMatchObject({ model: 'm/slug', response_format: { type: 'json_object' } });
-    expect(seen.init.headers['Authorization']).toBe('Bearer k');
-    expect(seen.init.headers['User-Agent']).toBe('opencode/1.0 (Voxaura)');
+    expect((seen!.init.headers as Record<string, string>)['Authorization']).toBe('Bearer k');
+    expect((seen!.init.headers as Record<string, string>)['User-Agent']).toBe('opencode/1.0 (Voxaura)');
   });
 
   test('401 rejects non-retryable; empty content rejects retryable', async () => {

@@ -123,7 +123,7 @@ beforeAll(async () => {
       });
       return;
     }
-    if (req.method === 'GET' && req.url.startsWith('/api/model')) {
+    if (req.method === 'GET' && req.url?.startsWith('/api/model')) {
       json(res, 200, {
         data: [
           { id: 'muse-spark', providerID: 'openai', name: 'Muse Spark', limit: { context: 200_000, output: 8_000 } },
@@ -132,7 +132,7 @@ beforeAll(async () => {
       });
       return;
     }
-    if (req.method === 'GET' && req.url.startsWith('/api/skill')) {
+    if (req.method === 'GET' && req.url?.startsWith('/api/skill')) {
       json(res, 200, {
         data: [{ name: 'mission-handoff', description: 'handoff envelope', slash: true, location: '.opencode', content: 'x' }],
       });
@@ -537,9 +537,11 @@ describe('context telemetry (D9)', () => {
 
   test('a model with no catalog limit still reports null rather than zero', async () => {
     // "Unknown" is a real answer; zero would render as a permanently empty gauge.
-    const res = await client().request('/api/model', { method: 'GET' });
-    expect(res.ok).toBe(true);
+    // `request` is private, so reachability is proven through the public
+    // `listModels`, which returns [] on a non-OK response (client.ts:607) —
+    // a non-empty list therefore means serve really answered /api/model.
     const models = await client().listModels();
+    expect(models.length).toBeGreaterThan(0);
     expect(models.find((m) => m.id === 'tiny')?.contextWindow).toBeNull();
   });
 
