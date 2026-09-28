@@ -14,6 +14,7 @@ import { OpenRouterBrainClient, requiresConfirmation } from './voice/brain.js';
 import { ensureVault, resolveVaultRoot } from './memory/vault.js';
 import { FishHttpTransport, TtsEngine, FileAudioOut } from './voice/tts.js';
 import { loadConfig as loadFullConfig } from './common/config.js';
+import { assertParity, buildIndex, verifyKnowledge } from './knowledge/index.js';
 
 const VAULT_PATH = 'vault/keyring.dat';
 
@@ -192,6 +193,43 @@ if (command !== undefined && OPERATOR_COMMANDS.has(command)) {
     // Fresh installs without a writable cwd proceed without memory notes.
   }
 }
+/**
+ * `knowledge` — inspect the shared ground truth and prove the parity invariant.
+ *
+ * Exists so the knowledge layer is reachable from a composition root rather than
+ * sitting as a library nobody imports, and so the parity claim is checkable from
+ * a shell instead of only from a test log. Optionally takes a query:
+ *   node dist/cli.js knowledge "المنفذ 4096"
+ * Exits non-zero if Tier 1 is asymmetric, so it can gate a release.
+ */
+function knowledgeReport(): number {
+  try {
+    assertParity();
+  } catch (err) {
+    console.error(`knowledge: PARITY VIOLATION — ${(err as Error).message}`);
+    return 1;
+  }
+  const report = verifyKnowledge();
+  const index = buildIndex();
+  console.log('knowledge: shared ground truth (Tier 1)');
+  console.log(`  shared chunks : ${report.sharedChunks}`);
+  console.log(`  digest        : ${report.digest}`);
+  console.log(`  index size    : ${index.size}`);
+  console.log(`  nour examples : ${report.nourExamples}`);
+  console.log(`  kareem examples: ${report.kareemExamples}`);
+  console.log(`  persona leaks : ${report.personaKeyLeaks}`);
+  console.log(`  style asymmetries: ${report.styleIdAsymmetries}`);
+
+  const query = process.argv[3];
+  if (query !== undefined && query.length > 0) {
+    console.log(`  query "${query}":`);
+    for (const hit of index.search(query, 3)) {
+      console.log(`    ${hit.score.toFixed(3)}  ${hit.id}  (${hit.source})`);
+    }
+  }
+  return 0;
+}
+
 if (command === 'doctor') {
   process.exit(await doctor());
 } else if (command === 'vault' && process.argv[3] === 'bootstrap') {
@@ -200,7 +238,9 @@ if (command === 'doctor') {
   process.exit(await liveLoop());
 } else if (command === 'serve') {
   process.exit(await serveDaemon());
+} else if (command === 'knowledge') {
+  process.exit(knowledgeReport());
 } else {
-  console.log('usage: opencode-voice doctor | vault bootstrap | live | serve');
+  console.log('usage: opencode-voice doctor | vault bootstrap | live | serve | knowledge');
   process.exit(2);
 }

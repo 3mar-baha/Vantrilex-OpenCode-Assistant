@@ -11,6 +11,7 @@ Windows-first Tauri v2 desktop companion + Node daemon that drives OpenCode v2 (
 | `src/ipc/` | Zero-dependency RFC 6455 server + frozen WS-4097 frame schemas (`voice-ui.v1`, path `/v1/ui`). |
 | `src/orchestrator/` | Command router (FR-12), the intake→plan→narrate coordinator chain, audio pipeline, inventory. **Two models serve three roles**: Dots3 takes intake, Inkling plans *and* narrates. |
 | `src/voice/` | Vault/keyring/STT/TTS/brain. |
+| `src/knowledge/` | Tier-1 shared ground truth + Tier-2/3 styling. Arabic `normalizeArabic`/`normalizeToken`, dependency-free BM25, Tier-D guard. `SharedChunk` has **no persona member** by type. Entry: `node dist/cli.js knowledge ["<query>"]`. |
 | `apps/desktop/src/` | React 18 + Vite + Tailwind renderer (Arabic, RTL). `src/App.tsx` is the HUD. |
 | `apps/desktop/src-tauri/src/main.rs` | Rust process supervisor: Job Object, token/serve-pass provisioning, spawns serve + daemon. |
 | `apps/desktop/e2e/` | Playwright specs driven against `e2e/stub-daemon.mjs` (**a fake control plane**, not the real daemon). |
@@ -88,11 +89,19 @@ Measured free-tier latency (same day, same key): intake p50 **901 ms** · inklin
 Resolve every relative import transitively from `src/daemon.ts` and `src/cli.ts`:
 
 ```
-LIVE production modules : 37
+LIVE production modules : 51
 DEAD production modules : 0
-live source lines       : 6598
+live source lines       : 8056
 dead source lines       : 0
 ```
+
+**The reachability scan MUST follow dynamic imports too.** A static-only scan
+(`from './x.js'`) reports `src/runtime/vad.ts` as dead code. It is not: `daemon.ts:338`
+loads it with `import('./runtime/vad.js')` on purpose, because it pulls
+`onnxruntime-node` and a static import would make that missing native package
+fatal in the sidecar. `src/policy/sidecar-safety.test.ts` enforces exactly that
+form. Resolve every quoted relative specifier, not just `from` clauses, or the
+metric will cry wolf on the one module that is deliberately loaded late.
 
 Three modules that were in that dead set while `CHANGELOG.md` and
 `docs/10-CHECKPOINT.md` claimed they shipped are now wired in `daemon.ts` `think()`:
