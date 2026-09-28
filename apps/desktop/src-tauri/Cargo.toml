@@ -11,14 +11,29 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# S2: ipc.token / serve.pass are now filled from the OS CSPRNG instead of an
+# xorshift64* seeded with `nanos ^ pid` (see `secure_random_bytes` in main.rs).
+# 0.3 was chosen because it is ALREADY in this workspace's Cargo.lock transitively
+# (via tauri), so promoting it to a direct dependency adds no new package to the
+# build graph and no new supply-chain surface. On Windows it resolves to
+# RtlGenRandom/BCryptGenRandom in the kernel, not to a userspace PRNG.
+getrandom = "0.3"
 
 # Force-teardown: a Win32 Job Object with KILL_ON_JOB_CLOSE guarantees the
 # children we spawn die with us, even on TerminateProcess (Task Manager /
 # Stop-Process -Force), where the normal exit handler never runs.
+#
+# `Win32_Security_Authorization` is required for the DACL work in
+# `restrict_to_owner`: SetEntriesInAclW / SetNamedSecurityInfoW / EXPLICIT_ACCESS_W
+# live in that feature. The other two features were already enabled: the token
+# SID plumbing (GetTokenInformation, TOKEN_USER, CreateWellKnownSid) is in
+# `Win32_Security`, and OpenProcessToken/GetCurrentProcess are in
+# `Win32_System_Threading`.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Security_Authorization",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
 ] }
