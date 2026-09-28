@@ -308,24 +308,40 @@ end to end in `fr12.spec.ts`). Full ledger in `docs/10-CHECKPOINT.md`.
 
 ---
 
-## 6. Empirical model accuracy & benchmarks
+## 6. Measured behaviour
 
 <p align="center">
-  <img src="assets/benchmark-matrix.svg" alt="Vantrilex engine vs baseline across five capability benchmarks" width="100%" />
+  <img src="assets/benchmark-matrix.svg" alt="Measurement summary: what this repository actually measures today" width="100%" />
 </p>
 
-<details>
-<summary>📊 Raw tabular data</summary>
+> **This section previously published five "empirical accuracy" percentages
+> against a "baseline agent" — Pass@1 94.8 %, tool-calling precision 99.1 %,
+> zero-hallucination 98.6 %, TTFT 180 ms, E2E resolution 91.4 %. All ten figures
+> were fabricated.** No baseline agent exists in this repository, no harness
+> produced them, and no artifact records how they were obtained. A 7-agent
+> forensic audit removed them on 2026-09-28. Numbers presented as measurements
+> must be traceable to a command; these were not, so they are not measurements.
+>
+> `assets/benchmark-matrix.svg` was generated from the same unverified figures
+> and is likewise withdrawn until real data exists.
 
-| Capability | Vantrilex engine | Baseline agent | Metric target |
-|---|---|---|---|
-| Code generation (Pass@1) | 94.8% | 81.2% | Syntax & logic verified |
-| Tool-calling precision | 99.1% | 88.4% | Zero invalid RPCs |
-| Zero-hallucination rate | 98.6% | 84.0% | File-grounded truth |
-| Latency (TTFT) | 180 ms | 450 ms | 2.5× faster stream |
-| E2E task resolution | 91.4% | 76.5% | Multi-step autonomy |
+What this repository *does* measure, and what was measured when:
 
-</details>
+| Quantity | Value | How it was obtained |
+|---|---|---|
+| Root unit tests | **572 passing / 46 files** | `npx vitest run` |
+| Desktop unit tests | **153 passing / 24 files** | `cd apps/desktop && npx vitest run` |
+| End-to-end specs | **18 passing / 14 specs** | `npx playwright test` (fake control plane) |
+| Rust unit tests | **27** | `#[test]` in `src-tauri/src/main.rs` |
+| Oxlint warnings | **8** (ratchet baseline) | `scripts/lint-baseline.mjs` |
+| Dead code in `src/` | **0 of 51 live modules** | transitive import walk from `daemon.ts` + `cli.ts` |
+| TTS first-chunk latency | **426–556 ms** | live Fish Audio, `latency: balanced` |
+| STT latency | **421–688 ms** | live Groq `whisper-large-v3-turbo` |
+| Planning latency | **~4.8–5.1 s** | live Inkling via OpenRouter |
+
+Every figure in the right-hand column is reproducible. The test rows run in
+`npm run test:vantrilex`; the latency rows require vault keys and burn free-tier
+quota, so they are not in any gate.
 
 <details>
 <summary>🔬 Evaluation methodology & harness</summary>

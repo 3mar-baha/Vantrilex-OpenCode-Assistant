@@ -713,7 +713,13 @@ Every latent finding from `dossier/COMPREHENSIVE_AUDIT_REPORT.md`, re-verified a
 | L23 | `UiCommandSchema` not `.strict()` | **CLOSED** | `.strict()` + per-field validation |
 | L24 | 401/403 and non-2xx both `BRAIN_TIMEOUT` | **CLOSED** | `BRAIN_AUTH` / `RATE_LIMITED` / `BRAIN_REJECTED`, applied to **both** chat paths |
 
-**Tally: 20 closed · 3 open (L6, L16, L17, L22 = 4) · 1 partial (L18).**
+**Tally: 23 closed · 0 open · 1 partial (L18).** Recounted from the table above on
+2026-09-28. The previous tally read *"20 closed · 3 open (L6, L16, L17, L22 = 4)"*,
+which was wrong twice over: it listed four items under a count of three, and it
+claimed three open rows when the table has none. `docs/10-CHECKPOINT.md:744`
+already carried the correct figure, so the ledger text had drifted from the
+ledger table it summarizes. A tally is a derived number; it must be recomputed
+from the rows, never carried forward by hand.
 
 ### 5.6 Secret hygiene
 
@@ -775,3 +781,220 @@ encrypted merge path as the `saveApiKeys` command) and verified by SHA-256 finge
 *End of dossier. 469 tracked files · 101 source files (13,370 L) · 34 live / 31 dead production
 modules · 491 + 149 + 26 + 18 tests green · HEAD `1dbc6a5`, 3 commits ahead of `origin/main`
 (`5260b2e`) · v0.6.2 released and installed.*
+
+---
+
+# Part II — Seven-Agent Forensic Audit (2026-09-28, HEAD `ceeb9ef`)
+
+> **Method.** Seven auditors ran concurrently and independently: four on
+> `opencode/space-bunny-free`, three on `openrouter/stealth/space-bunny-alpha`.
+> Each was forbidden to read the others' output, to edit any file except its own
+> report, and to state a number it had not measured. Every finding below was
+> re-derived from physical source. Full reports, 250 KB+ of file:line evidence,
+> are in `.opencode/_audit/01-…` through `.opencode/_audit/07-…`.
+>
+> **The Part I ledger is preserved above and was not rewritten.** Only its §5.5
+> tally was corrected, because that correction is a fact about the table it
+> summarizes. Findings that contradict Part I are listed explicitly in §7.2
+> rather than edited into it, so the drift remains auditable.
+
+## 7.1 Confirmed ground truth at `ceeb9ef`
+
+Measured, not asserted. Two auditors executed the gate independently and agreed
+to the unit.
+
+| Fact | Value | Provenance |
+|---|---|---|
+| Root vitest | **572 passed / 46 files** | `npx vitest run --reporter=dot` |
+| Desktop vitest | **153 passed / 24 files** | `cd apps/desktop && npx vitest run` |
+| E2E | **18 passed / 14 specs** | `playwright test`, inside the gate |
+| Rust `#[test]` | **27** | `main.rs`, counted |
+| oxlint | 8 warnings, 0 errors, baseline 8 | `scripts/lint-baseline.mjs` |
+| Reachability | **51 live / 0 dead / 8056 lines** | transitive walk incl. dynamic imports |
+| Tier 1 chunks | **43** (8 arch, 11 cap, 8 cmd, 8 fail, 8 lex) | `node dist/cli.js knowledge` |
+| Knowledge digest | `c12f74d0a29f1c46` before corpus edits | `sharedDigest()` |
+| Test matrix | **typecheck → eslint → oxlint → root vitest → desktop vitest → E2E** | `package.json:24` |
+
+## 7.2 Findings that contradict Part I of this dossier
+
+Part I is not wrong so much as superseded, and in three places it was wrong when
+written.
+
+1. **Part I §5.5 tally was arithmetically impossible.** It read *"20 closed · 3
+   open (L6, L16, L17, L22 = 4) · 1 partial"* — four items under a count of
+   three, against a table of 23 CLOSED / 0 OPEN / 1 PARTIAL. Corrected in place.
+2. **Part I cited the L10 evidence at the wrong lines.** It pointed at
+   `daemon.ts:413-415` (the STT-timeout handler); the speechGate fix is at
+   `daemon.ts:605-608`. The same wrong pointer is in `docs/personas/WIRING.md:22`.
+3. **`src/knowledge/` was described as dead or quarantined in seven Part I
+   rows.** It is live — 14 modules, reachable, CLI-wired at `cli.ts:17,205,241`.
+4. **Five "unimplemented" audit markers dated 2026-09-24 have inverted**:
+   barge-in, earcons, microphone capture, safeStorage, and the CLI surface are
+   all implemented now. An inverted marker is worse than an absent one, because
+   it teaches a reader to distrust the document without telling them what is true.
+5. **`README.md:320-326` publishes five "empirical model accuracy" metrics that
+   no baseline agent in this repository has ever measured.** Fabricated data is
+   the most serious documentation defect found; the numbers should be deleted
+   until someone runs the measurement.
+
+## 7.3 Security — severity ordered
+
+### S1. Three live plaintext provider keys on disk — **rotate**
+
+`.env.local:3-5` holds `GROQ_API_KEYS`, `FISH_AUDIO_KEYS` and
+`OPENROUTER_API_KEYS` in plaintext. Fingerprints only, never values:
+`4c5f9e0e2f`, `0860168e89`, `924fbd51a8`.
+
+Containment verified: `.gitignore:19` (`*.local`) covers the file, `git ls-files`
+returns zero matches, and `git rev-list --all --objects` finds the path in
+**zero objects across all history**. The keys were never committed and the
+remote is private. The exposure is local-disk only.
+
+**Action: rotate all three.** They are real credentials in a file whose
+permission model is whatever the filesystem inherited.
+
+### S2. The WS bearer and serve password are not cryptographically random — HIGH
+
+`main.rs:460-476` and `:501-517` derive `ipc.token` and `serve.pass` from an
+**xorshift64\* seeded with `nanos() ^ pid`**. That is a time-and-process-seeded
+PRNG: guessable in principle, and `pid` is enumerable. The daemon's own
+`randomBytes(32)` at `daemon.ts:746` is materially stronger, which makes the
+supervisor the weak link. The `(0600)` comments at `main.rs:444,482` are false —
+`fs::write` at `:478` and `:519` sets no restrictive mode on any platform.
+**No test covers this**, because no test runner executes `main.rs`.
+
+### S3. The secret-redacting logger is dead code — HIGH
+
+`createLogger` / `redactSecrets` have **zero production callers**. The only
+consumer of `containsSecret` is a quarantined `ledger.ts`. `pino` is a declared
+dependency that is bundled into the sidecar and never instantiated. Every real
+diagnostic path — `console.log`, the telemetry writer, the Rust `log_line` —
+bypasses redaction entirely. The patterns also omit any `sk-or-v1-` case and
+skip non-string arguments. **The project believes it has secret redaction. It
+does not.**
+
+### S4. `.gitignore` omits `ipc.token` and `serve.pass` — MEDIUM
+
+`git check-ignore -v` returns no rule for either. In practice they are written
+to `~/.opencode-voice-runtime/`, outside the repository, so there is no active
+leak. This is defense-in-depth, not an incident.
+
+### S5. `.env.example` documents a value that crashes — MEDIUM
+
+`VOICE_DEFAULT=male` is rejected by the zod enum; execution produces a
+`ZodError`. The file also omits `OPENROUTER_API_KEYS`, one of the three pools
+`vault.ts:106` requires; documents `vault set --from-prompt`, a command that
+does not exist; and lists three variables the schema ignores.
+
+## 7.4 The persona system is voice-only, and the corpus said otherwise — HIGH
+
+This is the finding that most directly matches the project's stated ambition.
+
+**Nour and Kareem currently produce identical narration.** Persona reference
+counts in the four system-prompt files: `narrator.ts` **0**, `coordinator.ts` **0**,
+`prompt-optimizer.ts` **0**, `brain.ts` **0**. The only interpolation into any
+system prompt is `'{max}'` → word count at `narrator.ts:113`.
+
+Exactly three persona effects exist: the TTS voice id (`daemon.ts:607`), the
+earcon pitch (`earcons.ts:17-18`), and the wave colour
+(`SiriWaveCanvas.tsx:20-24`). Selecting a persona changes how the assistant
+*sounds* and how it *looks*. It does not change what it *says*.
+
+Three documents asserted otherwise, and one of them was code I had just written:
+
+- `src/knowledge/shared/commands.ts` `cmd-persona-effect` stated that dossier
+  instructions "are injected into the narrator", citing `narrator.ts`, which
+  contains the opposite. **The Tier 1 corpus was instructing the assistant with a
+  falsehood.** Corrected in `ceeb9ef` to state the real behaviour and to forbid
+  claiming the two assistants speak differently.
+- `docs/personas/nour.agent.md:15,34-36` and `kareem.agent.md:15,33-36` both
+  declare "Simplified Modern Standard Arabic" — while `brain.ts:108` bans MSA and
+  the locked dialect is Ammani. The dossiers recorded the option that lost.
+- `docs/personas/WIRING.md:69-72` plans to inject those wrong paragraphs.
+
+**Whole-knowledge-layer reachability:** `src/knowledge/` has exactly one
+production importer, the `knowledge` CLI subcommand. `SHARED_CHUNKS`,
+`InMemoryRetriever`, `STYLISTIC_EXAMPLES`, `NOUR_EXAMPLES`, `KAREEM_EXAMPLES`,
+`PERSONAS`, `shieldHolds`, `screenText` and `guardText` all have **zero**
+production callers. The layer is reachable, typechecked, linted and tested — and
+it does not yet influence a spoken word. `src/knowledge/index.ts:5-7` says so
+honestly, which is why this is a known gap rather than a concealment.
+
+## 7.5 Correctness and lifecycle
+
+| ID | Finding | Evidence |
+|---|---|---|
+| C1 | `normalizeArabic` **deleted Arabic-Indic digits**. The class `U+064B-U+0672` swallows `U+0660-U+0669`. `'المنفذ ٤٠٩٦ مشغول'` → `'المنفذ  مشغول'`; `arch-ports` score 6.80 → 3.19. **Fixed in `ceeb9ef`** with `\u`-escaped classes and 4 regression tests. | `normalize.ts:10` (pre-fix) |
+| C2 | A **second launch silently adopts** an existing 4097 holder and reports `ready`. `port_open()` is a bare TCP connect, so `EADDRINUSE` is unreachable from the shell path. | `main.rs:540-543`, `:796-798` |
+| C3 | `isActionableInstruction` does **not** gate dispatch. `daemon.ts:558` calls `coordinator.run(task)` unconditionally; the predicate only saves one optimizer call. Tests pin the function, not the dispatch. | `prompt-optimizer.ts:8-10`, `daemon.ts:522-525,558` |
+| C4 | Only `switchSession` bumps `AudioPipeline.generation`. `abort` trips `SpeechGate` only, so an in-flight `think()` is never abandoned. | `audio-pipeline.ts:64-71` |
+| C5 | The 0.5 s STT overlap geometry is **unreachable live**: ingest already emits exact 160,000-byte windows, so `chunkPcm` returns one chunk and breaks. | `stt.ts` |
+| C6 | The daemon calls `fish.synthesize()` directly, **bypassing `AudioCache`**, so `docs/18:139` "cache first" and its sub-50 ms claim do not describe the live spoken path. | `daemon.ts:614` |
+| C7 | `Supervisor::own` uses `is_none_or`, so a job-creation failure yields `ok: true` and the child is recorded as supervised. This contradicts `main.rs:89-93` "There is no safe 'ignore' here." | `main.rs:360` |
+| C8 | `UiServer.broadcast` is the sole producer of `event` frames and the Last-Seq resume buffer, and has **zero production callers** — so resume replays nothing. | `ui-server.ts:160` |
+| C9 | `daemon.ts:508` re-admits the raw `@`-bearing transcript to the model, contradicting `:474-477`. | `daemon.ts:474-477,508` |
+
+**Verified TRUE, contrary to several briefs:** loopback-only binds
+(`ui-server.ts:150` `127.0.0.1`; `main.rs:755` `--hostname`); `MAX_AUDIO_BYTES`
+65536 rejects with an `error` frame and keeps the socket; the bearer travels as
+subprotocol token #2 compared with `timingSafeEqual`; key rotation is **exactly
+{401, 403, 429}** — **402 does not rotate**, and neither does 422; the Fish
+`model` is an HTTP **header**, proven by three routes including a negative
+assertion; a throwing consumer **cannot** wedge the drain queue, because
+`draining = false` is the first statement of the `finally`.
+
+## 7.6 Desktop, and three dead modules with green tests
+
+`mute`, `deafen` and `arm` are **unconditional no-ops server-side**
+(`command-router.ts:227-230`) yet still cost an Inkling narration call that
+describes silencing a microphone that was never silenced. `botMuted` never gates
+playback (`App.tsx:141-156`): **the assistant-mute button mutes nothing and
+acknowledges `ok: true`.**
+
+The HUD is not one state machine but **11 independent state axes**; the rendered
+pill has five `data-state` values (`offline|ready|listening|processing|speaking`,
+`App.tsx:417-430`) and `idle` never renders as "idle".
+
+**Dead production modules with passing tests** — the exact class this project
+hunts: `audio/earcons.ts` (5 recipes, 5 passing tests, zero importers),
+`brand/Crest.tsx`, `portals/CredentialPortal.tsx`. `matrix-state.ts` is ~85 % dead.
+`matrixForDaemonState` is the only wired member.
+
+The 48×48 matrix is **never drawn**: no canvas, no worker. `docs/RELEASE-CHECKLIST.md:18`'s
+"worker chunk 2.78 kB" cannot exist. E2E proves the *indicator*, not sound:
+`downlink.spec.ts:21` injects five non-MP3 bytes after a three-byte header,
+`decodeAudioData` rejects, and the error is swallowed (`playback.ts:107-109`)
+while the indicator fires from `enqueue` before any decode.
+
+## 7.7 Unverified, and what would settle it
+
+Stated rather than guessed, per the project's own rule.
+
+| Item | Blocker |
+|---|---|
+| Live provider latency | Requires vault keys; burns quota. Never in the gate. |
+| Packaged cold launch | Needs a built installer and a real Windows session. |
+| `cargo test` execution | Needs `VsDevCmd.bat` loaded; the preflight reports **14/15** with MSVC missing. |
+| Microphone grant (L18, the one non-closed ledger row) | Needs physical hardware with a mic. |
+| Whether redaction *would* work if called | S3 makes it unobservable; the module has no callers. |
+| Nine "docs should carry a supersession banner" | Judgement call, not a measurement. |
+
+## 7.8 The transferable lesson
+
+Three of the four highest-severity defects found here were **confidence without
+verification**, and two of them were mine, written hours earlier:
+
+- A comment claiming `U+064B–U+0652` beside a literal that was `U+064B-U+0672`.
+  The comment and the code were both committed, and the gap between them deleted
+  Arabic digits for as long as the file existed.
+- A Tier 1 corpus chunk asserting the narrator was persona-aware, checked
+  against a file I had read minutes earlier and known to contain no persona
+  reference.
+- A documentation tally summing to 24 four different ways in one line.
+
+A green suite did not catch any of them. The gate was exit 0 the entire time,
+and it stayed exit 0 after all three fixes. What caught them was **independent
+adversaries reading the same code without sharing conclusions**, and hand
+cross-verification of every load-bearing claim before it was written down. That
+is the argument for running audits like this, and against trusting a suite, a
+comment, or a ledger that summarizes its own table.
