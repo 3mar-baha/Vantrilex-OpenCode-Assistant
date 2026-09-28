@@ -67,9 +67,11 @@ export const ARCHITECTURE_CHUNKS: readonly SharedChunk[] = [
     id: 'arch-reachability',
     source: 'AGENTS.md#dead-code',
     text:
-      'الكود غير المستخدم في src هو صفر: 37 وحدة حية و 0 وحدة ميتة. ' +
-      'Dead code in src is zero, at 37 live modules. Reachability is measured by resolving ' +
-      'relative imports transitively from daemon.ts and cli.ts, not assumed.',
+      'الكود غير المستخدم في src هو صفر: 51 وحدة حية و 0 وحدة ميتة، و 8056 سطر. ' +
+      'Dead code in src is zero, at 51 live modules and 8056 source lines. Reachability is ' +
+      'measured by resolving relative imports transitively from daemon.ts and cli.ts, ' +
+      'following DYNAMIC imports as well as static ones - runtime/vad.ts is loaded by ' +
+      'import() on purpose and a static-only scan wrongly reports it as dead.',
   },
   {
     id: 'arch-gates',

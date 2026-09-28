@@ -7,15 +7,39 @@
 // dialect-locked Ammani phase. Verified live, not merely revived: this module is
 // now inside `rootDir: "src"`, so `tsc` typechecks it and `retriever.ts` calls
 // it on BOTH the index path and the query path.
-const TASHKEEL_TATWEEL = /[ً-ٲٰـ]/g;
-const ALEF_VARIANTS = /[آأإٱ]/g;
-const ALEF_MAKSURA = /ى/g;
+//
+// RANGES ARE WRITTEN AS \u ESCAPES, NOT AS DASH LITERALS. The restored comment
+// claimed this class was `U+064B-U+0652`; the actual literal `U+064B-U+0672` is
+// a range that swallows the ARABIC-INDIC DIGITS U+0660-U+0669, plus U+066B and
+// U+066C. So `المنفذ ٤٠٩٦ مشغول` normalized to `المنفذ  مشغول` and the port
+// number was deleted from the query before scoring - a silent recall failure in
+// exactly the product this project cares about (a user asking "is port 4096
+// busy", in the numerals an Arabic speaker actually types). Found by forensic
+// audit, reproduced, then fixed.
+//
+// An explicit escape list makes the exclusion auditable: the GAPS are the
+// comment. U+0671 (wasla alef) stays in the stripped class because the restored
+// normalization test asserts it is removed.
+const TASHKEEL = /[\u064B-\u065F\u066A\u066D-\u0672]/g; // harakat + wasla alef, NOT the digits
+const TATWEEL = /\u0640/g; // U+0640 ARABIC TATWEEL
+const ALEF_VARIANTS = /[\u0622\u0623\u0625\u0671]/g; // alef + hamza variants
+const ALEF_MAKSURA = /\u0649/g; // U+0649 alef maksura -> yeh
 
-/** NFKC + strip tashkeel/tatweel + unify alef/yeh forms. Idempotent. */
+/**
+ * NFKC + strip tashkeel/tatweel + unify alef/yeh forms. Idempotent.
+ *
+ * Digits are NOT normalized. The buggy range deleted Arabic-Indic digits
+ * outright; folding `٤٠٩٦` to ASCII `4096` would also be wrong, because the
+ * corpus stores whatever form the author wrote and a half-folded pair is worse
+ * than an honest miss. Preserving both forms is the correct trade: recall for
+ * "المنفذ 4096" comes from the Latin `4096` in the same chunk, and recall for
+ * "المنفذ ٤٠٩٦" comes from the digit surviving to be tokenized.
+ */
 export function normalizeArabic(input: string): string {
   return input
     .normalize('NFKC')
-    .replace(TASHKEEL_TATWEEL, '')
+    .replace(TASHKEEL, '')
+    .replace(TATWEEL, '')
     .replace(ALEF_VARIANTS, 'ا')
     .replace(ALEF_MAKSURA, 'ي');
 }

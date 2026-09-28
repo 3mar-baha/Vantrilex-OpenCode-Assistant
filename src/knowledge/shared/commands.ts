@@ -70,10 +70,11 @@ export const COMMAND_CHUNKS: readonly SharedChunk[] = [
     id: 'cmd-persona-effect',
     source: 'src/daemon.ts:607; apps/desktop/src/audio/earcons.ts; src/orchestrator/narrator.ts',
     text:
-      'اختيار الشخصية يغيّر الصوت ونغمة التنبيه ولون الموجة، ' +
-      'وأسلوب الكلام نفسه يأتي من تعليمات القصة في dossier. ' +
-      'Selecting a persona changes the voice id, the completion earcon tone and the wave ' +
-      'colour. The spoken phrasing comes from the dossier instructions, which are injected ' +
-      'into the narrator, not from the voice.',
+      'اختيار الشخصية يغيّر الصوت ونغمة التنبيه ولون الموجة فقط. ' +
+      'العبارة المنطوقة نفسها متطابقة بين الشخصيتين اليوم. ' +
+      'Selecting a persona changes only the voice id, the completion earcon tone and the ' +
+      'wave colour. The spoken wording is currently IDENTICAL for both personas: narrator.ts ' +
+      'contains no persona reference at all, and the dossier instructions are NOT yet ' +
+      'injected into it. Never claim the two assistants speak differently.',
   },
 ];

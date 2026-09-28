@@ -67,10 +67,47 @@ describe('normalizeToken', () => {
   });
 });
 
+describe('Arabic-Indic digits survive normalization (regression)', () => {
+  // CAUGHT BY FORENSIC AUDIT. The restored class was written
+  // `/[ً-ٲٰـ]/` — that is U+064B-U+0672, which swallows the Arabic-Indic digits
+  // U+0660-U+0669 plus U+066B and U+066C. `المنفذ ٤٠٩٦ مشغول` became
+  // `المنفذ  مشغول`: the port number was deleted from the query before it was
+  // ever scored, and the measured score for `arch-ports` fell from 6.80 to 3.19.
+  // The class also contradicted its own comment, which claimed U+064B-U+0652.
+  // Silent, and in exactly the product this project is for.
+  test('digits are not deleted', () => {
+    expect(normalizeArabic('المنفذ ٤٠٩٦ مشغول')).toContain('٤٠٩٦');
+    expect(normalizeArabic('٠١٢٣٤٥٦٧٨٩')).toBe('٠١٢٣٤٥٦٧٨٩');
+  });
+
+  test('separators are not deleted', () => {
+    expect(normalizeArabic('١٬٢٣٤')).toContain('٬');
+    expect(normalizeArabic('١٫٥')).toContain('٫');
+  });
+
+  test('tashkeel and tatweel ARE still stripped', () => {
+    // The fix must not have over-corrected into leaving diacritics in place.
+    expect(normalizeArabic('مَرحَباًـٱ')).toBe('مرحبا');
+    expect(normalizeArabic('قَتَلَ')).toBe('قتل');
+  });
+
+  test('a digit-bearing query still retrieves the right chunk', async () => {
+    const { InMemoryRetriever } = await import('./retriever.js');
+    const chunks = [
+      { id: 'ports', source: 'test', text: 'المنفذ 4096 هو opencode serve' },
+      { id: 'other', source: 'test', text: 'المنفذ 1420 خادم Vite' },
+    ];
+    const r = new InMemoryRetriever(chunks);
+    // ASCII digits (as stored) still match.
+    expect(r.search('المنفذ 4096', 2)[0]!.id).toBe('ports');
+    // Arabic-Indic digits now tokenize instead of vanishing. They do not equal
+    // the ASCII form, so this is an honest recall boundary rather than a
+    // cross-script match - but the digits must be PRESENT, not deleted.
+    expect(normalizeArabic('٤٠٩٦').length).toBe(4);
+  });
+});
+
 describe('known normalization boundaries (measured, not assumed)', () => {
-  // Both of these were found by querying the built CLI, not by reading the
-  // regexes. They are pinned here so a future change to the normalizer has to
-  // make a deliberate decision instead of silently moving the boundary.
   test('taa marbuta is NOT collapsed to heh', () => {
     // `الاعتمادية` and `الاعتماديه` are different tokens. Collapsing them is a
     // real recall win for typed Arabic, but ة and ه are distinct letters and
