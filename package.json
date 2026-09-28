@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
     "lint": "eslint . --max-warnings 0",
     "lint:ox": "node scripts/lint-baseline.mjs",
     "test": "vitest run",

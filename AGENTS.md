@@ -55,6 +55,22 @@ NSIS (`makensis`) must be installed. Silent install: `Voxaura_<v>_x64-setup.exe 
 - `cargo check --no-default-features` and `cargo build --release` are separate. **No test runner covers `main.rs` token generation**: `ipc.token` and `serve.pass` come from an xorshift64\* seeded with `nanos ^ pid`, not a CSPRNG (`main.rs:460-476`, `:501-517`), and the `fs::write` calls set no restrictive mode (`:478`, `:519`). The daemon's own `randomBytes(32)` (`daemon.ts:746`) is stronger than the supervisor's.
 - Almost all network clients are **injected mocks**. E2E drives `stub-daemon.mjs` (real `UiServer` + router, fake control port `:4197`, no providers/vault). Only `node dist/cli.js live` and `scripts/live_console_test.ts` touch real APIs — neither is in the gate, so **green CI does not mean the live loop works**. v0.6.0 is the proof: every gate green, daemon could not boot.
 - Desktop unit tests run in `happy-dom`; root in node.
+- **No stage typechecks the test files.** Root `tsconfig.json` sets
+  `exclude: ["**/*.test.ts"]`, and Vitest transpiles without checking types, so
+  all 46 root test files and the desktop renderer compile under *no* type
+  checker. Run `npm run typecheck:tests` (`tsconfig.tests.json`) to see it:
+  **it currently reports 62 errors across 9 files** — 20 × `TS2554` in
+  `narrator.test.ts` ("Expected 3-4 arguments, but got 2"), 19 × `TS18047` in
+  `opencode-bridge.test.ts`, plus `brain`, `tts`, `command-router`, `client`,
+  `stt`, `audio-pipeline-reset` and `fr12-route`. The script is deliberately
+  **not** in `test:vantrilex`, because adding it would turn the gate red on
+  pre-existing debt. That is a decision, not an oversight — see
+  `dossier/PROJECT_MASTER_DOSSIER.md` §7.8. Note the `narrator.test.ts` cluster
+  sits on the exact signature `docs/personas/WIRING.md` proposes to change.
+- **Coverage config is dead.** `vitest.config.ts` declares
+  `thresholds: { lines: 80 }` but nothing sets `coverage.enabled`, no manifest
+  passes `--coverage`, and there is no CI. The threshold has never executed and
+  reads like a floor.
 - `test:e2e` rebuilds root `dist/` first, and needs 4096/4097/4197 free — stop the installed app or it fails with `EADDRINUSE`.
 
 ## Runtime topology (non-obvious)

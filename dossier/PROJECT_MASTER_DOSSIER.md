@@ -979,7 +979,87 @@ Stated rather than guessed, per the project's own rule.
 | Whether redaction *would* work if called | S3 makes it unobservable; the module has no callers. |
 | Nine "docs should carry a supersession banner" | Judgement call, not a measurement. |
 
-## 7.8 The transferable lesson
+## 7.8 The test suite is not typechecked, and 62 latent errors prove it matters
+
+Found by auditor 5, confirmed by direct compilation.
+
+**The gap.** Root `tsconfig.json` ends with `exclude: ["**/*.test.ts"]`, and
+Vitest transpiles without checking types. So every one of the 46 root test files
+— and the entire desktop renderer, since no gate stage runs `tsc` against
+`apps/desktop` either — is compiled under **no type checker at all**. `npm run
+typecheck` covers production code only, and reports exit 0, and the gate is
+green. The 63rd error was in code I had written that same hour.
+
+**The measurement.** A probe tsconfig including the excluded files exits 2 with
+**62 errors across 9 files** (63 before I fixed mine):
+
+| Count | File | Code |
+|---|---|---|
+| 20 | `src/orchestrator/narrator.test.ts` | `TS2554` Expected 3-4 arguments, but got 2 |
+| 19 | `src/runtime/opencode-bridge.test.ts` | `TS18047` possibly null/undefined |
+| 4 | `src/voice/brain.test.ts` | `TS18047` |
+| 4 | `src/voice/tts.test.ts` | `TS2345` argument type |
+| 4 | `src/orchestrator/command-router.test.ts` | `TS2345` |
+| 2 | `src/voice/brain.test.ts` | `TS7006` implicit any |
+| 2 | `src/runtime/client.test.ts` | `TS18048` possibly undefined |
+| 1 each | `tts`, `stt`, `client`, `audio-pipeline-reset`, `fr12-route`, `opencode-bridge` | assorted |
+
+**Why this is not pedantry.** The 20 `narrator.test.ts` errors are all one
+shape: the tests call `narrate()` with 2 arguments against a 3-or-4 signature.
+`docs/personas/WIRING.md` proposes changing exactly that signature. A suite
+whose types are unchecked will not catch the regression that change causes, and
+the failure would surface as a runtime argument error rather than a compile
+error — in the module that produces the user's spoken words.
+
+**What was done.** `tsconfig.tests.json` and `npm run typecheck:tests` were
+added so the debt is *measurable and reproducible* rather than invisible. The
+script is deliberately **not** wired into `test:vantrilex`: adding it would turn
+the gate permanently red on 62 pre-existing errors, and a permanently red gate
+stops being read. That is the same reasoning that produced
+`scripts/lint-baseline.mjs` — a ratchet beats a red light.
+
+**The decision this leaves open.** Either pay down the 62 and wire the stage in,
+or baseline it exactly as the linter was baselined. It is a judgement about
+debt policy, not a technical obstacle, and it belongs to the owner.
+
+## 7.9 Auditor capability is itself a finding
+
+Auditor 5 was assigned to run the gates and **could not execute a single
+command**: its toolset exposes 119 tools across 8 namespaces, none of which can
+spawn a process, and it verified that by searching for shell, bash, command and
+powershell primitives. All seven of its run requests came back UNVERIFIED, and it
+fell back to static derivation — which it did well, matching the measured root
+count exactly.
+
+Three consequences worth recording:
+
+1. **A subagent's "I measured X" is only as good as its tools.** The audit plan
+   assumed an identical toolset across workers. It did not hold, so any claim
+   of execution must be attributed to the specific auditor, not to "the audit".
+2. **The static derivation agreed with execution where both existed** — root
+   572/46 matched, file counts 46/24 matched, cargo 27 matched. The one
+   divergence, desktop 151 static versus 153 measured, is explained by
+   `matrix-state.test.ts:37` using `test.each`, which expands one declaration
+   into several executed cases. A static counter undercounts parameterized
+   tests; the measured number is authoritative.
+3. **Static derivation is a genuinely useful second opinion**, precisely because
+   it cannot be fooled by a stale cached run.
+
+## 7.10 Zero vacuous tests — an unexpected clean result
+
+Auditor 5 searched all 717+ unit, 18 E2E and 27 Rust tests for tautologies,
+literal-versus-literal assertions, empty bodies, and `skip`/`todo`/`only`/`fails`
+directives: **zero of each**. `expect.hasAssertions` appears zero times, which is
+a small gap in defensive assertion style, and 14 tests assert against source
+*text* via `readFileSync` — a pattern that is brittle by construction, since the
+text can stay valid while the behaviour changes. Neither is vacuous today.
+
+The three dead modules with passing tests reported in §7.6 are therefore not
+vacuous tests; they are **correct tests attached to code nothing imports**. The
+distinction matters: the fix is to delete the code, not to distrust the tests.
+
+
+## 7.11 The transferable lesson
 
 Three of the four highest-severity defects found here were **confidence without
 verification**, and two of them were mine, written hours earlier:

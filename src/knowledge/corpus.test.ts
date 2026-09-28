@@ -9,6 +9,7 @@ import {
   KnowledgeParityError,
   assertSharedChunks,
   type SharedChunk,
+  type StylisticExample,
 } from './types.js';
 
 // INFORMATION PARITY, STYLISTIC DIVERGENCE.
