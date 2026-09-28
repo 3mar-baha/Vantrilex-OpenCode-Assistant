@@ -21,7 +21,7 @@ What actually feeds the assistant's knowledge:
 | `NARRATOR_SYSTEM` (`narrator.ts:68`) | 9 hardcoded Arabic lines | **No** |
 | `COORDINATOR_SYSTEM` (`coordinator.ts:92`) | 3 hardcoded English lines | **No** |
 | `PROMPT_SYSTEM` (`prompt-optimizer.ts:66`) | 6 hardcoded Arabic lines | **No** |
-| `AMMANI_SYSTEM_PROMPT` (`brain.ts:105`) | 11 hardcoded lines, BLUF-first | **No** |
+| `AMMANI_SYSTEM_PROMPT` (`brain.ts:105`) | 10 hardcoded lines, BLUF-first | **No** |
 | `VAULT_NOTES` (`memory/vault.ts:8`) | 6 **filenames** only — scaffolds an Obsidian vault, contains no content | **No** |
 
 So today the assistant's entire world is **four hardcoded prompt constants**. There
@@ -76,15 +76,54 @@ toolchain allows installs."*
 
 | Pattern | Fit | Verdict |
 |---|---|---|
-| **`minisearch`** (lucaong/minisearch, ~30k+★) | Pure JS/TS, sub-10ms on 10k docs, in-process, ~30 KB gzipped. Already the team's approved choice. | **Recommended.** The interface already exists to receive it. |
+| **`minisearch`** — v7.2.0, 6.2k★, MIT, **zero runtime dependencies** (`"dependencies": {}`, verified in its `package.json`), **5,814 B gzipped / 17,750 B minified** (bundlephobia). ESM+CJS+UMD, `sideEffects: false`, requires ES9/ES2018 — all satisfied by the Node 22 daemon. | In-process, memory-efficient index, prefix/fuzzy/boost. | **Recommended.** The interface already exists to receive it. |
 | **BM25 in-process (current)** | Zero dependencies, ~70 lines, fully deterministic, trivially auditable. | **Keep as the reference implementation and as the test oracle.** It is the thing minisearch is diffed against. |
+| **FlexSearch** (`nextapps-de/flexsearch`) | Zero-dependency, genuinely fast. | **Considered, not chosen.** Its marketing claims *"up to 1,000,000 times faster than other libraries"* — that is not a benchmark, it is a slogan, and it is exactly the kind of number this project must not import. A second engine with unverifiable claims is not worth the maintenance. |
 | **SQLite FTS5** | Sub-ms, but pulls a native binding into a sidecar that already had one blow up (v0.6.0, `onnxruntime-node`). | **Rejected.** Re-introduces a native-module packaging risk we already paid for. |
 | **`sqlite-vec` / any vector DB** | Needs native ext + an embedding model in-process. | **Rejected.** Multi-MB model in a 100 MB sidecar, for a corpus that is ~200 short chunks. |
 
-**Three reference repositories** worth citing, in priority order:
-1. **`lucaong/minisearch`** — the retrieval engine itself; tokenizes, indexes, scores in-process. Its `prefix`/`fuzzy` options map onto Arabic orthographic variants better than BM25 on raw tokens.
-2. **The quarantined `guidance/rag/`** — the in-repo reference implementation, with 7 passing tests (`retriever.test.ts`, `normalize.test.ts`, `personas.test.ts`). Not a GitHub reference, but the *contract* every engine must satisfy.
-3. **`dair-ai/Prompt-Engineering-Guide`** — already in the corpora manifest; useful as prompt-pattern source material, not as runtime code.
+> **Correction.** An earlier draft of this section cited minisearch as *"`~30k+★`,
+> sub-10ms on 10k docs, `~30 KB gzipped`."* All three were written from recall
+> without being checked, and **all three were wrong**: the star count is 6.2k, and
+> the real gzipped size is **5.8 KB — about a fifth** of what was claimed. The
+> "sub-10ms on 10k docs" figure has **no source at all** and is not repeated here
+> as a fact. It must be measured in-project against the real corpus before anyone
+> relies on it; minisearch ships a `benchmarks/` harness, but its own numbers are
+> not a substitute for a measurement on *our* data.
+
+### The integration detail that is easy to get wrong
+
+**minisearch does not normalize Arabic.** Its default tokenizer downcases and
+splits on Unicode space/punctuation, and its README states plainly: *"No stemming
+is performed, and no stop-word list is applied."* There is no orthographic
+normalization of any kind. So `آ` `أ` `إ` `ا` and `ى` `ي` index as **separate
+terms**, and Arabic recall silently degrades — a user asking about the *builder*
+would miss a chunk written with a different alef form.
+
+The quarantined `normalizeArabic` must therefore be wired in explicitly through
+minisearch's `processTerm` and `tokenize` hooks, and the same at search time. This
+is not optional polish; it is the difference between the index working in Arabic
+and quietly not working. It also means the current hand-rolled BM25 — which already
+calls `normalizeArabic` — is the more Arabic-correct of the two *today*, which is
+an argument for diffing rather than swapping.
+
+### Reference material
+
+1. **`lucaong/minisearch`** — 6.2k★, MIT, 648 commits, actively maintained. The
+   retrieval engine itself. Docs at `lucaong.github.io/minisearch`; it also ships
+   a `DESIGN_DOCUMENT.md` and a `benchmarks/` harness.
+2. **The quarantined `guidance/rag/`** — not a GitHub reference, but the
+   in-repo *contract* every engine must satisfy. It carries **15 test cases**
+   across `normalize.test.ts` (5), `personas.test.ts` (6) and `retriever.test.ts`
+   (4).
+   > **Correction.** An earlier draft called these *"7 passing tests."* Both
+   > numbers were wrong. The count is **15**, and more importantly they are **not
+   > passing — they are dormant**: `vitest.config.ts` includes only
+   > `src/**/*.test.ts`, so nothing under `.opencode/_archive/` has been executed
+   > since v0.7.0. "Green tests" would have been a much stronger argument for
+   > restoring this code than "dormant tests," and the difference matters.
+3. **`dair-ai/Prompt-Engineering-Guide`** — already in the corpora manifest;
+   useful as prompt-pattern source material, not as runtime code.
 
 **Explicitly ruled out**, per your constraints: `langchain`/`llamaindex` (multi-MB, wrong shape), Chroma/Pinecone/Qdrant-server (hosted or Docker), `@xenova/transformers` (downloads a model at runtime), and any external embedding API.
 
@@ -181,8 +220,10 @@ knowledge/
 ### Recommendation
 
 1. **Restore `guidance/rag/` from quarantine** rather than rewriting it. It has the
-   scope enum, the Arabic normalizer, the guard, and 7 passing tests. It needs
-   content, not new code.
+   scope enum, the Arabic normalizer, the guard, and 15 test cases that need
+   re-enabling. It needs content, not new code — and its tests must be moved back
+   under `src/` *before* "restore" can be called verified, because dormant tests
+   prove nothing.
 2. **Keep the hand-rolled BM25 as the oracle.** Implement `minisearch` behind the
    same `Retriever` interface and diff the two over the real corpus. If they
    disagree on any top-K ordering, the BM25 is the answer.
