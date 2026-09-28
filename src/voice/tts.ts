@@ -243,6 +243,34 @@ export interface FishTransport {
  *   blamed it for loudness; that reading was wrong and the field is unchanged.
  * - `condition_on_previous_chunks: true` — voice consistency across chunks.
  */
+/**
+ * Fish request headers.
+ *
+ * `model` MUST be an HTTP header, not a JSON body field. This is the single
+ * least obvious thing about the Fish API and it fails in the most misleading
+ * possible way: with the model in the body (or absent) the endpoint treats the
+ * call as paid tier and answers **HTTP 402 "Insufficient API credit"** — even on
+ * an account with thousands of unused free credits. Verified by probing all four
+ * combinations against the live API: model-as-header returns audio, and both
+ * model-in-body and no-model return 402.
+ *
+ * So the error names the one cause that is not actually wrong. An engineer
+ * chasing it tops up a balance that was already fine, and the next request
+ * still 402s.
+ *
+ * Extracted as a function purely so this is reachable from a test; the inline
+ * version was untestable, and an untestable header is one refactor away from
+ * being "tidied" into the body.
+ */
+export function fishHeaders(key: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    model: TTS_MODEL,
+    Accept: 'audio/mpeg',
+  };
+}
+
 export function fishRequestBody(text: string, fishVoiceId: string): Record<string, unknown> {
   return {
     // Sanitised again here on purpose: this is the last gate before bytes hit
@@ -388,12 +416,7 @@ export class FishHttpTransport implements FishTransport {
         this.endpoint,
         {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${Buffer.from(key.material).toString('utf8')}`,
-            'Content-Type': 'application/json',
-            model: TTS_MODEL,
-            Accept: 'audio/mpeg',
-          },
+          headers: fishHeaders(Buffer.from(key.material).toString('utf8')),
           body: JSON.stringify(fishRequestBody(text, fishVoiceId)),
         },
         this.timeoutMs,
