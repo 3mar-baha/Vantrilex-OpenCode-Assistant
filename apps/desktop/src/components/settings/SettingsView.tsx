@@ -49,8 +49,16 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
   // L22: lets the hello/notice callbacks compare against the live value
   // without depending on `persona`, which would tear down and re-create the
   // bridge on every change and drop the connection mid-flight.
+  //
+  // Synced in an effect, not during render. Assigning a ref while rendering is
+  // what `react(refs)` flags: the write is a side effect of a function that must
+  // stay pure, and the React Compiler refuses to optimise a component that does
+  // it. An effect runs after the persona commits, which is still long before any
+  // inbound hello/notice frame can arrive — those come off the WebSocket.
   const personaRef = useRef(persona);
-  personaRef.current = persona;
+  useEffect(() => {
+    personaRef.current = persona;
+  }, [persona]);
   const [modelTarget, setModelTarget] = useState('');
   const [copied, setCopied] = useState(false);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
