@@ -61,14 +61,18 @@ if (!useLocal && !allowGlobal) {
   process.exit(1);
 }
 
+// Spawn rules, both learned the hard way:
+//   - `npx` and `node_modules/.bin/*.cmd` are Windows batch shims. execFileSync
+//     cannot spawn them directly: npx gives ENOENT, a .cmd gives EINVAL. Both
+//     have to go through `cmd /c`.
+//   - On POSIX both are real executables and spawn directly.
+const spawnOpts = { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 };
+const isWindows = process.platform === 'win32';
+const target = useLocal ? localBin : 'oxlint';
 const run = () =>
-  useLocal
-    ? execFileSync(localBin, [], { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
-    : // Windows resolves a bare `oxlint` through a .cmd shim, which is not
-      // directly spawnable, so it has to go via the shell.
-      process.platform === 'win32'
-      ? execFileSync('cmd', ['/c', 'oxlint'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
-      : execFileSync('oxlint', [], { cwd: ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  isWindows
+    ? execFileSync('cmd', ['/c', target], spawnOpts)
+    : execFileSync(target, [], spawnOpts);
 
 if (!useLocal) {
   console.warn('lint-baseline: VOXAURA_ALLOW_GLOBAL_OXLINT=1 - running an UNPINNED ambient oxlint.');

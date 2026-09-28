@@ -122,27 +122,82 @@ the `try` and observing the rejection.
 
 ---
 
-## F-02 — the lint gate is not reproducible
+## F-02 — RESOLVED (2026-09-28): the lint gate is now local and reproducible
 
-**Severity: MEDIUM (defeats the purpose of P1 item 5)**
-**Files:** `package.json` (devDependencies), `scripts/lint-baseline.mjs`
+**Status: closed.** `oxlint@1.85.0` is installed in `node_modules`, `npm ci` exits 0
+at both the root and `apps/desktop`, and `npm run test:vantrilex` is green with no
+environment flags and no `VOXAURA_ALLOW_GLOBAL_OXLINT` override.
 
-`oxlint` is declared at `^1.0.0` in `devDependencies` but is **not present in
-`node_modules/.bin`**. Every local invocation resolved to a **global** install
-(v1.85.0) at `~/AppData/Roaming/npm/oxlint.ps1`.
+### The original finding was directionally right and mechanically wrong
 
-A clean `npm ci` on another machine produces no `oxlint`, so `npm run lint:ox`
-either fails or silently runs whatever is on `PATH`. The gate that Stage 1
-strengthened to fail on regressions is therefore running an unpinned version —
-which is the same class of defect as the `chain-nemotron` assertion: something
-that looks enforced and is not.
+The finding was correct that the gate ran an ambient global binary. The mechanism I
+proposed was not. I attributed it to oxlint's optional `vite-plus` peer chain, and
+then reported a second "pre-existing" blocker (`eslint-plugin-prettier` peer conflict).
+**Neither survived investigation.**
 
-`scripts/lint-baseline.mjs` now prefers `node_modules/.bin/oxlint` and **warns
-loudly** when it has to fall back, so the condition is visible rather than silent.
-The underlying fix — making the dependency install, or pinning the tool
-deliberately — is a dependency decision and was left for a human.
+- `eslint-plugin-prettier` is **not declared in this project at all**. That ERESOLVE
+  came from a transient package.json state left by my own earlier pinning
+  experiments. Reporting it as a pre-existing defect was wrong.
+- The `vite-plus` / `link:./src/types` failure was real, but it was a *consequence* of
+  the real blocker, not the cause: npm could not resolve `vitest@2.1.9` against the
+  chain's `vitest@4.1.11`, so it never got far enough to matter.
+- A third contributor I had not isolated: **`node_modules` was in a corrupt state**
+  from those same failed experiments, surfacing as
+  `Cannot read properties of null (reading 'matches')` — an npm internal crash, not a
+  dependency error at all.
 
----
+### The actual cause
+
+**No root `package-lock.json` existed.** `npm ci` failed on the lockfile check before
+dependency resolution was ever reached, and `npm install` failed on the vitest 2 vs
+vitest 4 peer chain. Neither had been verified, because the lint gate silently
+succeeded on a global binary the whole time — which is precisely the failure mode the
+original finding described.
+
+### The fix
+
+| Package | Before | After |
+|---|---|---|
+| `vitest` (root + desktop) | `^2.0.0` / `2.1.9` | `4.1.11` |
+| `vite` (root, desktop) | not declared / `5.4.21` | `^7.1.0` |
+| `oxlint` | `1.85.0` declared, never installed | `1.85.0` installed locally |
+| root `package-lock.json` | **absent** | 148,623 B, committed |
+
+Targeted `4.1.11` rather than the current `5.0.2`, because that is the version the
+oxlint chain pins; a floating range is what produced the original 1.86.0 breakage.
+
+### Verification
+
+```
+npm ci                  root       exit 0   226 packages, 0 vulnerabilities
+npm ci                  desktop    exit 0   182 packages, 0 vulnerabilities
+npm run test:vantrilex  no flags   exit 0
+  lint:ox               oxlint 8 warning(s) / 0 error(s), baseline 8, local binary
+  root vitest           509 passed (41 files)
+  desktop vitest        153 passed (24 files)
+  E2E playwright        18 passed (14 specs)
+cargo test              27 passed
+tsc                     root 0, desktop 0
+```
+
+**Zero regressions across a two-major-version jump.** No test required modification.
+
+### One breaking change worth recording
+
+**vitest 4 removed the `basic` reporter.** The available set is now `default, agent,
+minimal, blob, verbose, dot, json, tap, tap-flat, junit, tree, hanging-process,
+github-actions`. Any script or CI invocation passing `--reporter=basic` fails with
+`Failed to load custom Reporter from basic`. This bit the verification commands used
+during the upgrade and would have bitten CI the same way.
+
+### A second spawn trap, on Windows
+
+`node_modules/.bin/oxlint.cmd` cannot be spawned by `execFileSync` — it returns
+`EINVAL`, the same class of failure as spawning `npx` directly (`ENOENT`). Both are
+Windows batch shims and both must go through `cmd /c`. `scripts/lint-baseline.mjs`
+now does. The refusal-to-run-on-a-global guard is retained: it is what made this
+blocker visible in the first place, and it is what will catch a future tree that
+stops resolving.
 
 ## Candidates examined and CLEARED
 
