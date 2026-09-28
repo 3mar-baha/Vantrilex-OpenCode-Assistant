@@ -447,8 +447,8 @@ with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.
 VsDevCmd environment for the bundle build). `scripts/provision-sidecar.mjs`
 assembles `node.exe` + compiled `dist/` + pruned runtime deps (~100 MB) as
 Tauri bundle resources, and the NSIS installer ships it all. Current:
-`Voxaura_0.7.0_x64-setup.exe`, 26,185,393 B, sha256
-`3FD21CA3A5DBCB120124F4AD9FFB5BAC6E96B59541C5FB9D043842023E20E9B8` —
+`Voxaura_0.7.1_x64-setup.exe`, 26,179,227 B, sha256
+`9E77E4C8915BAEE91966B0568F8A3EFE3D9BA16BE5394F0EA27AD0AD8B714896` —
 verify with `Get-FileHash -Algorithm SHA256`. All setups are published with
 SHA-256 checksums on the
 [releases page](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases).
