@@ -9,7 +9,7 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-583%20unit%20%2B%2026%20rust-brightgreen" alt="Tests" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.7.1-blueviolet" alt="Version" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.7.2-blueviolet" alt="Version" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/tauri-v2%20%7C%20rust-stable-orange" alt="Tauri" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22-339933" alt="Node" /></a>
   <a href="docs/RAG-ORCHESTRATOR-INTEGRATION.md"><img src="https://img.shields.io/badge/opencode-v2%20native-7c3aed" alt="OpenCode" /></a>
@@ -254,7 +254,7 @@ Win32 Job Object with `KILL_ON_JOB_CLOSE`: force-killing the app reaps every
 child, zero orphaned processes.
 
 **Self-contained installer.** The NSIS setup
-([v0.7.1 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.1))
+([v0.7.1 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.2))
 bundles `node.exe` plus the pruned runtime sidecar — end users need no
 Node, npm, or repo checkout. Windows is the only supported target;
 macOS/Linux are deferred until Windows is long-term stable.

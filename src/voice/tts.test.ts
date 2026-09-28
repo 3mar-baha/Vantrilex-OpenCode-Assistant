@@ -261,12 +261,29 @@ describe('fetchWithTimeout (L9)', () => {
 });
 
 describe('Fish request policy (D3)', () => {
-  test('speaks calmly: quality latency, slower pace, negative dB volume', () => {
+  test('speaks calmly: balanced latency, slower pace, negative dB volume', () => {
     const body = fishRequestBody('مرحبا', 'ref-1');
-    // latency 'balanced' trades quality for latency (docs: "normal: best
-    // quality, balanced: reduced latency") — the wrong trade for a dignified
-    // voice that was reported as shouting.
-    expect(body.latency).toBe('normal');
+      // CHANGED in v0.7.2 (R2). This previously asserted normal, chosen
+      // deliberately: the earlier note read "balanced trades quality for
+      // latency - the wrong trade for a dignified voice that was reported as
+      // shouting".
+      //
+      // That reasoning is still sound, and it is why this needs a human ear
+      // rather than a number. But time-to-first-audio is what a voice product
+      // is judged on, and measured twice against the live API:
+      //
+      //   normal    1,405-1,432 ms first chunk
+      //   balanced     426-556 ms
+      //   low         443-1,376 ms  (high variance, slowest completion)
+      //
+      // ~3x for one string. low was rejected despite a fast sample: it was both
+      // the least predictable and the slowest to finish overall.
+      //
+      // OWE: nobody has listened to a balanced-vs-normal pair. The check so far
+      // is an STT round-trip, which shows words survive but not that the
+      // delivery is dignified. If it sounds rushed, revert this one line - it is
+      // a single string and costs nothing to undo.
+      expect(body.latency).toBe('balanced');
     expect(body.chunk_length).toBe(300);
     expect(body.prosody).toEqual({ speed: 0.95, volume: -2, normalize_loudness: true });
     expect((body.prosody as { volume: number }).volume).toBeLessThan(0);

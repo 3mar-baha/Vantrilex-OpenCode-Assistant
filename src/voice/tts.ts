@@ -10,6 +10,24 @@ import type { Keyring } from './keyring.js';
 // streaming synthesis; voice from VOICE_IDS; keyring-supplied key per call.
 // AudioOut is a sink interface: FileAudioOut persists + hands off to the OS
 // (no focus APIs); device streaming binds later without changing this path.
+/**
+ * R7: the free tier is a PROMOTION with a hard end date.
+ *
+ * Fish Audio's official docs state S2.1 Pro Free access runs THROUGH
+ * 2026-11-30, with no SLA, no TTFA guarantee, and requests retained for model
+ * training. After that date every install loses speech output simultaneously
+ * unless a paid plan is bought or the provider is changed.
+ *
+ * That date is recorded here because a magic string with no lifecycle is how
+ * the 402 on 2026-09-27 was misdiagnosed as a code fault for hours. When the
+ * date passes, this is a migration decision, not a bug: the fallback options
+ * are a paid Fish plan, Groq `canopylabs/orpheus-arabic-saudi` (already proven
+ * working in this project), or the WebSocket endpoint on a paid model.
+ *
+ * Do NOT switch this to a paid slug to "fix" a 402. See the note on
+ * `fishHeaders` — a paid slug 402s identically and the error names the wrong
+ * cause.
+ */
 export const TTS_MODEL = 's2.1-pro-free';
 export const TTS_FIRST_CHUNK_BUDGET_MS = 800;
 /** Longest single synthesis request: run-ons hard-split on word boundaries. */
@@ -271,6 +289,79 @@ export function fishHeaders(key: string): Record<string, string> {
   };
 }
 
+/**
+ * R3: turn a Fish HTTP status into an actionable, secret-safe message.
+ *
+ * Previously every non-ok status collapsed to `TTS failed: HTTP ${status}`. That
+ * is not a diagnostic, it is a restatement: 402 means the account is out of
+ * credit, 401 means the key is wrong, and 422 is a validation error whose body
+ * names the offending field. All three produced the same opaque string, so the
+ * one failure mode that cost the most time to diagnose — a 402 that looked like a
+ * code fault — was the one this hid best.
+ *
+ * Deliberately does NOT include response text for 401/402: those bodies are
+ * account metadata, and the message below is the whole point of putting them
+ * behind a closed union rather than echoing whatever the server said.
+ */
+export function fishErrorMessage(status: number, detail: string | null = null): string {
+  switch (status) {
+    case 401:
+    case 403:
+      // The key was rejected. L17 already rotates the pool on this.
+      //
+      // The status is interpolated rather than hardcoded per branch: 401 and 403
+      // share a cause but NOT a meaning. A 403 is a permission or entitlement
+      // problem and a 401 is a bad credential, and an operator reading "401" when
+      // the server said 403 is sent to debug the wrong thing entirely.
+      return `TTS auth rejected (${status}) - the Fish API key is invalid, revoked or not entitled; rotate it`;
+    case 402:
+      // The one that matters most. NOT a key fault, so L17 correctly does not
+      // rotate: adding credit is the fix, swapping keys is not.
+      return 'TTS out of credit (402) - top up the Fish balance or wait for quota; the key itself is fine';
+    case 422:
+      // The only status whose body is worth surfacing: it is an array of
+      // {loc, msg} and names the field that failed validation.
+      return detail === null
+        ? 'TTS request rejected by the API (422) - a parameter is out of range'
+        : `TTS request rejected by the API (422): ${detail}`;
+    case 429:
+      return 'TTS rate limited (429) - backing off';
+    case 404:
+      return 'TTS voice model not found (404) - the reference_id does not resolve';
+    default:
+      return status >= 500
+        ? `TTS provider error (${status}) - Fish failed on their side, safe to retry`
+        : `TTS failed: HTTP ${status}`;
+  }
+}
+
+/**
+ * R3: extract a short, secret-safe detail from a Fish error body.
+ *
+ * Fish returns `{status, message}` for 401/402/404 and an ARRAY of
+ * `{loc, type, msg}` for 422. Only 422 is read, because only 422 is a
+ * validation report about our own request. Everything else returns null so the
+ * caller cannot accidentally echo account metadata into a log line.
+ */
+export async function fishErrorDetail(res: Response): Promise<string | null> {
+  if (res.status !== 422) return null;
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const first = parsed[0] as { loc?: unknown; msg?: unknown } | undefined;
+  if (first === undefined) return null;
+  const msg = typeof first.msg === 'string' ? first.msg : null;
+  const loc = Array.isArray(first.loc) ? first.loc.filter((p) => typeof p === 'string' || typeof p === 'number').join('.') : null;
+  if (msg === null && loc === null) return null;
+  // Bounded: this reaches a log line and a notice banner.
+  const detail = (loc === null ? '' : `${loc}: `) + (msg ?? 'invalid');
+  return detail.slice(0, 120);
+}
+
 export function fishRequestBody(text: string, fishVoiceId: string): Record<string, unknown> {
   return {
     // Sanitised again here on purpose: this is the last gate before bytes hit
@@ -280,7 +371,19 @@ export function fishRequestBody(text: string, fishVoiceId: string): Record<strin
     text: stripSpeechText(text),
     reference_id: fishVoiceId,
     format: 'mp3',
-    latency: 'normal',
+    // R2: `balanced` rather than the `normal` default. Measured live against
+    // the same short Arabic greeting, twice:
+    //   normal   1,405-1,432 ms to first chunk
+    //   balanced    426-556 ms to first chunk
+    //   low         443-1,376 ms - high variance, most chunks, slowest end
+    // A reproducible ~3x improvement to time-to-first-audio, which is the
+    // number a voice product is actually judged on. `low` is tempting and
+    // wrong: one fast sample, but it was both the slowest to complete and the
+    // least predictable across runs.
+    //
+    // Audited against the official fish-audio-api skill; `balanced` is the
+    // documented middle setting. See dossier/FISH-AUDIO-COMPLIANCE-AUDIT.md.
+    latency: 'balanced',
     chunk_length: 300,
     min_chunk_length: 50,
     normalize: true,
@@ -422,13 +525,9 @@ export class FishHttpTransport implements FishTransport {
         this.timeoutMs,
         this.fetchImpl,
       );
-      if (res.status === 429) {
-        this.keyring.release(key, false, 429);
-        throw new Error('TTS rate-limited (429)');
-      }
       if (!res.ok || res.body === null) {
         this.keyring.release(key, false, res.status);
-        throw new Error(`TTS failed: HTTP ${res.status}`);
+        throw new Error(fishErrorMessage(res.status, await fishErrorDetail(res)));
       }
       this.keyring.release(key, true);
       const reader = res.body.getReader();

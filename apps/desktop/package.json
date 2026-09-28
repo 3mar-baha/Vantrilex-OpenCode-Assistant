@@ -1,7 +1,7 @@
 {
   "name": "voxaura",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Voxaura — sovereign ambient voice and agentic desktop shell for opencode-voice-runtime.",
   "type": "module",
   "scripts": {
