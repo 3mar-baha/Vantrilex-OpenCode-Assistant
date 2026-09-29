@@ -3,7 +3,8 @@
 // migrates comma pools from env into the encrypted file vault (then unset env).
 // live: full provider round-trip (Fish TTS → Whisper STT → brain → TTS → play)
 // with latency report. Key material never reaches stdout (redacting discipline).
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { loadConfig } from './common/index.js';
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
@@ -16,6 +17,7 @@ import { createFishTransport } from './voice/fish-ws.js';
 import { TtsEngine, FileAudioOut } from './voice/tts.js';
 import { loadConfig as loadFullConfig } from './common/config.js';
 import { assertParity, buildIndex, verifyKnowledge } from './knowledge/index.js';
+import { collectBundle, defaultBundleSources, parseDoctorFlags, renderBundle, type DoctorFlags } from './diag/bundle.js';
 
 const VAULT_PATH = 'vault/keyring.dat';
 
@@ -37,6 +39,53 @@ async function doctor(): Promise<number> {
   console.log(`${alive ? 'ok  ' : 'miss'} serve 127.0.0.1:${cfg.serve.port} ${alive ? '(healthy)' : '(unreachable)'}`);
   console.log(`info voice=${cfg.voice.default} briefings=${cfg.briefings} mic=${cfg.capture.micDefault}`);
   return alive && verdict.ok ? 0 : 1;
+}
+
+/**
+ * `doctor --bundle` (M5) — one redacted JSON artifact for a public ticket.
+ *
+ * The no-flag path is deliberately NOT routed through here: `doctor()` above is
+ * invoked unchanged, because a diagnostics flag that alters the existing output
+ * is a regression wearing a feature's clothes. `parseDoctorFlags` decides which
+ * of the two runs, and its `legacy` verdict is unit-tested.
+ *
+ * Exits 0 healthy · 1 degraded-but-collected · 2 collection-failed. `cli.ts`
+ * already exits 2 for bad usage, so the JSON body carries `outcome` and `tool`
+ * to tell the two apart; a usage error is not a bundle at all.
+ */
+async function doctorBundle(flags: DoctorFlags): Promise<number> {
+  if (flags.error !== null) {
+    console.log(JSON.stringify({ tool: 'voxaura-doctor-bundle', schemaVersion: 1, outcome: 'usage-error', error: flags.error, unknown: flags.unknown }, null, 2));
+    return 2;
+  }
+  const result = await collectBundle(
+    defaultBundleSources({
+      env: process.env,
+      cwd: process.cwd(),
+      home: homedir(),
+      readTextFile: (file) => {
+        try {
+          return readFileSync(file, 'utf8');
+        } catch {
+          return null;
+        }
+      },
+    }),
+  );
+  const text = `${renderBundle(result.bundle)}\n`;
+  if (flags.out !== null) {
+    try {
+      writeFileSync(flags.out, text);
+    } catch (err) {
+      // The artifact is the deliverable, so failing to write it is a collection
+      // failure — and the bundle still goes to stdout rather than being lost.
+      console.log(text);
+      console.error(`doctor: could not write ${flags.out}: ${err instanceof Error ? err.message : 'unknown'}`);
+      return 2;
+    }
+  }
+  console.log(text.trimEnd());
+  return result.exitCode;
 }
 
 function loadDotEnvLocal(): void {
@@ -234,7 +283,8 @@ function knowledgeReport(): number {
 }
 
 if (command === 'doctor') {
-  process.exit(await doctor());
+  const flags = parseDoctorFlags(process.argv.slice(3));
+  process.exit(flags.legacy ? await doctor() : await doctorBundle(flags));
 } else if (command === 'vault' && process.argv[3] === 'bootstrap') {
   process.exit(await vaultBootstrap());
 } else if (command === 'live') {

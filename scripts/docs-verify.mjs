@@ -461,7 +461,13 @@ if (process.argv.includes('--self-test')) {
   process.exit(bad === 0 ? 0 : 1);
 }
 
-console.log('docs:verify — deriving truth from the tree…\n');
+// In `--json` mode stdout is EXACTLY one JSON document and nothing else: the
+// only consumer is `doctor --bundle`, and a banner line in front of the payload
+// turns "the tree has drifted" into "the tool could not parse its output", which
+// are different findings and only one of them is true.
+if (!process.argv.includes('--json')) {
+  console.log('docs:verify — deriving truth from the tree…\n');
+}
 
 const agents = existsSync(join(DOC_ROOT, 'AGENTS.md'))
   ? readFileSync(join(DOC_ROOT, 'AGENTS.md'), 'utf8')
@@ -677,6 +683,37 @@ if (anchors.length === 0) {
 
 // ── report ───────────────────────────────────────────────────────────────────
 
+const failed = results.filter((r) => r.status === 'FAIL');
+const skipped = results.filter((r) => r.status === 'UNVERIFIED');
+const passed = results.filter((r) => r.status === 'ok');
+
+// `--json` is ADDITIVE and changes nothing about the default output. It exists
+// for one consumer: `doctor --bundle` (src/diag/bundle.ts), which must report
+// what docs:verify actually found rather than parsing this table. Parsing prose
+// is how a diagnostic tool ends up reporting a remembered result, and a
+// remembered result in a public bug report is a lie.
+if (process.argv.includes('--json')) {
+  console.log(
+    JSON.stringify({
+      tool: 'docs:verify',
+      schemaVersion: 1,
+      total: results.length,
+      passed: passed.length,
+      failed: failed.length,
+      unverified: skipped.length,
+      failedNames: [...failed, ...skipped].map((r) => r.name),
+      checks: results.map((r) => ({
+        name: r.name,
+        documented: String(r.documented),
+        derived: String(r.derived),
+        status: r.status,
+      })),
+    }),
+  );
+  // Same exit contract as the human path: UNVERIFIED is an error, not a warning.
+  process.exit(failed.length || skipped.length ? 1 : 0);
+}
+
 const w = Math.max(...results.map((r) => r.name.length));
 console.log('  ' + 'CHECK'.padEnd(w) + '  DOCUMENTED   DERIVED       STATUS');
 console.log('  ' + '-'.repeat(w + 34));
@@ -684,9 +721,6 @@ for (const r of results) {
   const mark = r.status === 'ok' ? 'PASS' : r.status === 'FAIL' ? 'FAIL' : 'SKIP';
   console.log('  ' + r.name.padEnd(w) + '  ' + String(r.documented).padEnd(12) + String(r.derived).padEnd(13) + mark);
 }
-
-const failed = results.filter((r) => r.status === 'FAIL');
-const skipped = results.filter((r) => r.status === 'UNVERIFIED');
 console.log('');
 if (failed.length) {
   console.error(`docs:verify FAILED — ${failed.length} claim(s) contradict the code:`);
