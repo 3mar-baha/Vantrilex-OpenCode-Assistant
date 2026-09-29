@@ -871,9 +871,11 @@ success-or-neutral (`release(key,true)` + `throw new FishCreditError…`);
 keep 401/403 rotating.
 
 **A.4 OpenRouter 402 retried 3× as transient.** `!res.ok →
-BRAIN_REJECTED(retryable:true)` catches 402 (`brain.ts:235-236,288-289`);
-`respond()` retries. Exhausted balance ⇒ 3 paid/quota calls per turn, intake
-failover doubles it. *Fix:* `402 → OrchestratorError('RATE_LIMITED',false)`
+`BRAIN_REJECTED(retryable:true)` used to catch 402 (pre-fix `brain.ts`, since
+shifted); `respond()` retried. Exhausted balance ⇒ 3 paid/quota calls per
+turn, intake failover doubled it. *Fix landed (M1-A.4):* `402 →
+OrchestratorError('BRAIN_CREDIT',false)` in both paths (`brain.ts:239`,
+`brain.ts:341`), mapped to 402 — deliberately not `RATE_LIMITED`.
 in both `openRouterChat` and `respondOnce`, so `httpStatusOf` never rotates.
 
 **A.5 `ttsCredit` clock resets on every key-save.** The monitor lives inside
