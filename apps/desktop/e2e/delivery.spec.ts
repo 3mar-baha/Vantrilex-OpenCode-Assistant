@@ -4,9 +4,10 @@ import { expect, test } from '@playwright/test';
 //
 // The daemon cannot tell "the assistant is speaking" from "the assistant finished
 // and nobody heard it" without evidence from the shell, and `playbackStarted` is
-// that evidence. This spec proves the renderer sends it, ONCE per utterance, from
-// the player's `onStart` — and not once per chunk, which is the failure the
-// `AudioPlayer` `started` latch exists to prevent.
+// that evidence. This spec proves the renderer sends it from the player's
+// `onStart` with a bounded, non-session correlation id. The per-run latch
+// itself is unit-pinned in playback.test.ts (E2E timing cannot deterministically
+// hold a run open: fake decode fails fast).
 //
 // It needs NO new stub route: the stub already records every command the real
 // `UiServer` parsed and serves them from `/commands` (this is how
@@ -27,12 +28,15 @@ async function commands(): Promise<Array<{ kind: string; playbackId?: string }>>
   return (await res.json()) as Array<{ kind: string; playbackId?: string }>;
 }
 
-test('the player tells the daemon playback started — once per utterance, not per chunk', async ({ page }) => {
+test('the player tells the daemon playback started, with a bounded correlation id', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
 
+  // NOTE: the stub's /commands log is GLOBAL across the whole Playwright run
+  // (one stub process), so earlier specs (e.g. bargein) may already have left
+  // playbackStarted rows. Assert the DELTA this spec produces, never an
+  // absolute zero — the zero-assumption failed the M2 close gate.
   const before = (await commands()).filter((c) => c.kind === 'playbackStarted').length;
-  expect(before, 'no playback has happened yet, so nothing should have been reported').toBe(0);
 
   // A fake MP3 payload: decode fails in the player, but `enqueue` → `onStart` is
   // exactly the path under test (the same trick `downlink.spec.ts` uses).
@@ -49,17 +53,23 @@ test('the player tells the daemon playback started — once per utterance, not p
   expect(String(first?.playbackId).length).toBeLessThanOrEqual(64);
   expect(String(first?.playbackId)).not.toMatch(/^ses_/);
 
-  // THE POINT: three more chunks of the SAME contiguous run must not add more
-  // reports — the latch is per queue residency, not per chunk. (Peer review:
-  // in production Fish sentence gaps empty the queue, so this is roughly per
-  // sentence, not per utterance; back-to-back posts here are one run, which is
-  // exactly the shape asserted.)
+  // LATCH HONESTY (M2 close-gate fix): whether three back-to-back posts are
+  // one run or three depends on decode timing — the fake payload fails decode
+  // fast, so the queue may drain between posts and each legitimately reports.
+  // The per-run latch itself is unit-pinned in playback.test.ts; here we pin
+  // the deterministic part: every emitted row carries a bounded,
+  // non-session correlation id, however many rows there are.
   await post('/audio-down', { bytes: payload });
   await post('/audio-down', { bytes: payload });
   await post('/audio-down', { bytes: payload });
   await page.waitForTimeout(2_000);
-  const after = (await commands()).filter((c) => c.kind === 'playbackStarted').length;
-  expect(after, 'onStart is latched per contiguous run, not per chunk').toBe(before + 1);
+  const rows = (await commands()).filter((c) => c.kind === 'playbackStarted');
+  expect(rows.length, 'reports were emitted').toBeGreaterThan(before);
+  for (const row of rows) {
+    expect(String(row.playbackId).length, 'bounded correlation id').toBeLessThanOrEqual(64);
+    expect(String(row.playbackId), 'never a session id').not.toMatch(/^ses_/);
+  }
+  const after = rows.length;
 
   // A barge ends the run, so the NEXT utterance reports again — that is the
   // latch clearing, not the signal being one-shot forever.
@@ -73,6 +83,15 @@ test('the player tells the daemon playback started — once per utterance, not p
 test('the barge-in button still aborts the turn — playbackStarted is not a control path', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
+
+  // Determinism precondition (M2 close-gate fix): the abort button sends
+  // 'abort' only while `live` (matrix !== 0), and a fresh page has matrix 0
+  // (which sends 'arm' instead). Drive a lifecycle event through the stub's
+  // existing /fire route first — without this the test asserts whatever the
+  // ambient matrix happens to be, and it failed exactly that way in isolation
+  // while passing in full runs by accident of ordering.
+  await post('/fire', { state: 'running' });
+  await expect(page.getByTestId('abort-button')).toContainText('إيقاف التوليد', { timeout: 10_000 });
 
   const abortsBefore = (await commands()).filter((c) => c.kind === 'abort').length;
   await page.getByTestId('abort-button').click();
