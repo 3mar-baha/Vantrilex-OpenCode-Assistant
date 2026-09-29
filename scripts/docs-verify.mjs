@@ -94,6 +94,52 @@ function countRustTests() {
   return (readFileSync(p, 'utf8').match(/^\s*#\[test\]/gm) ?? []).length;
 }
 
+/**
+ * Module-level test reachability — the number `npm run test:blindspots` prints.
+ *
+ * Duplicated here rather than shelled out to, because that script is a
+ * measurement with prose output and this one is a checker. It is the same walk:
+ * resolve every quoted relative specifier transitively from each test file.
+ */
+function testReachability() {
+  const SRC = join(ROOT, 'src');
+  const all = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (p.endsWith('.ts')) all.push(p);
+    }
+  };
+  walk(SRC);
+  const prod = all.filter((f) => !f.endsWith('.test.ts'));
+  const tests = all.filter((f) => f.endsWith('.test.ts'));
+  const importsOf = (file) => {
+    const src = readFileSync(file, 'utf8');
+    const out = [];
+    for (const m of src.matchAll(/['"](\.[^'"]+)\.js['"]/g)) {
+      const target = resolve(dirname(file), `${m[1]}.ts`);
+      if (existsSync(target)) out.push(target);
+    }
+    return out;
+  };
+  const reach = (entries) => {
+    const seen = new Set();
+    const queue = entries.filter(existsSync);
+    while (queue.length > 0) {
+      const f = queue.pop();
+      if (seen.has(f)) continue;
+      seen.add(f);
+      for (const d of importsOf(f)) if (!seen.has(d)) queue.push(d);
+    }
+    return seen;
+  };
+  const byTest = reach(tests);
+  const byProd = reach([join(SRC, 'daemon.ts'), join(SRC, 'cli.ts')]);
+  const blind = prod.filter((f) => byProd.has(f) && !byTest.has(f));
+  return { total: prod.length, shipping: prod.filter((f) => byProd.has(f)).length, blind: blind.length, tests: tests.length };
+}
+
 function countE2ETests() {
   const dir = join(ROOT, 'apps/desktop/e2e');
   if (!existsSync(dir)) return null;
@@ -398,7 +444,33 @@ for (const [label, re, der] of [
   else fail(label, doc, String(der));
 }
 
-// 12. Every `file.ts:NNN` anchor AGENTS.md cites must still resolve to a line
+// 12. Module-level test reachability.
+//
+//     The count is over ALL production modules, not just the shipping-reachable
+//     ones, and that distinction is load-bearing. `docs:verify` also reports 7
+//     DEAD modules (the Laya set); counting only the 51 that ship makes the two
+//     figures disagree with `test:blindspots`, which counts 58 and subtracts its
+//     own "neither shipped nor tested" bucket. The first version of this check
+//     derived from the shipping set and read 48 where the document says 55 — a
+//     real disagreement between two tools, and the fix is to make the basis
+//     explicit rather than to adjust a number until it matches.
+const tr = testReachability();
+for (const [label, re, der] of [
+  ['test-reachable modules', /\*\*(\d+) of \d+\*\* shipping modules/, tr.total - tr.blind],
+  // The sentence is "The 3 modules no test reaches are `cli.ts` (247 lines)...".
+  // An earlier pattern spanned sentences with `[^.]*?` and matched nothing,
+  // reporting UNVERIFIED for a figure the document states plainly — the same
+  // looks-covered-but-extracts-nothing failure as the earcon regex, and the
+  // reason UNVERIFIED is fatal caught it instead of letting it slide.
+  ['test-blind modules', /The (\d+) modules no test reaches are/, tr.blind],
+]) {
+  const doc = (agents.match(re) ?? [])[1];
+  if (doc == null) unverified(label, 'not stated', String(der));
+  else if (Number(doc) === der) pass(label, doc, String(der));
+  else fail(label, doc, String(der));
+}
+
+// 13. Every `file.ts:NNN` anchor AGENTS.md cites must still resolve to a line
 //     that exists. This does NOT prove the line is still the right one.
 const anchors = citedAnchors();
 const dangling = anchors.filter((a) => !a.ok);

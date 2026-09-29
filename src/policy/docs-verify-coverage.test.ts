@@ -114,6 +114,8 @@ describe('docs:verify keeps its claim set', () => {
       'knowledge importers',
       'knowledge barrel importers',
       'cited line anchors',
+      'test-reachable modules',
+      'test-blind modules',
     ]) {
       expect(hasClaim(label), `docs-verify no longer checks "${label}"`).toBe(true);
     }

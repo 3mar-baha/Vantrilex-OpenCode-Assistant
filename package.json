@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
     "docs:verify": "node scripts/docs-verify.mjs",
+    "test:blindspots": "node scripts/test-blindspots.mjs",
     "release:verify": "node scripts/release-verify.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:ox": "node scripts/lint-baseline.mjs",
