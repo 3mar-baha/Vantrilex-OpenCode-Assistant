@@ -184,7 +184,6 @@ describe('M2-P3 drain', () => {
     let t = 0;
     const expired: string[] = [];
     const st = mutableChannel({ speechLive: true });
-    const { buffer } = harness(st, () => t);
     const withHook = new DeliveryBuffer({
       deliver: () => undefined,
       state: () => st,
@@ -315,7 +314,9 @@ describe('M2-P3 playbackStarted command', () => {
 
   test('an unrecognised playbackId never reaches onPlaybackStarted', async () => {
     const seen: Array<string | undefined> = [];
-    const handler = createCommandHandler({
+    // No binding: the handler is registered for its side effect (the spy
+    // array), and the test never invokes it — only the parse runs.
+    createCommandHandler({
       client: {
         setSessionAgent: async () => ({}),
         setSessionModel: async () => ({}),
@@ -329,7 +330,9 @@ describe('M2-P3 playbackStarted command', () => {
     });
     // The daemon's real entrypoint parses before dispatching; a rejected parse
     // is an `error` frame, never a handler call. Simulated here by parsing.
-    const parsed = UiCommandSchema.safeParse({ id: 'c2', kind: 'playbackStarted', playbackId: 'pb 7' });
+    // (Was once a stray NUL byte that made this pass accidentally; an
+    // overlong id is invalid on purpose, by the schema bound.)
+    const parsed = UiCommandSchema.safeParse({ id: 'c2', kind: 'playbackStarted', playbackId: 'x'.repeat(65) });
     expect(parsed.success).toBe(false);
     expect(seen).toHaveLength(0);
   });
