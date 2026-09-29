@@ -80,6 +80,39 @@ describe('coordinator chain', () => {
     }
   });
 
+  test('B.5: a rejected speak logs a redacted line, never the provider text', async () => {
+    // The speak failure is interpolated into a `console.error` line, which is
+    // the stderr a human pastes into an issue. Scrubbing belongs on the exact
+    // interpolation (redact before JSON.stringify), not on the caller that
+    // rejects — a rejection can carry any provider's message. BOTH asserts:
+    // absent, and the marker PRESENT (proves a scrub, not a dropped line).
+    // Synthetic material only.
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]): void => void errors.push(args[0]);
+    try {
+      const coordinator = new Coordinator({
+        chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+        speak: async () => {
+          throw new Error('fish 401 with sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+        },
+        dispatch: async () => ({ receipt: 'msg_ok' }),
+        activeSessionId: () => 'ses_a' as never,
+      });
+      await coordinator.run('show me sessions', { taskId: 'm_redact' });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(errors).toHaveLength(1);
+      const line = String(errors[0]);
+      expect(line).toContain('coordinator-speak-failed');
+      expect(line).not.toContain('sk-or-v1-AAAAAAAA');
+      expect(line).toContain('[REDACTED]');
+      // Still valid JSON: redaction must not corrupt the line's shape.
+      expect(JSON.parse(line)).toMatchObject({ evt: 'coordinator-speak-failed' });
+    } finally {
+      console.error = original;
+    }
+  });
+
   test('reply_ar is written FROM the situation, not from a stock phrase (Phase 5)', async () => {
     // The whole point of the context block: a heavy model just swapped onto a
     // full context window should produce a line ABOUT that, and the model must

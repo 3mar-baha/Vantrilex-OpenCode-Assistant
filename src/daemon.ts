@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { OrchestratorError } from './common/errors.js';
+import { redactSecrets, redactString } from './common/logger.js';
 import { loadConfig } from './common/config.js';
 import type { SessionId } from './common/brands.js';
 import { VOICE_IDS } from './common/brands.js';
@@ -283,7 +284,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         'تعذّر نشر هوية الخدمة على المنفذ — سيُبلّغ التطبيق التالي أن المنفذ مشغول من قبل عملية أخرى.',
         'warn',
       );
-      console.error('daemon: could not publish daemon.owner:', err instanceof Error ? err.message : err);
+      // Redacted at the sink: this is stderr a human pastes into an issue, and
+      // a write failure can carry a path or a provider string. Peer review:
+      // the non-Error branch used to pass the raw value for "diagnostics" —
+      // but a thrown string can carry a key, so unknown types go through
+      // `redactSecrets` (fail-closed) rather than through untouched.
+      console.error(
+        'daemon: could not publish daemon.owner:',
+        err instanceof Error ? redactString(err.message) : redactSecrets(err),
+      );
     }
   };
   /** Only ever removes OUR claim: a successor that already replaced it wins. */

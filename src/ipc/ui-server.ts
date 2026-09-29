@@ -230,9 +230,17 @@ export class UiServer {
     );
   }
 
+  /**
+   * `transcript` is the user's own speech, so masking a spoken key here is a
+   * deliberate fail-closed trade: the frame reaches a client-side log or bug
+   * report, and failing open would be the one branch worth being wrong about.
+   * Redaction happens INSIDE the conditional spread, i.e. before
+   * `VoiceFrameSchema.parse`, so a scrubbed string is still a string and
+   * parsing cannot break. Redaction is idempotent on its own marker.
+   */
   voice(phase: VoicePhase, transcript?: string): number {
     return this.broadcastFrame(
-      VoiceFrameSchema.parse({ type: 'voice', seq: 0, phase, ...(transcript !== undefined ? { transcript } : {}) }),
+      VoiceFrameSchema.parse({ type: 'voice', seq: 0, phase, ...(transcript !== undefined ? { transcript: redactString(transcript) } : {}) }),
     );
   }
 
@@ -506,7 +514,12 @@ export class UiServer {
       type: ACK_KIND,
       id: cmd.id,
       ok: outcome.ok,
-      ...(outcome.detail !== undefined ? { detail: outcome.detail } : {}),
+      // `detail` is an OPEN string, not an `ErrorCode` union: `dispatch` returns
+      // locally generated literals today, but the catch above forwards a raw
+      // `err.message`, so a single throwing `onCommand` reaches the HUD
+      // unredacted. Scrubbing at the sink covers the current callers AND every
+      // future one, which per-caller wrapping cannot promise.
+      ...(outcome.detail !== undefined ? { detail: redactString(outcome.detail) } : {}),
     };
     safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(ack)));
   }

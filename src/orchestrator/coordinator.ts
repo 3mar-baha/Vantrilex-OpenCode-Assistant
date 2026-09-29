@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { SessionId } from '../common/brands.js';
+import { redactString } from '../common/logger.js';
 import { extractJson, requiresConfirmation } from '../voice/brain.js';
 
 // P5 runtime orchestration — the 3-agent chain as executable code:
@@ -517,13 +518,18 @@ export class Coordinator {
     // planning even started. It is also fire-and-forget by design: the audible
     // reply is the daemon's `onUtterance` path, so nothing here blocks on it.
     // The catch is mandatory: an unhandled rejection in a detached promise
-    // takes down the daemon process, not one turn. No transcript or key
-    // material is logged — only the failure class and message.
+    // takes down the daemon process, not one turn. Nothing else about the
+    // rejection is logged, and the message is scrubbed at the interpolation
+    // below rather than trusted to arrive pre-scrubbed.
     void this.deps.speak?.(ack.replyAr)?.catch((err: unknown) => {
       console.error(
         JSON.stringify({
           evt: 'coordinator-speak-failed',
-          error: err instanceof Error ? err.message : 'unknown',
+          // Redact at the interpolation, not at the caller: a Fish/whatever
+          // rejection can carry any provider's message, and this is stderr a
+          // human pastes into an issue. Idempotent, so a pre-scrubbed message
+          // is not mangled twice.
+          error: redactString(err instanceof Error ? err.message : 'unknown'),
         }),
       );
     });

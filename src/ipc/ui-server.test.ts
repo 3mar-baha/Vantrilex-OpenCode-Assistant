@@ -297,6 +297,51 @@ describe('UiServer resume + broadcast', () => {
     sock.end();
   });
 
+  test('B.5: an ack.detail carrying a provider error is redacted at the sink', async () => {
+    // `dispatchCommand`'s catch forwards `err.message` verbatim, so one throwing
+    // `onCommand` reaches the HUD unredacted. That is the entire class: the
+    // property is "no provider text escapes a frame", not "today's router
+    // returns literals". BOTH asserts matter — the second is what proves the
+    // value was scrubbed rather than dropped or never set. Synthetic material.
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText();
+    server.onCommand = () => {
+      throw new Error('401 from https://api.groq.com with sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    };
+    sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify({ id: 'cmd-b5', kind: 'arm' })), Buffer.from([4, 5, 6, 7])));
+    const ack = JSON.parse(await sock.readText()) as { ok: boolean; detail?: string };
+    expect(ack.ok).toBe(false);
+    expect(ack.detail).not.toContain('sk-or-v1-AAAAAAAA');
+    expect(ack.detail).toContain('[REDACTED]');
+    sock.end();
+  });
+
+  test('B.5: a voice transcript carrying a provider error is redacted at the sink', async () => {
+    // Intended behaviour change, stated rather than discovered: a user who
+    // SPEAKS a key into the mic sees it masked on their own HUD. That is the
+    // fail-closed direction — the frame reaches a client-side log/bug-report
+    // path, and failing open here would be the one branch worth being wrong
+    // about. Ordinary transcript text is untouched.
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+    const sock = await rawSocket(port);
+    sock.write(handshake('t'));
+    await sock.readText(); // hello
+    server.voice('speaking', 'المفتاح sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA انتهى');
+    const frame = JSON.parse(await sock.readText()) as { type: string; phase: string; transcript?: string };
+    expect(frame.type).toBe('voice');
+    expect(frame.phase).toBe('speaking');
+    expect(frame.transcript).not.toContain('sk-or-v1-AAAAAAAA');
+    expect(frame.transcript).toContain('[REDACTED]');
+    expect(frame.transcript).toContain('انتهى');
+    sock.end();
+  });
+
   test('onCommand throw is contained as ok:false, never crashes the server', async () => {
     const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
     servers.push(server);
