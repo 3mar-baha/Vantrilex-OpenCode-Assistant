@@ -12,6 +12,8 @@ import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, INTAKE_MODEL, type ChatFn } from './orchestrator/coordinator.js';
 import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
+import { FishCreditError } from './voice/tts.js';
+import { TtsCreditMonitor } from './voice/tts-credit.js';
 import { openRouterChat } from './voice/brain.js';
 import { narrate, NARRATOR_MODEL, type NarratorChat } from './orchestrator/narrator.js';
 // Imported from the persona module directly, NOT the knowledge barrel: the
@@ -547,6 +549,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     try {
       const ring = Keyring.load(vault);
       const fish = new FishHttpTransport(ring);
+  // Credit state for the top-up banner. One monitor per daemon, consulted on
+  // every TTS fault; it owns the first-fault clock so repeated faults do not
+  // reset the operator's sense of how long voice has been down.
+  const ttsCredit = new TtsCreditMonitor();
         const chat: ChatFn = async (model, system, user, options) => {
           return withKey(ring, 'openrouter', (key) =>
             openRouterChat(keyMaterial(key), model, system, user, fetch, {
@@ -807,6 +813,26 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
                 errorCode: 'TTS_FAILED',
                 sanitizedErrorClass: classify(err),
               });
+              // The credit interceptor. A 402/429 is not a generic failure: the
+              // key is fine and rotating it would change nothing, so the only useful
+              // instruction is to top up. The typed error lets this branch say that
+              // instead of leaking a prose message the user cannot act on.
+              if (err instanceof FishCreditError) {
+                const credit = ttsCredit.recordFault(err);
+                record({
+                  subsystem: 'TTS',
+                  status: 'ERROR',
+                  latencyMs: Date.now() - t0,
+                  // Distinct from TTS_FAILED: this one is a balance problem, and
+                  // telemetry that conflates them hides the renewal from ops.
+                  errorCode: `TTS_CREDIT_${err.status}`,
+                  sanitizedErrorClass: classify(err),
+                });
+                if (credit.noticeCode !== null && credit.noticeDetailAr !== null) {
+                  ui.notice(credit.noticeCode, credit.noticeDetailAr, 'warn');
+                }
+                return;
+              }
               ui.notice('tts-failed', `تعذّر توليد الصوت: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
             } finally {
               setVoicePhase('idle');

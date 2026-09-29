@@ -70,7 +70,61 @@ function reachability() {
   }
   let lines = 0;
   for (const f of live) lines += readFileSync(f, 'utf8').split('\n').length;
-  return { live: live.size, dead: all.length - live.size, lines, all: all.length };
+  // "Dead" means: not shipped AND not exercised by any test. A module used
+  // only by a test suite - claim-matcher.ts is the live example - is neither a
+  // shipping cost nor dead code, and counting it as dead once inflated the
+  // figure from 7 to 8 and pointed at a Laya regression that does not exist.
+  // NOTE: `all` was built by a walk that EXCLUDES .test.ts, so filtering it
+  // for test files can only ever yield an empty set. The first version of this
+  // fix did exactly that and silently changed nothing - which is the third time
+  // in this repository that a correct-looking edit was a no-op, and the reason
+  // each one was caught is that a number moved that should not have.
+  const testFiles = [];
+  const collectTests = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) collectTests(p);
+      else if (p.endsWith('.test.ts')) testFiles.push(p);
+    }
+  };
+  collectTests(SRC);
+  const byTest = new Set();
+  const tq = [...testFiles];
+  while (tq.length > 0) {
+    const f = tq.pop();
+    if (byTest.has(f)) continue;
+    byTest.add(f);
+    for (const m of readFileSync(f, 'utf8').matchAll(/['"](\.[^'"]+)\.js['"]/g)) {
+      const t = resolve(dirname(f), `${m[1]}.ts`);
+      if (existsSync(t) && !byTest.has(t)) tq.push(t);
+    }
+  }
+  // THREE categories, because collapsing any two has produced a wrong number
+  // here twice: counting test-only modules as dead reported 8, and subtracting
+  // the test-reachable set wholesale reported 1. Both were "true" of a different
+  // question than the one the document asks.
+  //
+  //   live        reachable from a production entrypoint, so it ships
+  //   guarded     reachable only from a test that asserts it must NOT load. The
+  //               Laya set is this: dead by decision, and a test imports it to
+  //               keep it that way. Reporting it inside the dead set would
+  //               understate a set the owner tracks by name.
+  //   dead        neither: nothing can execute it
+  //   scaffolding reachable only from a test that uses it (claim-matcher.ts)
+  const LAYA = /[\\/]runtime[\\/]laya[\\/]/;
+  const deadFiles = all.filter((f) => !live.has(f) && !byTest.has(f));
+  const guardedFiles = all.filter((f) => !live.has(f) && byTest.has(f) && LAYA.test(f));
+  const scaffoldingFiles = all.filter(
+    (f) => !live.has(f) && byTest.has(f) && !LAYA.test(f),
+  );
+  return {
+    live: live.size,
+    dead: deadFiles.length,
+    guarded: guardedFiles.length,
+    scaffolding: scaffoldingFiles.length,
+    lines,
+    all: all.length,
+  };
 }
 
 /** Run a vitest suite with the JSON reporter and return {tests, files}. */
@@ -122,6 +176,13 @@ function testReachability() {
   };
   walk(SRC);
   const prod = all.filter((f) => !f.endsWith('.test.ts'));
+  // A production module imported ONLY by a test is not dead and not a shipping
+  // cost - it is test scaffolding, and it belongs to neither bucket. The first
+  // version of this walk counted `claim-matcher.ts` (imported only by
+  // docs-verify-coverage.test.ts) as dead, which raised the dead count from 7 to
+  // 8 and would have sent a reader looking for a Laya regression that does not
+  // exist. Subtract the test-reachable set from the dead set rather than
+  // reporting a module nobody can use as though it were unused.
   const tests = all.filter((f) => f.endsWith('.test.ts'));
   const importsOf = (file) => {
     const src = readFileSync(file, 'utf8');
@@ -470,7 +531,8 @@ if (e2e) {
 const reach = reachability();
 for (const [label, docRe, der] of [
   ['live modules', /LIVE production modules\s*:\s*(\d+)/, reach.live],
-  ['dead modules', /DEAD production modules\s*:\s*(\d+)/, reach.dead],
+  ['dead modules', /DEAD production modules\s*:\s*(\d+)/, reach.dead + reach.guarded],
+  ['test-only scaffolding modules', /TEST-ONLY scaffolding modules\s*:\s*(\d+)/, reach.scaffolding],
   ['live source lines', /live source lines\s*:\s*(\d+)/, reach.lines],
 ]) {
   const doc = (agents.match(docRe) ?? [])[1];

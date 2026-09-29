@@ -19,89 +19,18 @@ import { readFileSync } from 'node:fs';
 
 const SRC = readFileSync('scripts/docs-verify.mjs', 'utf8');
 
-/**
- * A claim label is only pinned when it appears in a CLAIM POSITION — an entry of
- * the tuple array the harness iterates — not merely anywhere in the file.
- *
- * Found by break-testing. The first version of this guard used a bare
- * `toContain(label)`, and deleting the `['dead modules', ...]` check still left
- * the string "dead modules" in the header comment that explains the tool's
- * history, so the guard passed while the check was gone. A substring search over
- * a file that also contains prose about itself counts the prose.
- */
+// The matcher lives in its own module so this guard and its own tests use ONE
+// implementation, and so the regex can be written as ordinary source instead of
+// being assembled through two layers of escaping. It is a SHAPE test: it proves
+// a label is registered, not that it derives correctly.
+import { hasClaimIn } from './claim-matcher.js';
+
+/** Whether docs-verify registers this label. See `claim-matcher.ts`. */
 function hasClaim(label: string): boolean {
-  const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // docs:verify registers a claim in one of FOUR shapes, and pinning a subset
-  // produced a guard that failed on its own baseline:
-  //   1. a single-line tuple entry — ['dead modules', /x/, reach.dead],
-  //   2. a MULTI-LINE tuple entry — prettier wraps the long regex ones, so the
-  //      opening bracket is on one line and the label on the next. Two separate
-  //      failures came from assuming a table entry is always one line.
-  //   3. a string literal call     — pass('cargo tests', a, b)
-  //   4. a TEMPLATE literal call   — pass(`persona refs: ${label}`, a, b)
-  return (
-    new RegExp(`^\\s*\\['${esc}'\\s*,`, 'm').test(SRC) ||
-    new RegExp(`\\[\\s*\\n\\s*'${esc}'\\s*,`, 'm').test(SRC) ||
-    new RegExp(`\\b(?:pass|fail|unverified)\\('${esc}'`, 'm').test(SRC) ||
-    new RegExp('\\b(?:pass|fail|unverified)\\(`' + esc, 'm').test(SRC)
-  );
+  return hasClaimIn(SRC, label);
 }
 
-describe('hasClaim recognises every claim-registration shape', () => {
-  // The guard's own matcher, tested against synthetic sources. Both regressions
-  // above were in THIS function, not in the claims it checks, and neither was
-  // visible from a passing run: a substring version counted a prose mention in
-  // the header comment as coverage, and versions covering only some shapes
-  // reported claims the script plainly makes as absent.
-  const match = (src: string, label: string): boolean => {
-    const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return (
-      new RegExp(`^\\s*\\['${esc}'\\s*,`, 'm').test(src) ||
-      new RegExp(`\\[\\s*\\n\\s*'${esc}'\\s*,`, 'm').test(src) ||
-      new RegExp(`\\b(?:pass|fail|unverified)\\('${esc}'`, 'm').test(src) ||
-      new RegExp('\\b(?:pass|fail|unverified)\\(`' + esc, 'm').test(src)
-    );
-  };
 
-  test('a single-line table entry counts as a claim', () => {
-    expect(match("  ['dead modules', /x/, reach.dead],", 'dead modules')).toBe(true);
-  });
-
-  test('a wrapped multi-line table entry counts as a claim', () => {
-    // Prettier wraps the entries whose regex is long, so the label lands on the
-    // line after the bracket. The matcher previously required the two to be
-    // adjacent on one line and reported these claims as absent.
-    expect(match("  [\n    'earcon pitch constants',\n    /x/,\n    der,\n  ],", 'earcon pitch constants')).toBe(true);
-  });
-
-  test('a string-literal call counts as a claim', () => {
-    expect(match("  pass('cited line anchors', a, b);", 'cited line anchors')).toBe(true);
-    expect(match("  unverified('cargo tests', 'x', 1);", 'cargo tests')).toBe(true);
-  });
-
-  test('a template-literal call counts as a claim', () => {
-    // The shape that broke the previous two versions: the per-file persona
-    // checks are named `persona refs: ${label}` inside a backtick, so a matcher
-    // that only accepted a quote character reported them as missing.
-    expect(match('  pass(`persona refs: ${label}`, doc, der);', 'persona refs:')).toBe(true);
-  });
-
-  test('a prose mention does NOT count as a claim', () => {
-    // The exact false positive that let the first version pass: the header
-    // comment explains the tool's history and names the thing it once checked.
-    expect(match('// AGENTS.md claimed "0 dead modules" when 7 were dead', 'dead modules')).toBe(false);
-  });
-
-  test('an unrelated label does not match', () => {
-    expect(match("  ['live modules', /x/, 1],", 'dead modules')).toBe(false);
-  });
-
-  test('a deleted claim leaves no trace to match', () => {
-    // Simulates the real break: the tuple entry is gone, and only prose remains.
-    const stripped = '// historically it reported 0 dead modules\n  [\'live modules\', /x/, 1],';
-    expect(match(stripped, 'dead modules')).toBe(false);
-  });
-});
 
 describe('docs:verify keeps its claim set', () => {
   test('every narrative claim label is still present', () => {

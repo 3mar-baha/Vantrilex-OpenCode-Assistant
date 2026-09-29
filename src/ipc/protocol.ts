@@ -123,6 +123,7 @@ export function decodeFrames(input: Uint8Array): { frames: WsFrame[]; remaining:
   let offset = 0;
   let pendingOpcode: Opcode | null = null;
   const pendingParts: Uint8Array[] = [];
+  let pendingBytes = 0;
   const buf = Buffer.from(input);
 
   while (offset + 2 <= buf.byteLength) {
@@ -143,6 +144,16 @@ export function decodeFrames(input: Uint8Array): { frames: WsFrame[]; remaining:
       length = lo;
       head += 8;
     }
+    // This function is a SECOND reassembler, and it shipped with neither limit:
+    // no per-frame cap and no cumulative cap, so it had the unbounded path the
+    // class above was fixed for. It is not what `ui-server.ts` calls (that uses
+    // FrameReassembler), but it is exported from `src/ipc/index.ts`, so it is one
+    // import away from being the live path. Both caps are applied here for the
+    // same reason: an exported helper that is one caller away from production
+    // should not be weaker than the one in production.
+    if (length > MAX_MESSAGE_BYTES) {
+      throw new WsProtocolError('frame exceeds message cap — refusing allocation');
+    }
     let mask: Buffer | null = null;
     if (masked) {
       if (head + 4 > buf.byteLength) break;
@@ -160,17 +171,38 @@ export function decodeFrames(input: Uint8Array): { frames: WsFrame[]; remaining:
 
     if (opcode === Opcode.Continuation) {
       if (pendingOpcode === null) continue; // stray continuation — drop
+      // Cumulative cap, same rule and same order as FrameReassembler: checked
+      // BEFORE the part is stored, because capping at concat time still
+      // allocates. This function had no cap of either kind.
+      pendingBytes += payload.byteLength;
+      if (pendingBytes > MAX_MESSAGE_BYTES) {
+        pendingBytes = 0;
+        pendingParts.length = 0;
+        pendingOpcode = null;
+        throw new WsProtocolError('assembled message exceeds message cap — refusing allocation');
+      }
       pendingParts.push(payload);
       if (fin) {
         frames.push({ fin: true, opcode: pendingOpcode, payload: Buffer.concat(pendingParts) });
         pendingOpcode = null;
         pendingParts.length = 0;
+        pendingBytes = 0;
       }
       continue;
     }
     if (opcode === Opcode.Text || opcode === Opcode.Binary) {
       if (!fin) {
+        // Abandon an in-flight fragment before charging this one, so an orphan
+        // cannot make a later legal message fail. Same order as the class above.
+        pendingOpcode = null;
+        pendingParts.length = 0;
+        pendingBytes = 0;
         pendingOpcode = opcode;
+        pendingBytes = payload.byteLength;
+        if (pendingBytes > MAX_MESSAGE_BYTES) {
+          pendingBytes = 0;
+          throw new WsProtocolError('frame exceeds message cap — refusing allocation');
+        }
         pendingParts.push(payload);
         continue;
       }

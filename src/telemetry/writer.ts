@@ -51,6 +51,12 @@ const ErrorCodeSchema = z.enum([
   'BRAIN_FAILED',
   'KEYS_MISSING',
   'TTS_FAILED',
+  // Credit faults are their own codes, not TTS_FAILED. The fix is to top up,
+  // not to rotate a key, and telemetry that folds the two together hides a
+  // renewal from whoever is watching the dashboard. 402 = empty balance,
+  // 429 = fair-use window exhausted.
+  'TTS_CREDIT_402',
+  'TTS_CREDIT_429',
   'AUDIO_DEVICE_MISSING',
   'VAULT_CORRUPT',
   'POOL_EXHAUSTED',

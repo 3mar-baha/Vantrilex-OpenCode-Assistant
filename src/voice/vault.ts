@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { nowIso } from '../common/brands.js';
+import { ownerOnlyAclAvailable } from './win-acl.js';
 import { OrchestratorError } from '../common/errors.js';
 
 // Encrypted vault — docs/12 §12.2, docs/20 §20.5. Ciphertext-only VaultBlob on
@@ -21,8 +22,27 @@ interface PoolSecrets {
   readonly keys: string[];
 }
 
+// Warn once per process: machineKey() runs on every vault load, and a warning
+// per load would drown the log it exists to produce.
+let warnedAboutAcl = false;
+
 function machineKey(): Buffer {
   const keyPath = join(homedir(), '.opencode-voice-runtime', 'machine.key');
+  // The DACL on this file is NOT applied, and the reason is measured rather than
+  // assumed: `icacls` cannot express owner-only from Node — it grants a NAME,
+  // and the resulting file is unreadable even by that account, so a "fix" built
+  // on it would strand every saved provider key. `win-acl.ts` carries the
+  // reproduction. The `{ mode: 0o600 }` below is correct on POSIX and inert on
+  // Windows; that inertness is the whole of the remaining gap, and it is
+  // reported rather than papered over.
+  const acl = ownerOnlyAclAvailable();
+  if (!acl.supported && !warnedAboutAcl) {
+    warnedAboutAcl = true;
+    process.emitWarning(
+      `machine.key has no owner-only DACL on this platform — ${acl.reason}`,
+      'VoxauraVault',
+    );
+  }
   if (existsSync(keyPath)) return readFileSync(keyPath);
   const key = randomBytes(32);
   mkdirSync(join(homedir(), '.opencode-voice-runtime'), { recursive: true });
@@ -94,6 +114,13 @@ export class FileVault {
     const tmp = `${this.path}.tmp`;
     writeFileSync(tmp, JSON.stringify(blob), { mode: 0o600 });
     renameSync(tmp, this.path);
+    // The owner-only DACL is NOT applied here, and the earlier attempt to apply
+    // it with `icacls` was removed because it produced a file nobody - including
+    // the owner - could read, while reporting success. That is a worse outcome
+    // than the exposure it claimed to remove: it would strand every saved
+    // provider key. `win-acl.ts` holds the reproduction and the reasoning; the
+    // real fix is to have the Rust supervisor create this file through
+    // `write_protected_secret`, which fails closed and is already tested.
     return blob;
   }
 

@@ -307,6 +307,44 @@ export function fishHeaders(key: string): Record<string, string> {
  * account metadata, and the message below is the whole point of putting them
  * behind a closed union rather than echoing whatever the server said.
  */
+/**
+ * A TTS failure the operator can ACT on by topping up, as opposed to one they
+ * can act on by rotating a key.
+ *
+ * The distinction matters because the two have opposite fixes and the previous
+ * code flattened both into `new Error(message)`, so a caller could only see
+ * prose. 402 means the balance is empty; 429 means the fair-use window is
+ * exhausted. Neither is a credential fault, which is why L17 correctly does not
+ * rotate the pool for them - a rotation would burn a perfectly good key and
+ * change nothing.
+ *
+ * The class exists so the UI can say "top up" instead of "voice unavailable",
+ * and so the 7-day renewal warning has something to attach to. A string match on
+ * the message would work until someone rewords it, which is the same silent
+ * coupling this repository keeps removing.
+ */
+export class FishCreditError extends Error {
+  constructor(
+    readonly status: 402 | 429,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'FishCreditError';
+  }
+
+  /** True when the operator's fix is to add credit rather than rotate a key. */
+  get isCreditFault(): boolean {
+    return this.status === 402 || this.status === 429;
+  }
+
+  /** The notice text the shell should show, in the caller's language. */
+  get remediation(): string {
+    return this.status === 402
+      ? 'TTS out of credit - top up the Fish balance'
+      : 'TTS rate limited - fair-use quota exhausted; top up or wait for the window to reset';
+  }
+}
+
 export function fishErrorMessage(status: number, detail: string | null = null): string {
   switch (status) {
     case 401:
@@ -531,7 +569,17 @@ export class FishHttpTransport implements FishTransport {
       );
       if (!res.ok || res.body === null) {
         this.keyring.release(key, false, res.status);
-        throw new Error(fishErrorMessage(res.status, await fishErrorDetail(res)));
+        const message = fishErrorMessage(res.status, await fishErrorDetail(res));
+        // The credit/rate-limit interceptor. 402 and 429 are the two statuses whose
+        // fix is to top up rather than rotate a key, and until now they were
+        // indistinguishable from a 500 at every call site: the daemon caught an
+        // Error, read prose, and the user saw voice go quiet with no instruction.
+        // Throwing a typed error here is what lets the caller say WHY and WHAT TO
+        // DO instead of failing silently.
+        if (res.status === 402 || res.status === 429) {
+          throw new FishCreditError(res.status, message);
+        }
+        throw new Error(message);
       }
       this.keyring.release(key, true);
       const reader = res.body.getReader();
