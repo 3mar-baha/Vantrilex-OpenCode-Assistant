@@ -41,14 +41,26 @@ class FakeSocket implements SocketLike {
   }
 }
 
-const hello = (seq = 0, version = '3.1.0'): HelloMsg => ({
+// `uplinkPaused` is REQUIRED on the wire (M3 B.3) and defaults to `false` here,
+// so a fixture without it models a daemon that checked and found no pause. The
+// shell's own type keeps the field optional, so the "daemon predates B.3" case
+// is a separate fixture — `helloLegacy` below — not this one's default.
+const hello = (seq = 0, version = '3.1.0', uplinkPaused = false): HelloMsg => ({
   type: 'hello',
   contractVersion: version,
   nodePid: 4242,
   servePort: 4096,
   layaReady: true,
   seq,
+  uplinkPaused,
 });
+
+/** A daemon from before B.3: no `uplinkPaused` field at all. */
+const helloLegacy = (seq = 0, version = '3.1.0'): HelloMsg => {
+  const { uplinkPaused: _drop, ...rest } = hello(seq, version);
+  void _drop;
+  return rest as HelloMsg;
+};
 
 afterEach(() => {
   vi.useRealTimers();
@@ -409,6 +421,219 @@ describe('sendPcm (P4 binary voice uplink)', () => {
     });
     bridge.connect();
     expect(bridge.sendPcm(new Uint8Array([1]))).toBe(false);
+    bridge.dispose();
+  });
+});
+
+// M3 B.3 — the shell half of the pause/resume watermarks.
+//
+// The dangerous half of this feature is the renderer, because "paused" has an
+// attractive wrong implementation: `capture.stop()`. That silences the mic, so
+// the user is not just un-transcribed but unheard, and the resume frame then
+// has to re-acquire a device the user may have to grant again. Dropping chunks
+// at the uplink costs a hole in one utterance; stopping the mic costs the
+// session. So the contract asserted here is: the uplink drops, the capture
+// keeps running, and every OTHER channel keeps working.
+describe('M3 B.3 flow watermarks (pause/resume the uplink, never the mic)', () => {
+  /** A bridge whose flow state is observable through the callback only. */
+  function flowBridge(): {
+    bridge: VoxauraBridge;
+    states: string[];
+    getSocket: () => FakeSocket;
+  } {
+    const states: string[] = [];
+    let socket: FakeSocket | null = null;
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onFlow: (f) => void states.push(f.state),
+      createSocket: (url, protocols) => {
+        socket = new FakeSocket(url, protocols);
+        return socket;
+      },
+    });
+    bridge.connect();
+    return {
+      bridge,
+      states,
+      getSocket: () => {
+        if (socket === null) throw new Error('socket not created');
+        return socket;
+      },
+    };
+  }
+
+  const flow = (state: 'pause' | 'resume', seq = 5): string =>
+    JSON.stringify({ type: 'flow', seq, state });
+
+  test('a pause frame advances lastSeq and drops the uplink chunk, and the mic keeps running', () => {
+    vi.useFakeTimers();
+    const created: FakeSocket[] = [];
+    const states: string[] = [];
+    const heard: number[] = [];
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onFlow: (f) => void states.push(f.state),
+      onAudio: (a) => void heard.push(a[0] ?? -1),
+      createSocket: (url, protocols) => {
+        const s = new FakeSocket(url, protocols);
+        created.push(s);
+        return s;
+      },
+    });
+    bridge.connect();
+    const sock = created[0]!;
+    sock.peerText(JSON.stringify(hello(3)));
+    expect(bridge.sendPcm(new Uint8Array([1]))).toBe(true);
+
+    sock.peerText(flow('pause', 9));
+    expect(states).toEqual(['pause']);
+
+    // `lastSeq` is private, so it is observed the only way that matters: the URL a
+    // reconnect actually emits. A flow frame that skipped the cursor would leave
+    // the shell resuming from 3 and the daemon replaying from 9.
+    sock.close();
+    vi.advanceTimersByTime(5000);
+    expect(created).toHaveLength(2);
+    expect(created[1]!.url).toBe(`${UI_WS_URL}?lastSeq=9`);
+
+    // The chunk is dropped: `sendPcm` reports false and nothing hits the wire.
+    expect(bridge.sendPcm(new Uint8Array([2]))).toBe(false);
+    expect(bridge.sendPcm(new Uint8Array([3]))).toBe(false);
+    expect(created[1]!.sentBinary).toHaveLength(0);
+
+    // A malformed `state` is rejected rather than coerced. Coercing an unknown
+    // value to 'pause' would stop the uplink on the strength of a frame the
+    // daemon did not write; coercing it to 'resume' would defeat the pause that
+    // is in force. Either way it must leave the state exactly as it was.
+    created[1]!.peerText(JSON.stringify({ type: 'flow', seq: 10, state: 'halfway' }));
+    expect(states).toEqual(['pause']);
+    expect(bridge.sendPcm(new Uint8Array([4]))).toBe(false);
+
+    // The mic is NOT stopped. Nothing here closes, disposes, or re-acquires
+    // anything: the socket is still ours, and `capture.ts` is not this class's to
+    // touch. Dropping PCM costs a hole in one utterance; silencing the mic costs
+    // the session.
+    expect(created[1]!.closed).toBe(false);
+    expect(bridge.live).toBe(true);
+
+    // Only the UPLINK is gated. Control still goes out…
+    void bridge.sendCommand({ id: 'c1', kind: 'abort' });
+    expect(created[1]!.sent.filter((t) => t.includes('"abort"'))).toHaveLength(1);
+    // …and the speech downlink still plays, so a reply in flight is never cut
+    // off by backpressure aimed at the microphone.
+    created[1]!.peerBinary(new Uint8Array([0x01, 0, 9, 42]).buffer);
+    expect(heard).toEqual([42]);
+    bridge.dispose();
+  });
+
+  test('a resume frame restores the uplink', () => {
+    const { bridge, states, getSocket } = flowBridge();
+    const sock = getSocket();
+    sock.peerText(JSON.stringify(hello(0)));
+    expect(bridge.sendPcm(new Uint8Array([1]))).toBe(true);
+
+    sock.peerText(flow('pause', 4));
+    expect(bridge.sendPcm(new Uint8Array([2]))).toBe(false);
+    expect(states).toEqual(['pause']);
+
+    sock.peerText(flow('resume', 5));
+    expect(states).toEqual(['pause', 'resume']);
+    expect(bridge.sendPcm(new Uint8Array([3]))).toBe(true);
+    // Two frames got through (before the pause, after the resume), not three.
+    expect(sock.sentBinary.map((b) => b[0])).toEqual([1, 3]);
+    bridge.dispose();
+  });
+
+  test('a daemon restart clears the pause — the resume can never come from a dead daemon', () => {
+    // The other half of the deadlock, and the one a user experiences as "my
+    // microphone broke". A pause belongs to the accumulator that raised it. A
+    // restarted daemon starts with an empty buffer, so it will never cross
+    // PAUSE_BYTES again and will never send the 'resume' this shell is waiting
+    // for. A shell that kept the latch across the restart would discard every
+    // frame until the next restart — over a socket that is up, with a live
+    // green status pill, and no error anywhere.
+    const gaps: number[] = [];
+    const created: FakeSocket[] = [];
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      onGap: () => void gaps.push(1),
+      createSocket: (url, protocols) => {
+        const s = new FakeSocket(url, protocols);
+        created.push(s);
+        return s;
+      },
+    });
+    bridge.connect();
+    created[0]!.peerText(JSON.stringify(hello(50)));
+    created[0]!.peerText(flow('pause', 51));
+    expect(bridge.sendPcm(new Uint8Array([1]))).toBe(false);
+
+    // Epoch reset: the backwards hello is the restart signal for the CURSOR.
+    created[0]!.peerText(JSON.stringify(hello(0)));
+    expect(gaps).toHaveLength(1);
+    expect(bridge.sendPcm(new Uint8Array([2]))).toBe(true);
+
+    // A pause the new daemon raises is honoured normally — the reset is not a
+    // permanent exemption from backpressure.
+    created[0]!.peerText(flow('pause', 3));
+    expect(bridge.sendPcm(new Uint8Array([3]))).toBe(false);
+    created[0]!.peerText(flow('resume', 4));
+    expect(bridge.sendPcm(new Uint8Array([4]))).toBe(true);
+    bridge.dispose();
+  });
+
+  test('the hello resyncs the pause — a mid-session reconnect is not a restart', async () => {
+    // Peer review, and the one that matters: the backwards-seq branch is NOT
+    // taken for an ordinary reconnect, because the daemon's seq only moves
+    // forward. So a shell that reconnects while paused, having missed the resume
+    // (the `flow` frame is not retained for resume), would keep its latch —
+    // while the accumulator sits at zero bytes and never crosses PAUSE_BYTES
+    // again. Both halves stall, silently, behind a green pill.
+    const created: FakeSocket[] = [];
+    const bridge = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      createSocket: (url, protocols) => {
+        const s = new FakeSocket(url, protocols);
+        created.push(s);
+        return s;
+      },
+    });
+    vi.useFakeTimers();
+    bridge.connect();
+    created[0]!.peerText(JSON.stringify(hello(10, '3.1.0', true)));
+    expect(bridge.sendPcm(new Uint8Array([1])), 'adopted from hello, no flow frame seen').toBe(false);
+
+
+    // (b) the socket drops and comes back with a FORWARD seq — not a restart,
+    // so no onGap, and the old branch would have cleared nothing.
+    created[0]!.close();
+    vi.advanceTimersByTime(5000);
+    expect(created).toHaveLength(2);
+    created[1]!.peerText(JSON.stringify(hello(11, '3.1.0', false)));
+    expect(bridge.sendPcm(new Uint8Array([2])), 'the release arrived in hello').toBe(true);
+
+    // (c) a pause that arrives only as a frame, after a legacy hello with no
+    // field at all, still latches — the field is a resync, not a replacement.
+    const legacy: FakeSocket[] = [];
+    const b2 = new VoxauraBridge({
+      token: 'tok',
+      contractVersion: '3.1.0',
+      createSocket: (url, protocols) => {
+        const s = new FakeSocket(url, protocols);
+        legacy.push(s);
+        return s;
+      },
+    });
+    b2.connect();
+    legacy[0]!.peerText(JSON.stringify(helloLegacy(5)));
+    expect(b2.sendPcm(new Uint8Array([3])), 'a pre-B.3 daemon means no backpressure').toBe(true);
+    legacy[0]!.peerText(flow('pause', 6));
+    expect(b2.sendPcm(new Uint8Array([4])), 'frames still work against a legacy hello').toBe(false);
+    b2.dispose();
     bridge.dispose();
   });
 });

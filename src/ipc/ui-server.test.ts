@@ -342,6 +342,51 @@ describe('UiServer resume + broadcast', () => {
     sock.end();
   });
 
+  test('B.3: flow() emits a seq-bearing frame and hello states the pause to a NEW shell', async () => {
+    // The two halves the ingest tests cannot reach, because they live on the
+    // transport. Peer review: `flow()` writes to live sockets only and is NOT
+    // retained for resume, so a resume raised while a shell was away never
+    // arrives as a frame — the shell keeps its latch, drops its uplink, and the
+    // accumulator at zero bytes never crosses PAUSE_BYTES to send the release.
+    // Permanent silence behind a green pill. `hello` is the resync, on the same
+    // reasoning as `persona`.
+    const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
+    servers.push(server);
+    const port = await server.start(0);
+
+    // (a) the frame itself: correct shape, and it consumes the shared seq space
+    // so a reconnecting cursor counts it.
+    const live = await rawSocket(port);
+    live.write(handshake('t'));
+    const hello = JSON.parse(await live.readText()) as Record<string, unknown>;
+    expect(hello['uplinkPaused'], 'nothing is paused yet').toBe(false);
+    const before = Number(hello['seq']);
+    server.flow('pause');
+    const frame = JSON.parse(await live.readText()) as Record<string, unknown>;
+    expect(frame['type']).toBe('flow');
+    expect(frame['state']).toBe('pause');
+    expect(Number(frame['seq']), 'the shared counter moved').toBeGreaterThan(before);
+
+    // (b) the resync: a shell connecting AFTER the pause, with no frame to be
+    // told by, is told anyway.
+    const late = await rawSocket(port);
+    late.write(handshake('t'));
+    const lateHello = JSON.parse(await late.readText()) as Record<string, unknown>;
+    expect(lateHello['uplinkPaused'], 'a late shell must adopt the pause, not default to live').toBe(true);
+
+    // (c) and the release reaches the next connect too — the half that strands
+    // the shell if hello only ever says "paused".
+    server.flow('resume');
+    const later = await rawSocket(port);
+    later.write(handshake('t'));
+    const laterHello = JSON.parse(await later.readText()) as Record<string, unknown>;
+    expect(laterHello['uplinkPaused'], 'and the release is equally authoritative').toBe(false);
+
+    live.end();
+    late.end();
+    later.end();
+  });
+
   test('onCommand throw is contained as ok:false, never crashes the server', async () => {
     const server = new UiServer({ token: 't', contractVersion: '3.1.0' });
     servers.push(server);

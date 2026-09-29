@@ -343,16 +343,28 @@ describe('frame schemas', () => {
   test('hello frame validates; version mismatch is detectable', () => {
     const ok = HelloFrameSchema.safeParse({
       type: 'hello', contractVersion: '3.1.0', nodePid: 1234,
-      servePort: 4096, layaReady: true, seq: 0,
+      servePort: 4096, layaReady: true, seq: 0, uplinkPaused: false,
     });
     expect(ok.success).toBe(true);
     const bad = HelloFrameSchema.safeParse({
       type: 'hello', contractVersion: '9.9.9', nodePid: 1234,
-      servePort: 4096, layaReady: true, seq: 0,
+      servePort: 4096, layaReady: true, seq: 0, uplinkPaused: false,
     });
     // Schema accepts any semver-shaped string; the RENDERER refuses mismatch.
     expect(bad.success).toBe(true);
     expect((bad as { success: true; data: { contractVersion: string } }).data.contractVersion).not.toBe('3.1.0');
+    // M3 B.3: `uplinkPaused` is REQUIRED on the wire, unlike `persona`. A shell
+    // must be able to tell "the daemon checked and found no pause" from a daemon
+    // that never heard of the field — collapsing the two would let a pre-B.3
+    // daemon read as an authoritative all-clear. The shell's own type keeps it
+    // optional, so the old daemon still degrades safely on that side.
+    expect(
+      HelloFrameSchema.safeParse({
+        type: 'hello', contractVersion: '3.1.0', nodePid: 1234,
+        servePort: 4096, layaReady: true, seq: 0,
+      }).success,
+      'a hello without uplinkPaused is rejected, not defaulted',
+    ).toBe(false);
   });
 
   test('renderer commands are closed-vocabulary with ids', () => {

@@ -423,6 +423,23 @@ export const HelloFrameSchema = z.object({
    * whatever it already had.
    */
   persona: z.enum(['kareem', 'nour']).optional(),
+  /**
+   * M3 B.3: the daemon's authoritative backpressure state at connect time.
+   *
+   * Carried in `hello` rather than left to the `flow` frame alone, because
+   * `flow()` writes to live sockets only and is not retained for resume. A shell
+   * that connects after a pause — or after the release that would have undone
+   * it — never receives the frame, and a latched shell drops its uplink while
+   * the accumulator sits below the pause threshold forever. Both halves stall.
+   * Same reasoning as `persona`: the daemon is the single source, and a shell
+   * that arrives late must be told rather than left on a default.
+   *
+   * Required (not optional) on the wire, so a shell can distinguish "the daemon
+   * checked and found no pause" from a daemon that predates the field. The
+   * shell's own type keeps it optional, so an old daemon degrades to the
+   * pre-B.3 behaviour instead of to a false pause.
+   */
+  uplinkPaused: z.boolean(),
 });
 export type HelloFrame = z.infer<typeof HelloFrameSchema>;
 
@@ -649,3 +666,23 @@ export const ContextFrameSchema = z.object({
   messageCount: z.number().int().nonnegative(),
 });
 export type ContextFrame = z.infer<typeof ContextFrameSchema>;
+
+// --- Flow control (M3 B.3): backpressure watermarks. ADDITIVE, like every other
+// frame here: an older shell has no `flow` branch and ignores the type, and a
+// newer shell against an older daemon simply never receives one — which is
+// exactly the pre-B.3 behaviour, so the pair degrades to "no backpressure"
+// rather than to "no audio".
+//
+// It carries a `seq` and nothing else. Deliberately NOT a request/response: the
+// shell is not asked to confirm, cannot refuse, and has no way to satisfy the
+// daemon except by obeying. Anything richer (a credit count, an ack) would be a
+// protocol the two halves can disagree about, and the one property that matters
+// — does the accumulator still hold what it was holding — is already known on
+// both sides.
+export const FlowFrameSchema = z.object({
+  type: z.literal('flow'),
+  seq: z.number().int().nonnegative(),
+  state: z.enum(['pause', 'resume']),
+});
+export type FlowFrame = z.infer<typeof FlowFrameSchema>;
+export type FlowState = FlowFrame['state'];

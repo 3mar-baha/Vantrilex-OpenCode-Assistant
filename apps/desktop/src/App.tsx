@@ -282,6 +282,12 @@ export function App(): JSX.Element {
             const live = bridgeRef.current;
             if (live !== null) void live.sendCommand({ id: nextCmdId(), kind: 'stopSpeech' });
           }
+          // M3 B.3: `false` here means the daemon is applying backpressure and the
+          // frame was dropped on purpose — see `VoxauraBridge.sendPcm`. Do NOT
+          // "fix" that by stopping the capture: the user's speech is already
+          // gone from the wire, and silencing the microphone would also throw
+          // away the audio that arrives after the resume. The barge above is
+          // unaffected either way, because commands are never gated.
           bridgeRef.current?.sendPcm(bytes);
         },
         onError: (err) => setAnnounce(micFailureNotice(err)),

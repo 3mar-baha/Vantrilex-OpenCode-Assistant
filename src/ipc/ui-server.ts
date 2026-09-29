@@ -26,8 +26,11 @@ import {
   UI_WS_PATH,
   VoiceFrameSchema,
   ContextFrameSchema,
+  FlowFrameSchema,
   type AgentFrame,
   type ContextFrame,
+  type FlowFrame,
+  type FlowState,
   type HelloFrame,
   type InventoryFrame,
   type NoticeFrame,
@@ -131,6 +134,12 @@ export class UiServer {
   private resumeEvicted = 0;
   private lastInventory: InventoryFrame | null = null;
   private lastAgents: AgentFrame | null = null;
+  /**
+   * M3 B.3: the backpressure state a shell must adopt on connect, because the
+   * `flow` frame that would have told it is not retained. Authoritative, and
+   * echoed unconditionally in `hello`.
+   */
+  private uplinkPaused = false;
   private pingTimer: NodeJS.Timeout | null = null;
 
   constructor(options: UiServerOptions) {
@@ -246,7 +255,7 @@ export class UiServer {
   }
 
   /** Broadcast a notice/voice frame to every shell (additive UX signals). */
-  broadcastFrame(frame: NoticeFrame | VoiceFrame | ContextFrame): number {
+  broadcastFrame(frame: NoticeFrame | VoiceFrame | ContextFrame | FlowFrame): number {
     this.seq += 1;
     const wire = encodeTextFrame(JSON.stringify({ ...frame, seq: this.seq }));
     let sent = 0;
@@ -317,6 +326,27 @@ export class UiServer {
         messageCount,
       }),
     );
+  }
+
+  /**
+   * M3 B.3: announce a backpressure watermark transition to every shell.
+   *
+   * Shares the seq space with the other additive frames, so a shell that
+   * reconnects mid-pause resumes from a cursor that includes the pause and
+   * cannot be talked into believing the daemon said nothing.
+   *
+   * Fire-and-forget with no ack and no delivery guarantee, which is the correct
+   * shape here rather than a shortcut: the alternative failure of NOT sending
+   * is unbounded buffering, and a missed pause is recovered by the next
+   * transition. A pause that a shell never receives costs the buffer headroom
+   * (704 KiB above `PAUSE_BYTES`, see `ingest.ts`); a pause that is never
+   * released costs the session.
+   */
+  flow(state: FlowState): number {
+    // Tracked so the NEXT connect can be told, not just the sockets that happen
+    // to be attached when the edge fires. See the hello comment.
+    this.uplinkPaused = state === 'pause';
+    return this.broadcastFrame(FlowFrameSchema.parse({ type: 'flow', seq: 0, state }));
   }
 
   /**
@@ -466,6 +496,20 @@ export class UiServer {
       // L22: the daemon is the single source for persona, so a shell that
       // connects after a change must be told, not left on the default.
       ...(this.persona !== undefined ? { persona: this.persona } : {}),
+      // M3 B.3, same reasoning applied to a boolean the daemon owns.
+      //
+      // `flow()` writes to LIVE sockets only and is not retained for resume, so
+      // a `resume` raised while a shell was disconnected is simply lost — and
+      // the shell is dropping its uplink while waiting for exactly that frame.
+      // Its latch survives `socket.onclose` (that only clears the socket), and
+      // the backwards-`seq` branch below is NOT a substitute: for a same-daemon
+      // reconnect the daemon's seq only moves forward, so `hello.seq < lastSeq`
+      // is false and the latch would never be cleared. The accumulator that
+      // raised the pause is at zero bytes and can never cross PAUSE_BYTES again,
+      // so it will never send the resume either — permanent silence behind a
+      // green pill. Stated in hello on every connect, unconditionally, so the
+      // accumulator is authoritative and the renderer needs no heuristic.
+      uplinkPaused: this.uplinkPaused,
     });
     socket.write(encodeTextFrame(JSON.stringify(hello)));
 

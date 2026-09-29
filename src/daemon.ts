@@ -33,7 +33,7 @@ import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, keyAdvanced, withKey, type AcquiredKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
-import { isLoudWindow } from './voice/ingest.js';
+import { AudioIngest, isLoudWindow } from './voice/ingest.js';
 // NOT imported statically. `runtime/vad.js` pulls in `onnxruntime-node`, a
 // native module the sidecar does not bundle, so a static import made a missing
 // package a hard module-load failure: the daemon died with ERR_MODULE_NOT_FOUND
@@ -324,6 +324,18 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // arrive for a user who keeps their keys tidy. It is daemon-scoped state like
   // `speechGate`, so it lives beside it; the pipeline closes over the binding.
   const ttsCredit = new TtsCreditMonitor(options.ttsCreditNow ?? (() => Date.now()));
+
+  // M3 B.3 — the watermark the ingest accumulator reports, and a latch for it.
+  //
+  // Daemon scope beside `speechGate`/`ttsCredit` for the same reason: the state
+  // has to outlive `rebuildVoice`, because a pause belongs to the accumulator
+  // that raised it. A key save builds a brand-new ingest with an empty buffer,
+  // so the 'resume' edge can never arrive from the old one — a shell left
+  // discarding audio would keep discarding it for the rest of the session, and
+  // the user is holding the keys screen at that moment. `rebuildVoice` therefore
+  // releases the latch explicitly instead of relying on the new accumulator to
+  // discover a level it never had.
+  let uplinkPaused = false;
 
   // M2 Pattern 1 — the `spawn_thinking` split, daemon half.
   //
@@ -858,6 +870,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // in-flight tasks survive the save.
       coordinatorRef = coordinator;
       return new AudioPipeline({
+        // M3 B.3: the accumulator reports watermarks, the transport publishes
+        // them. The callback is transport-blind — `AudioIngest` neither imports
+        // the IPC layer nor knows a frame exists — so the seam is a plain
+        // function, and the accumulator is unit-testable with no socket.
+        ingest: new AudioIngest({
+          onWatermark: (state) => {
+            uplinkPaused = state === 'pause';
+            ui.flow(state);
+          },
+        }),
         speechGate: vadGate,
         transcribe: async (pcm) => {
           // D13: the phase moved to 'thinking' on EVERY incoming window, so the
@@ -1276,6 +1298,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     const outgoing = liveRing;
     liveRing = null;
     outgoing?.destroy();
+    // M3 B.3: the accumulator is about to be replaced by an empty one, so any
+    // pause it held can never be released by it. Say so explicitly, or the shell
+    // drops uplink audio until the next restart.
+    if (uplinkPaused) {
+      uplinkPaused = false;
+      ui.flow('resume');
+    }
     audio = buildVoicePipeline();
     if (audio === null) {
       ui.onAudio = null;

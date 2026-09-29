@@ -22,6 +22,14 @@ export interface HelloMsg {
    * the shell keeps whatever persona it already had.
    */
   readonly persona?: 'kareem' | 'nour';
+  /**
+   * M3 B.3: the daemon's authoritative backpressure state at connect time.
+   * Optional for the same reason as `persona` — a daemon that predates the
+   * field omits it, and the shell keeps the pre-B.3 behaviour (no pause) rather
+   * than inventing one. Present-or-absent, not defaulted to `false`, so an older
+   * daemon can never be mistaken for one that has checked and found no pause.
+   */
+  readonly uplinkPaused?: boolean;
 }
 
 export interface EventMsg {
@@ -67,6 +75,31 @@ function isContextMsg(m: ContextMsg): boolean {
     isInt(m.messageCount) &&
     (m.limit === null || (typeof m.limit === 'number' && m.limit > 0)) &&
     (m.percent === null || (typeof m.percent === 'number' && m.percent >= 0 && m.percent <= 100))
+  );
+}
+
+/**
+ * M3 B.3: backpressure watermark transition from the daemon's ingest buffer.
+ *
+ * The whole point of the frame is one instruction — stop putting audio on the
+ * wire — so it carries a `seq` and nothing else, exactly like the frames around
+ * it. A shell that predates it has no branch for `flow` and ignores the type,
+ * which degrades to the pre-B.3 behaviour (no backpressure) rather than to
+ * silence.
+ */
+export interface FlowMsg {
+  readonly type: 'flow';
+  readonly seq: number;
+  readonly state: 'pause' | 'resume';
+}
+
+/** Whole-shape guard: an unrecognised `state` must not be treated as a pause. */
+function isFlowMsg(m: FlowMsg): boolean {
+  return (
+    m.type === 'flow' &&
+    (m.state === 'pause' || m.state === 'resume') &&
+    Number.isInteger(m.seq) &&
+    m.seq >= 0
   );
 }
 
@@ -221,6 +254,12 @@ export interface BridgeOptions {
   /** Phase 4: context-window telemetry for the HUD gauge. */
   readonly onContext?: (ctx: ContextMsg) => void;
   /**
+   * M3 B.3: the daemon is asking the uplink to pause or resume. The bridge
+   * applies it to `sendPcm` itself — see the `uplinkPaused` comment for why the
+   * callback is notification, not control.
+   */
+  readonly onFlow?: (flow: FlowMsg) => void;
+  /**
    * Fired once when the bridge is torn down for good (component unmount).
    * Distinct from `onClose`, which fires on every socket drop and is followed
    * by a reconnect — releasing the AudioContext on that would cut off speech
@@ -259,6 +298,28 @@ export class VoxauraBridge {
   private attempt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSeq = -1;
+  /**
+   * M3 B.3 — backpressure latch, and the one piece of state here with a
+   * deadlock on both ends, so it is worth stating the two ways it can go wrong.
+   *
+   * Why a DROP and not `capture.stop()`: stopping the microphone takes the
+   * user's speech with it. The audio is gone — not deferred, not queued, gone —
+   * so a pause implemented that way destroys the utterance it was supposed to
+   * protect, and the resume has to re-acquire a device the browser may make the
+   * user grant again. Dropping the uplink instead costs a hole in one
+   * 5-second window while the daemon catches up. The capture graph is not
+   * touched, and nothing here can reach it: `capture.ts` has no reference to the
+   * bridge and this class holds no `AudioCapture`.
+   *
+   * Why it must be cleared on a daemon restart: a pause belongs to an
+   * accumulator, not to this shell. A restarted daemon holds an EMPTY buffer, so
+   * it will never cross `PAUSE_BYTES` again and will never send the 'resume' that
+   * a still-paused shell is waiting for. A shell that kept the latch across the
+   * restart would discard every frame for the rest of the session — which is why
+   * the backwards-`seq` hello branch resets it rather than only resetting the
+   * cursor.
+   */
+  private uplinkPaused = false;
   private readonly pending = new Map<string, { resolve: (o: CommandOutcome) => void; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(opts: BridgeOptions) {
@@ -335,10 +396,17 @@ export class VoxauraBridge {
   /**
    * Fire-and-forget PCM uplink (P4 voice capture). Binary frames bypass the
    * ack ledger by design — audio is loss-tolerant, commands are not.
+   *
+   * M3 B.3: while the daemon holds a backpressure pause this drops the chunk and
+   * reports false, which is the same answer the caller already handles for a
+   * dead socket. It is deliberately the ONLY thing a pause does — commands,
+   * acks, the speech downlink and the pause frame itself are untouched, because
+   * a stalled audio buffer must never become a stalled control plane.
    */
   sendPcm(bytes: Uint8Array): boolean {
     const socket = this.socket;
     if (socket === null) return false;
+    if (this.uplinkPaused) return false;
     try {
       socket.sendBinary(bytes);
       return true;
@@ -410,6 +478,20 @@ export class VoxauraBridge {
       } else if (typeof hello.seq === 'number' && hello.seq >= 0) {
         this.lastSeq = Math.max(this.lastSeq, hello.seq);
       }
+      // M3 B.3: adopt the daemon's backpressure state on EVERY connect, not only
+      // in the backwards-seq branch above. `flow()` is not retained for resume,
+      // so a pause or resume raised while this shell was away never arrives as a
+      // frame — the latch would survive, and since the shell drops its uplink
+      // while latched, the two halves deadlock: the accumulator is at zero bytes
+      // and will never cross PAUSE_BYTES, and the shell is not sending. The
+      // backwards-seq branch was the wrong tool for it, incidentally — for a
+      // same-daemon reconnect the daemon's seq only moves forward, so that branch
+      // is not even taken.
+      //
+      // The field is echoed unconditionally by the daemon, so this is an
+      // authoritative resync rather than a heuristic. An older daemon omits it,
+      // which is the pre-B.3 behaviour: no backpressure, and no false pause.
+      if (typeof hello.uplinkPaused === 'boolean') this.uplinkPaused = hello.uplinkPaused;
       if (!isWellFormedHello(hello)) {
         this.refused = true;
         this.opts.onRefusal?.({ expected: this.opts.contractVersion, got: 'malformed-hello' });
@@ -474,6 +556,24 @@ export class VoxauraBridge {
       const seq = (msg as { seq?: unknown })['seq'];
       if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq;
       this.opts.onContext?.(ctx);
+      return;
+    }
+    if (msg['type'] === 'flow') {
+      // M3 B.3: the cursor moves exactly the way it does for `context` — the
+      // frame shares the daemon's seq space, so it must be counted or a
+      // reconnect resumes from a cursor the daemon has already moved past.
+      // Validated whole-shape, like every other frame: an unknown `state` is
+      // dropped rather than coerced, because guessing 'pause' would stop the
+      // uplink on the strength of a malformed frame.
+      const flow = msg as unknown as FlowMsg;
+      if (!isFlowMsg(flow)) {
+        this.opts.onErrorFrame?.('malformed flow frame');
+        return;
+      }
+      const seq = (msg as { seq?: unknown })['seq'];
+      if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq;
+      this.uplinkPaused = flow.state === 'pause';
+      this.opts.onFlow?.(flow);
       return;
     }
     if (msg['type'] === 'notice') {
