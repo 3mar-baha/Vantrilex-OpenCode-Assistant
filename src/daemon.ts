@@ -76,12 +76,24 @@ export interface DaemonOptions {
    * differs per persona instead of trusting the source.
    */
   readonly narratorChat?: NarratorChat;
+  /**
+   * Clock seam for the TTS credit monitor. The monitor's whole job is measuring
+   * how long voice has been broken, so a test has to control time; every other
+   * network client here is injected and this is the equivalent seam for the one
+   * piece of time-dependent state the daemon owns.
+   */
+  readonly ttsCreditNow?: () => number;
 }
 
 export interface DaemonHandle {
   readonly ipcPort: number;
   readonly servePort: number;
   readonly token: string;
+  /**
+   * The live TTS credit monitor — a VIEW of the daemon-scoped binding, not a
+   * snapshot, so it reports the same object the rebuilt pipeline closes over.
+   */
+  readonly ttsCredit: TtsCreditMonitor;
   /** Publish a session snapshot to every connected shell. */
   publishSessions(): Promise<number>;
   /** The persona the daemon currently speaks with (real server-side state). */
@@ -293,6 +305,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // Barge-in generation gate: trips on `abort` so stale reply sentences never
   // synthesize or broadcast afterwards. Plain state — safe before key setup.
   const speechGate = new SpeechGate();
+  // Credit state for the top-up banner: ONE monitor per daemon, consulted on
+  // every TTS fault. It owns the first-fault clock, so repeated faults (and
+  // repeated key saves) must not reset the operator's sense of how long voice
+  // has been down.
+  //
+  // It used to be constructed inside `buildVoicePipeline`, which `rebuildVoice`
+  // re-runs on every saveApiKeys — so each key save silently restarted the
+  // 7-day overdue escalation and the "a week without voice" banner could never
+  // arrive for a user who keeps their keys tidy. It is daemon-scoped state like
+  // `speechGate`, so it lives beside it; the pipeline closes over the binding.
+  const ttsCredit = new TtsCreditMonitor(options.ttsCreditNow ?? (() => Date.now()));
 
   // Phase 5 — ZERO CANNED REPLIES.
   //
@@ -549,10 +572,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     try {
       const ring = Keyring.load(vault);
       const fish = new FishHttpTransport(ring);
-  // Credit state for the top-up banner. One monitor per daemon, consulted on
-  // every TTS fault; it owns the first-fault clock so repeated faults do not
-  // reset the operator's sense of how long voice has been down.
-  const ttsCredit = new TtsCreditMonitor();
         const chat: ChatFn = async (model, system, user, options) => {
           return withKey(ring, 'openrouter', (key) =>
             openRouterChat(keyMaterial(key), model, system, user, fetch, {
@@ -906,6 +925,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     ipcPort: boundPort,
     servePort: options.servePort,
     token: options.ipcToken,
+    get ttsCredit() {
+      return ttsCredit;
+    },
     publishSessions,
     activePersona: () => activePersona,
     stop: async () => {

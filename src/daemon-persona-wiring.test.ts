@@ -59,3 +59,24 @@ describe('daemon threads the active persona into the narrator', () => {
     for (const s of seen) expect(s).toContain(NARRATOR_SYSTEM.replace('{max}', '20'));
   });
 });
+
+describe('A5: the TTS credit clock is daemon state, not pipeline state', () => {
+  // The same reasoning as the file above, applied to the credit monitor: the
+  // behavioural test in daemon.test.ts observes the monitor the HANDLE exposes,
+  // so a second monitor shadowing it inside `buildVoicePipeline` would leave
+  // that test green while the pipeline records its faults into an object the
+  // shell never reads. Structure is the only thing that can see it.
+  test('the daemon constructs exactly one TtsCreditMonitor, and not in the rebuildable pipeline', () => {
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    expect(src.match(/new TtsCreditMonitor\(/g) ?? []).toHaveLength(1);
+    const body = src.slice(src.indexOf('const buildVoicePipeline'), src.indexOf('const rebuildVoice'));
+    expect(body.length, 'the slice must be a real region, not an empty one').toBeGreaterThan(0);
+    expect(body, 'a monitor built here is rebuilt on every key save').not.toMatch(/new TtsCreditMonitor/);
+  });
+
+  test('the clock seam the behavioural test drives is declared and consumed', () => {
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    expect(src).toMatch(/readonly ttsCreditNow\?:\s*\(\)\s*=>\s*number/);
+    expect(src).toMatch(/new TtsCreditMonitor\(options\.ttsCreditNow \?\? \(\(\) => Date\.now\(\)\)\)/);
+  });
+});
