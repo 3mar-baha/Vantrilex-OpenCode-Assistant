@@ -1250,6 +1250,27 @@ fn resolve_vault_dir(entry: Option<&Path>) -> PathBuf {
             }
         }
     }
+    // A security audit found the credential set split: `ipc.token`, `serve.pass`,
+    // `owner.key` and `daemon.owner` all get the owner-only protected DACL, and
+    // this file - which holds the encrypted provider keys - did not. It is
+    // created by `fs::copy` and by `Keyring.save` in `vault.ts`, both of which
+    // rely on a Unix `0600` mode that Windows does not translate into an ACL, so
+    // the protection was inherited from the profile rather than designed. The
+    // vault's own key material is the thing most worth protecting, and the
+    // inconsistency was the defect: the rigour existed, it just was not applied
+    // here.
+    //
+    // Applied unconditionally, not only on the seed path, because a vault
+    // created by an older install is exactly the case that needs it. `log_line`
+    // rather than `?` because failing to lock down a file is not a reason to
+    // refuse to launch: the keys are already encrypted, the exposure window is
+    // the inherited ACE, and bricking the app would be the worse outcome. It is
+    // logged loudly because it must not be invisible.
+    if keyring.exists() {
+        if let Err(e) = restrict_to_owner(&keyring) {
+            log_line(&format!("WARN keyring.dat ACL not restricted: {}", e));
+        }
+    }
     // The resolved vault is the one path a voice-dead install cannot be
     // diagnosed without. `Keyring.load` throws on an empty or partially
     // undecryptable vault, `rebuildVoice` turns that into a KEYS_MISSING
@@ -2570,6 +2591,58 @@ mod s2_secret_tests {
                 N * 64
             );
         }
+    }
+
+    /// The vault must get the same owner-only protected DACL as every other
+    /// credential. A security audit found the split: `ipc.token`, `serve.pass`,
+    /// `owner.key` and `daemon.owner` were all restricted, and `keyring.dat` —
+    /// which holds the encrypted provider keys — was not, because it is created
+    /// by `fs::copy` and by `Keyring.save`, and both rely on a Unix `0600` mode
+    /// that Windows does not translate into an ACL.
+    ///
+    /// This is a source-shape assertion, and honestly labelled as one: it cannot
+    /// prove the DACL is applied at runtime, only that the call site exists and is
+    /// inside the vault-resolution path. A behavioural version would need a real
+    /// installed vault, which is what `release:verify` covers. What this does
+    /// catch is the specific regression - someone removing the call while the
+    /// rest of the credential set stays locked down, which is exactly the state
+    /// the audit found and which reads as correct because the neighbours are fine.
+    #[test]
+    fn the_vault_gets_the_same_protected_dacl_as_every_other_credential() {
+        let body = include_str!("main.rs");
+        // Take the FIRST occurrence, which is the definition. `resolve_vault_dir`
+        // appears 7 times in this file (definition, call site, and the existing
+        // `every_vault_resolution_branch_is_logged` assertion), so an
+        // `index()`-based slice that picked the wrong one tested the wrong text.
+        //
+        // Two earlier versions of this assertion failed for reasons that had
+        // nothing to do with the property under test: the first looked for a
+        // function name that does not exist, and the second sliced from the
+        // definition and then stopped at the next `\nfn `, which lands on a
+        // nested helper. Both reported "the guard is missing" while the guard was
+        // present — the same shape as the doc anchors in AGENTS.md that pointed at
+        // a comment while the gate stayed green.
+        let vault_fn = body
+            .split("fn resolve_vault_dir")
+            .nth(1)
+            .expect("resolve_vault_dir definition exists")
+            .split("\nfn ")
+            .next()
+            .expect("slice is non-empty");
+        assert!(
+            vault_fn.contains("restrict_to_owner(&keyring)"),
+            "keyring.dat must be given the owner-only protected DACL, not left on the \
+             profile's inherited ACL. If this is intentionally removed, delete the claim \
+             in AGENTS.md about the vault being protected rather than leaving the \
+             document lying."
+        );
+        // And the lockdown must not be conflated with the Unix mode that Windows
+        // ignores: `fs::set_permissions` is a silent no-op for ACLs there.
+        assert!(
+            !vault_fn.contains("set_permissions"),
+            "do not reintroduce fs::set_permissions as the vault's protection; it is a \
+             silent no-op on Windows (SetFileAttributes, READONLY only)."
+        );
     }
 
     /// The write path must produce a file, and must be a real file with content.

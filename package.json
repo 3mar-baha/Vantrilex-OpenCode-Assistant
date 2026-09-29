@@ -29,7 +29,8 @@
     "dev": "npm --prefix apps/desktop run dev",
     "dev:web": "npm --prefix apps/desktop run dev:web",
     "doctor": "node dist/cli.js doctor",
-    "test:e2e": "npm --prefix apps/desktop run test:e2e"
+    "test:e2e": "npm --prefix apps/desktop run test:e2e",
+    "docs:verify:self-test": "node scripts/docs-verify.mjs --self-test"
   },
   "dependencies": {
     "groq-sdk": "^0.9.0",

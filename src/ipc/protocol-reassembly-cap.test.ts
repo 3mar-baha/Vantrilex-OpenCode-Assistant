@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { FrameReassembler, MAX_MESSAGE_BYTES, Opcode, WsProtocolError } from './protocol.js';
 
 // SECURITY FIX — unbounded fragmented-message reassembly.
@@ -81,13 +82,23 @@ describe('FrameReassembler bounds the ASSEMBLED message, not just each frame', (
   test('the cap is per message, so two separate messages may each use it', () => {
     // A cumulative cap that also counted across messages would reject a client
     // sending a long sequence of full-size frames, which is legitimate.
-    const part = new Uint8Array(1000);
+    // Sized so that SEVERAL messages are needed to reach the cap on their own:
+    // 5 x 200,000 = 1,000,000 is close to but under MAX_MESSAGE_BYTES, so if the
+    // total leaked across messages the next message would trip it.
+    //
+    // The first version sent 5 x 2,000 bytes against a 1,048,576 cap, which is
+    // three orders of magnitude too small to ever reach the limit - it passed
+    // against the pre-fix code, against the reset-removed code, and against the
+    // current code, so it could not detect the property in its own name. A test
+    // that passes in every world is not a test.
+    const part = new Uint8Array(200_000);
     const r = new FrameReassembler();
-    for (let i = 0; i < 5; i += 1) {
+    const rounds = Math.ceil(MAX_MESSAGE_BYTES / part.byteLength);
+    for (let i = 0; i < rounds; i += 1) {
       r.push(frame(Opcode.Text, part, false));
       const out = r.push(frame(Opcode.Continuation, new Uint8Array(part), true));
-      expect(out).toHaveLength(1);
-      expect(out[0]!.payload.byteLength).toBe(2000);
+      expect(out, `message ${i + 1} was rejected`).toHaveLength(1);
+      expect(out[0]!.payload.byteLength).toBe(2 * part.byteLength);
     }
   });
 
@@ -109,6 +120,37 @@ describe('FrameReassembler bounds the ASSEMBLED message, not just each frame', (
     }
   });
 
+  test('an abandoned fragment does not charge the NEXT message', () => {
+    // Found by a code review: starting a new data frame while a fragment is in
+    // flight left the orphan's bytes counted against the running total, so a
+    // subsequent LEGAL fragmented message was rejected for a total the client
+    // never sent in one message. The cumulative cap turned a pre-existing
+    // misbehaviour into a false rejection.
+    //
+    // Repro: orphan a partial Text(fin=false), abandon it, then send a message
+    // that fits the cap on its own. It must complete.
+    const r = new FrameReassembler();
+    r.push(frame(Opcode.Text, new Uint8Array(600_000), false)); // never finished
+    // A new data frame abandons it.
+    r.push(frame(Opcode.Text, new Uint8Array(1000), false));
+    const out = r.push(frame(Opcode.Continuation, new Uint8Array(1000), true));
+    expect(out, 'the message after an abandoned fragment was rejected').toHaveLength(1);
+    expect(out[0]!.payload.byteLength).toBe(2000);
+  });
+
+  test('a full-size fragmented message is still accepted after an orphan', () => {
+    // The case the review reported as a concrete false rejection: 716,800 bytes
+    // orphaned, then a 1,024,000-byte fragmented message against a 1,048,576 cap.
+    // Before the discard this was rejected; it must not be.
+    const r = new FrameReassembler();
+    r.push(frame(Opcode.Text, new Uint8Array(716_800), false));
+    r.push(frame(Opcode.Text, new Uint8Array(1000), false)); // abandons the 716,800
+    const big = new Uint8Array(1_024_000 - 1000);
+    r.push(frame(Opcode.Text, big, false));
+    const out = r.push(frame(Opcode.Continuation, new Uint8Array(1000), true));
+    expect(out, 'a legal full-size message was rejected by a leaked total').toHaveLength(1);
+  });
+
   test('a single oversized frame is still rejected by the per-frame guard', () => {
     // The cumulative check is additive, not a replacement: the existing
     // per-frame limit must keep working on its own.
@@ -120,8 +162,17 @@ describe('FrameReassembler bounds the ASSEMBLED message, not just each frame', (
 
   test('the assembler no longer claims a property it does not have', () => {
     // Documentation that asserts a safety property the code does not implement is
-    // the defect class, not the comment. If someone restores the old wording
-    // without the guard, this fails.
-    expect(String(FrameReassembler)).toBeTruthy();
+    // the defect class, not the comment.
+    //
+    // The first version of this test asserted `String(FrameReassembler)` is
+    // truthy, which is true for ANY class and passed with the original
+    // "no unbounded buffering" comment restored. A code review found it and
+    // called it provably vacuous, which it was. This asserts the claim is gone.
+    const src = readFileSync('src/ipc/protocol.ts', 'utf8');
+    expect(src).not.toMatch(/no unbounded buffering/);
+    // And the replacement comment must not make a NEW unchecked claim either.
+    // "fail-closed, no unbounded buffering" was false; the guarded version says
+    // the cap is checked before storing, which IS enforced by accountFor.
+    expect(src).toMatch(/accountFor/);
   });
 });

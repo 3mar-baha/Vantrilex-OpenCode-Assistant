@@ -83,7 +83,7 @@ const neither = prod.filter((f) => !prodReachable.has(f) && !testReachable.has(f
 const pct = ((prod.length - blind.length) / prod.length) * 100;
 
 console.log(`test-blindspots — ${tests.length} test files, ${prod.length} production modules\n`);
-console.log(`  ships and is reached by >=1 test : ${prod.length - blind.length}`);
+console.log(`  production modules tested         : ${prod.length - blind.length} of ${prod.length}`);
 console.log(`  SHIPS but NO test reaches it    : ${blind.length}`);
 console.log(`  module-level reachability       : ${pct.toFixed(1)}%`);
 console.log(`  (not line coverage. It cannot be: no coverage provider is installed.)`);

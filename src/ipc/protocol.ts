@@ -271,6 +271,13 @@ export class FrameReassembler {
     }
   }
 
+  /** Drop an in-flight fragment. Counters MUST go with it. */
+  private discardPending(): void {
+    this.pendingOpcode = null;
+    this.pendingParts.length = 0;
+    this.pendingBytes = 0;
+  }
+
   push(chunk: Uint8Array): WsFrame[] {
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
     const frames: WsFrame[] = [];
@@ -305,17 +312,27 @@ export class FrameReassembler {
         this.pendingParts.push(payload);
         if (header.fin) {
           frames.push({ fin: true, opcode: this.pendingOpcode, payload: Buffer.concat(this.pendingParts) });
-          this.pendingOpcode = null;
-          this.pendingParts.length = 0;
-          this.pendingBytes = 0;
+          this.discardPending();
         }
         continue;
       }
       if (header.opcode === Opcode.Text || header.opcode === Opcode.Binary) {
+        // A new data frame while a fragment is in flight discards the fragment.
+        //
+        // Without this, an abandoned fragment leaves its bytes charged against
+        // the running total forever, so the NEXT legal fragmented message can be
+        // rejected for a total the client never sent in one message. A code review
+        // found that the cumulative cap turned an orphaned fragment into a false
+        // rejection - a defect the pre-fix code did not have, since it ignored the
+        // total entirely and emitted a wrong-opcode frame instead.
+        //
+        // Discarding is the RFC-compatible reading: a fragmented message is
+        // aborted by starting another one. Charging nothing and keeping nothing
+        // is also fail-closed, because the connection stays protocol-consistent.
+        this.discardPending();
         if (!header.fin) {
           this.pendingOpcode = header.opcode;
-          this.accountFor(payload.byteLength);
-          this.pendingParts.push(payload);
+                    this.pendingParts.push(payload);
           continue;
         }
         frames.push({ fin: true, opcode: header.opcode, payload });

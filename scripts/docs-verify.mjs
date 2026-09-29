@@ -21,6 +21,15 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve, dirname } from 'node:path';
+// An override root lets a test drive this script against a COPY of AGENTS.md
+// without touching the real one. Behavioural guards need that; asserting on
+// this file's source instead only proves the source contains the text.
+// DOCS_VERIFY_ROOT overrides only where AGENTS.md is READ FROM, so a test can
+// drive the script against a copy of the document without copying the whole tree.
+// Everything else - the source, the tests, package.json - is read from the real
+// repository, because copying 58 modules and running vitest per assertion would
+// make the guard slower than the thing it guards.
+const DOC_ROOT = process.env.DOCS_VERIFY_ROOT ?? process.cwd();
 const ROOT = process.cwd();
 const results = [];
 const add = (name, documented, derived, status) => results.push({ name, documented, derived, status });
@@ -256,6 +265,23 @@ function knowledgeImportFacts() {
  * whitespace, a bare brace or a comment. Blank and brace-only lines are what
  * both stale anchors turned out to be.
  */
+/**
+ * Classifiers for "this cited line is not code".
+ *
+ * Built with RegExp constructors because the three comment shapes are `//`,
+ * `/*` and `*` - each a metacharacter in a literal, and hand-escaped versions of
+ * exactly these three have been produced wrong twice while editing this file.
+ *
+ * `/^[/*]+$/` alone is NOT sufficient: it matches only a line that is nothing
+ * but slashes and stars, so the `// ...` line this check was written for, and a
+ * JSDoc continuation like `* @param x`, both read as valid code. A code review
+ * caught that by running the check rather than reading it.
+ */
+const bareDelimiterRe = new RegExp('^[[\\](){}();,]+$');
+const lineCommentRe = new RegExp('^' + '//');
+const blockCommentRe = new RegExp('^' + '/\\*');
+const jsdocRe = new RegExp('^\\*');
+
 function citedAnchors() {
   // AGENTS.md writes the line reference INSIDE the backticks — `daemon.ts:790` —
   // not as `daemon.ts`:790. Both spellings appear across the file's history, so
@@ -268,43 +294,70 @@ function citedAnchors() {
   // which is a false FAIL that trains a reader to ignore the check.
   const index = new Map();
   const indexRoots = [join(ROOT, 'src'), join(ROOT, 'apps/desktop/src')];
+  // A bare basename is AMBIGUOUS in this tree, and silently picking the first
+  // match is how the check passes on the wrong file. A code review caught it:
+  // `vault.ts` resolved to `src/memory/vault.ts` (the Obsidian note scaffolder)
+  // rather than `src/voice/vault.ts` (the keyring), so a citation about
+  // `machine.key` was being validated against an unrelated line 29 and reported
+  // green. There are four colliding basenames here — `index.ts` x7, `vault.ts`
+  // x2, `types.ts` x2, `vad.ts` x2.
+  //
+  // So an ambiguous citation is reported as AMBIGUOUS, which fails, instead of
+  // being resolved by a coin flip. A citation that cannot be checked is not a
+  // passing check.
   const collect = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
       if (e.isDirectory()) collect(p);
       else if (/\.(ts|tsx)$/.test(p) && !p.endsWith('.test.ts')) {
-        if (!index.has(e.name)) index.set(e.name, p);
+        const seen = index.get(e.name);
+        if (seen === undefined) index.set(e.name, [p]);
+        else seen.push(p);
       }
     }
   };
   for (const r of indexRoots) if (existsSync(r)) collect(r);
   const out = [];
-  for (const m of agents.matchAll(re)) {
+  const doc = typeof globalThis.__agentsOverride === 'string' ? globalThis.__agentsOverride : agents;
+  for (const m of doc.matchAll(re)) {
     const name = m[1];
     const line = Number(m[2]);
-    const hit = index.get(name);
-    if (!hit) {
+    const hits = index.get(name);
+    if (hits === undefined) {
       out.push({ name, line, ok: false, why: 'file not found in src/ or apps/desktop/src/' });
       continue;
     }
-    const all = readFileSync(hit, 'utf8').split('\n');
-    if (line < 1 || line > all.length) {
-      out.push({ name, line, ok: false, why: `file has ${all.length} lines` });
+    if (hits.length > 1) {
+      const rel = (p) => p.replace(ROOT, '').replace(/\\/g, '/');
+      out.push({
+        name,
+        line,
+        ok: false,
+        why: `ambiguous basename — ${hits.length} files share it: ${hits.map(rel).join(', ')}`,
+      });
       continue;
     }
-    // The content check. A pointer that drifted onto whitespace, a lone
-    // delimiter or a bare closing brace is not pointing at code.
-    // The bracket is escaped only where the class needs it; oxlint's
-    // no-useless-escape rule rejects a redundant `\[` inside a class.
+    const hit = hits[0];
+    const all = readFileSync(hit, 'utf8').split('\n');
+    if (line < 1 || line > all.length) {
+      out.push({ name, line, ok: false, why: `${hit.replace(ROOT, '').replace(/\\/g, '/')} has ${all.length} lines` });
+      continue;
+    }
+    // The content check. A pointer that drifted onto whitespace, a bare
+    // delimiter, a comment or a JSDoc continuation is not pointing at code.
     const lineText = (all[line - 1] ?? '').trim();
     const degenerate =
-      lineText === '' || /^[[\]{}();,]+$/.test(lineText) || /^[/*]+$/.test(lineText);
+      lineText === '' ||
+      bareDelimiterRe.test(lineText) ||
+      lineCommentRe.test(lineText) ||
+      blockCommentRe.test(lineText) ||
+      jsdocRe.test(lineText);
     if (degenerate) {
       out.push({
         name,
         line,
         ok: false,
-        why: degenerateBlank(lineText) ? 'line is blank' : 'line is a bare delimiter, not code',
+        why: describeNonCode(lineText),
       });
       continue;
     }
@@ -313,17 +366,45 @@ function citedAnchors() {
   return out;
 }
 
-function degenerateBlank(t) {
-  return t === '';
+/** Name why a cited line is not code, so the failure is actionable. */
+function describeNonCode(t) {
+  if (t === '') return 'line is blank';
+  if (lineCommentRe.test(t)) return 'line is a line comment';
+  if (blockCommentRe.test(t)) return 'line opens a block comment';
+  if (jsdocRe.test(t)) return 'line is a JSDoc continuation';
+  if (bareDelimiterRe.test(t)) return 'line is a bare delimiter';
+  return 'line is not code';
 }
 
 // ── derivation ───────────────────────────────────────────────────────────────
 
 // The anchor scan needs the doc text, and `citedAnchors` closes over `agents`,
 // so AGENTS.md is read before any derivation runs. Everything below only reads.
+// ── self-test: run the behavioural guard on citedAnchors
+//
+// Not in the vitest suite on purpose: a test that shells out here would spawn
+// the whole suite twice. This is the only guard that proves the anchor checker
+// WORKS rather than that its source contains certain words.
+if (process.argv.includes('--self-test')) {
+  const { selfTestCitedAnchors } = await import('./docs-verify-self-test.mjs');
+  const res = selfTestCitedAnchors(ROOT, citedAnchors);
+  let bad = 0;
+  for (const [name, ok] of res) {
+    console.log('  ' + (ok ? 'PASS' : 'FAIL') + '  ' + name);
+    if (!ok) bad += 1;
+  }
+  console.log('');
+  console.log(bad === 0
+    ? 'self-test passed - ' + res.length + ' behavioural check(s).'
+    : 'self-test FAILED - ' + bad + ' of ' + res.length + '.');
+  process.exit(bad === 0 ? 0 : 1);
+}
+
 console.log('docs:verify — deriving truth from the tree…\n');
 
-const agents = existsSync(join(ROOT, 'AGENTS.md')) ? read('AGENTS.md') : '';
+const agents = existsSync(join(DOC_ROOT, 'AGENTS.md'))
+  ? readFileSync(join(DOC_ROOT, 'AGENTS.md'), 'utf8')
+  : '';
 const pkg = JSON.parse(read('package.json'));
 
 // 1. Root vitest
@@ -484,18 +565,35 @@ for (const [label, re, der] of [
 //     explicit rather than to adjust a number until it matches.
 const tr = testReachability();
 for (const [label, re, der] of [
-  ['test-reachable modules', /\*\*(\d+) of \d+\*\* shipping modules/, tr.total - tr.blind],
+  ['test-reachable modules', /\*\*(\d+) of (\d+)\*\* (?:production|shipping) modules/, tr.total - tr.blind],
   // The sentence is "The 3 modules no test reaches are `cli.ts` (247 lines)...".
   // An earlier pattern spanned sentences with `[^.]*?` and matched nothing,
   // reporting UNVERIFIED for a figure the document states plainly — the same
   // looks-covered-but-extracts-nothing failure as the earcon regex, and the
   // reason UNVERIFIED is fatal caught it instead of letting it slide.
-  ['test-blind modules', /The (\d+) modules no test reaches are/, tr.blind],
+  //
+  // Both patterns here are deliberately loose about the words AROUND the number
+  // and strict about the number itself. A code review found that tightening them
+  // to match the current phrasing exactly caused a false FAIL the moment the
+  // surrounding sentence was legitimately reworded — which trains a reader to
+  // `git checkout AGENTS.md` instead of editing it. The figure is the claim; the
+  // prose around it is not.
+  ['test-blind modules', /(\d+) modules no test reaches/, tr.blind],
 ]) {
-  const doc = (agents.match(re) ?? [])[1];
+  const m = agents.match(re);
+  const doc = m?.[1];
   if (doc == null) unverified(label, 'not stated', String(der));
   else if (Number(doc) === der) pass(label, doc, String(der));
   else fail(label, doc, String(der));
+  // The denominator is checked too, where the claim states one. It moves
+  // whenever a module is added, and it is the number the match used to capture
+  // and silently drop: swapping 58 for 999, 1 and 0 each passed the check.
+  const denom = m?.[2];
+  if (denom !== undefined && label === 'test-reachable modules') {
+    const derTotal = tr.total;
+    if (Number(denom) === derTotal) pass('test total modules', denom, String(derTotal));
+    else fail('test total modules', denom, String(derTotal));
+  }
 }
 
 // 13. Every `file.ts:NNN` anchor AGENTS.md cites must still resolve to a line
