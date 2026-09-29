@@ -30,7 +30,7 @@
 // that failed is named. UNVERIFIED stages are reported as such, never as pass.
 
 import { existsSync, readFileSync, readdirSync, statSync, rmSync } from 'node:fs';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const ROOT = process.cwd();
@@ -68,14 +68,24 @@ function runMsvc(inner) {
 }
 
 function portsBound() {
-  const out = execFileSync('powershell.exe', [
+  // MUST tolerate a non-zero exit. `Get-NetTCPConnection` returns exit 1 when
+  // nothing matches, which is the NORMAL state on the first poll of the boot
+  // loop — the app has not bound a port yet. Using execFileSync here threw on
+  // exactly that first poll and crashed the harness mid-boot, which is how the
+  // previous run died at stage 5 with a working app underneath it.
+  const r = spawnSync('powershell.exe', [
     '-NoProfile', '-Command',
     'Get-NetTCPConnection -State Listen -LocalPort 4096,4097 -EA SilentlyContinue ' +
     '| Select-Object LocalPort,LocalAddress | ConvertTo-Json -Compress',
-  ], { encoding: 'utf8' }).trim();
-  if (!out) return [];
-  const parsed = JSON.parse(out);
-  return Array.isArray(parsed) ? parsed : [parsed];
+  ], { encoding: 'utf8' });
+  const out = (r.stdout ?? '').trim();
+  if (r.status !== 0 || out === '' || out === 'null') return [];
+  try {
+    const parsed = JSON.parse(out);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    return [];
+  }
 }
 
 function logSize(name) {
@@ -126,6 +136,8 @@ if (STAGES.indexOf('preflight') <= limit) {
 
 if (STAGES.indexOf('build') <= limit) {
   head('3/7 build — tsc, sidecar, NSIS');
+  // Stamped BEFORE the build: everything verified afterwards must be newer.
+  const buildStartedAt = Date.now();
   const b = runMsvc('npm run build');
   if (b.status !== 0) { console.error('  FAILED: npm run build'); process.stderr.write(b.out.slice(-1500)); process.exit(1); }
   say('root tsc build ok');
@@ -139,21 +151,43 @@ if (STAGES.indexOf('build') <= limit) {
     console.error('  Looked in: C:\\Program Files (x86)\\NSIS, C:\\Program Files\\NSIS');
     process.exit(1);
   }
-  const t = runMsvc('npm run build:tauri');
-  if (t.status !== 0) { console.error('  FAILED: build:tauri'); process.stderr.write(t.out.slice(-2500)); process.exit(1); }
+  // `build:tauri` lives in apps/desktop/package.json, NOT the root manifest.
+  // Running it from root fails with "Missing script" — which is exactly what
+  // happened on the first execution of this harness.
+  const t = runMsvc('npm run build:tauri --prefix apps/desktop');
+  if (t.status !== 0) { console.error('  FAILED: build:tauri (apps/desktop)'); process.stderr.write(t.out.slice(-2500)); process.exit(1); }
 
   const nsisDir = join(ROOT, 'apps/desktop/src-tauri/target/release/bundle/nsis');
   const exes = existsSync(nsisDir) ? readdirSync(nsisDir).filter((f) => f.endsWith('_x64-setup.exe')) : [];
   if (exes.length === 0) { console.error('  FAILED: no *_x64-setup.exe produced'); process.exit(1); }
-  exes.sort();
-  installerPath = join(nsisDir, exes[exes.length - 1]);
   const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
-  if (!installerPath.includes(version)) {
-    console.error(`  FAILED: newest installer is ${exes[exes.length - 1]} but package.json is ${version}.`);
-    console.error('  The version bump and the build disagree — a release would ship the wrong binary.');
+
+  // STALE-ARTEFACT GUARD. The bundle directory keeps one installer per release,
+  // so a previous run's binary for the SAME version is sitting right there.
+  // Selecting by name alone would install that one and report success — proving
+  // yesterday's code and calling it today's. This is the v0.6.0 failure wearing a
+  // different hat: a green check on an artefact nobody built from the tree under
+  // test. Only an installer newer than buildStartedAt may be installed.
+  const fresh = exes
+    .map((f) => join(nsisDir, f))
+    .filter((f) => f.includes(version))
+    .filter((f) => statSync(f).mtimeMs > buildStartedAt)
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+
+  if (fresh.length === 0) {
+    console.error(`  FAILED: no installer for ${version} was produced by THIS build.`);
+    const stale = exes.filter((f) => f.includes(version));
+    if (stale.length) {
+      console.error('  A stale artefact is present and was deliberately NOT used:');
+      for (const s of stale) {
+        console.error(`    ${s}  built ${new Date(statSync(join(nsisDir, s)).mtimeMs).toISOString()}`);
+      }
+      console.error('  Delete the bundle directory and re-run, or the boot check below is meaningless.');
+    }
     process.exit(1);
   }
-  say(`built ${exes[exes.length - 1]} (${(statSync(installerPath).size / 1048576).toFixed(1)} MB)`);
+  installerPath = fresh[0];
+  say(`built ${installerPath.split(/[\\/]/).pop()} (${(statSync(installerPath).size / 1048576).toFixed(1)} MB, produced by this run)`);
 }
 
 if (STAGES.indexOf('install') <= limit) {
