@@ -42,6 +42,19 @@ import { encodeAudioChunk, splitAudio } from './audio.js';
 // Voxaura UI bridge — ADR-010. Zero-dependency RFC 6455 server on
 // 127.0.0.1:4097. Fail-closed: no token → the server refuses to start;
 // wrong/missing bearer → 401, never upgraded. The daemon owns `seq`.
+
+/**
+ * M3 B.2b: byte budget for the retained Last-Seq resume window. Paired with
+ * `RESUME_BUFFER_CAP`, which bounds frames and this bounds bytes — see
+ * `retainForResume` for why the second bound is prophylactic rather than a fix.
+ */
+export const RESUME_BUFFER_MAX_BYTES = 64 * 1024;
+
+/** Retained cost of one frame: its JSON payload, which is what a replay re-sends. */
+function frameBytes(frame: UiEvent): number {
+  return Buffer.byteLength(JSON.stringify(frame), 'utf8');
+}
+
 export interface UiServerOptions {
   readonly token: string;
   readonly contractVersion: string;
@@ -107,6 +120,15 @@ export class UiServer {
   private seq = 0;
   private audioSeq = 0;
   private readonly resume: UiEvent[] = [];
+  /** Running total of retained payload bytes — the B.2b budget's live figure. */
+  private resumeBytes = 0;
+  /**
+   * Frames dropped from `resume` by either cap. Zero means nothing has ever been
+   * droppable, which is the state a cold launch is in — see `noticeResumeGap`,
+   * where the distinction is the difference between an honest warning and one
+   * shown on every first connection.
+   */
+  private resumeEvicted = 0;
   private lastInventory: InventoryFrame | null = null;
   private lastAgents: AgentFrame | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
@@ -157,12 +179,38 @@ export class UiServer {
     return bound;
   }
 
+  /**
+   * M3 B.2b: byte budget for the retained resume window, evicting OLDEST first.
+   *
+   * PROPHYLACTIC, and the framing matters: `RESUME_BUFFER_CAP` already bounds
+   * the COUNT at 256 frames, and `broadcast()` — the only writer to this
+   * buffer — has zero production callers. So this is NOT a live memory fix;
+   * it is a second, independent bound for the first caller that does exist,
+   * where "256 frames" is a count and counts do not bound bytes. A future
+   * `eventId`/`state` carrying a transcript or a diff turns 256 frames from
+   * ~20 KiB into megabytes, and the count cap would not notice. Bound both axes
+   * now so that caller cannot reintroduce it.
+   *
+   * JSON payload bytes, not wire bytes: the RFC 6455 header is <= 10 B per
+   * frame and is itself bounded by the count cap, so charging it would be
+   * precision applied to the wrong term.
+   */
+  private retainForResume(frame: UiEvent): void {
+    this.resume.push(frame);
+    this.resumeBytes += frameBytes(frame);
+    while (this.resume.length > RESUME_BUFFER_CAP || this.resumeBytes > RESUME_BUFFER_MAX_BYTES) {
+      const dropped = this.resume.shift();
+      if (dropped === undefined) break;
+      this.resumeBytes -= frameBytes(dropped);
+      this.resumeEvicted += 1;
+    }
+  }
+
   /** Assign the next seq, retain for Last-Seq resume, fan out to all sockets. */
   broadcast(input: Omit<UiEvent, 'type' | 'seq'> & { type?: 'event' }): UiEvent {
     this.seq += 1;
     const frame: UiEvent = { type: 'event', seq: this.seq, eventId: input.eventId, state: input.state };
-    this.resume.push(frame);
-    if (this.resume.length > RESUME_BUFFER_CAP) this.resume.shift();
+    this.retainForResume(frame);
     const wire = encodeTextFrame(JSON.stringify(frame));
     for (const conn of this.conns) {
       safeWrite(conn, this.conns, wire);
@@ -433,7 +481,68 @@ export class UiServer {
       if (this.lastAgents !== null && this.lastAgents.seq > lastSeq) {
         safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(this.lastAgents)));
       }
+      // M3 B.2c: the replay above is silently PARTIAL whenever the client asked
+      // for a seq the buffer no longer holds. The shell then renders a session
+      // list and an agent list and has no way to know that events it would have
+      // applied are missing — the same hole `onGap` covers for daemon restarts,
+      // which is the only case it was built for. Announce the gap once, AFTER
+      // the replay, so it is the last frame a sequential client reads.
+      this.noticeResumeGap(lastSeq);
     }
+  }
+
+  /**
+   * Emit `resume-gap` when `lastSeq` predates retention: either it is below the
+   * oldest retained frame, or the buffer is empty while the server has moved on
+   * (only `publishInventory`/`publishAgents`/`broadcastFrame` have, so seq > 0
+   * with nothing retained is a real state and not a contradiction).
+   *
+   * The detail names BOTH ends of what is actually retained, computed from the
+   * live buffer rather than written out as a constant, because the number that
+   * matters is the one that moved when the caps did. Goes through `notice()`,
+   * the single redaction sink — not a direct `safeWrite` of a NoticeFrame, and
+   * not a re-redaction here.
+   *
+   * Once per connection by construction: `handleUpgrade` runs once per
+   * connection, and this is called from exactly one place in it. The fan-out
+   * that `notice()` implies (every attached shell sees it) is accepted on a
+   * loopback single-user channel capped at MAX_CONNECTIONS; a shell that was not
+   * the one that lost frames shows one extra warn line, which is the honest
+   * direction to err in.
+   *
+   * SCOPE, and it is narrow on purpose: this covers `broadcast()` EVENTS only.
+   * `voice`, `context` and `notice` frames consume a seq but are neither
+   * retained nor replayable — they are transient by design (a stale "the
+   * assistant is speaking" is worse than none), and inventory/agents are
+   * level-triggered, so a reconnect re-sends them regardless. So a shell can
+   * miss those without a gap notice, correctly. It is also why, with zero
+   * non-test `broadcast()` callers, this notice CANNOT fire in a shipped build
+   * today: the first real caller is the seam it is waiting behind. Like the
+   * byte budget above, it is installed ahead of its producer, not because of
+   * a live fault.
+   */
+  private noticeResumeGap(lastSeq: number): void {
+    const oldest = this.resume.length > 0 ? this.resume[0]!.seq : null;
+    if (oldest !== null && lastSeq >= oldest) return;
+    // Empty retention is only a gap if something was DROPPED to make it empty.
+    // Without this, `seq > 0` alone decides, and every cold launch trips it:
+    // `publishInventory`/`publishAgents` advance `seq` and hold no events, the
+    // replay above sends both snapshots in full, and the client has missed
+    // nothing. Measured against the real topology before the guard existed
+    // (pinned by the B.2c-d test). A warn the user cannot act on, on every
+    // first connection, is worse than the silence it replaced.
+    if (oldest === null && this.resumeEvicted === 0) return;
+    // The upper bound is the NEWEST RETAINED seq, not `this.seq`. The latter
+    // counts snapshots and transient frames that were never retained, so
+    // quoting it promises a range the server does not hold — over-claiming, and
+    // still wrong in a user-facing number. (Peer review; the B.2c test asserts
+    // this exact value, so the fix cannot silently revert to `this.seq`.)
+    const newest = this.resume.length > 0 ? this.resume[this.resume.length - 1]!.seq : null;
+    const detail =
+      oldest === null
+        ? `فاتتك كل الأحداث المحفوظة، وآخر حدث محفوظ رقمه ${newest ?? 'ما في'} وبديتك من ${lastSeq}.`
+        : `فاتتك أحداث: بديت من ${lastSeq} والمحفوظ عندنا من ${oldest} إلى ${newest}.`;
+    this.notice('resume-gap', detail, 'warn');
   }
 
   private onData(conn: Conn, chunk: Buffer): void {

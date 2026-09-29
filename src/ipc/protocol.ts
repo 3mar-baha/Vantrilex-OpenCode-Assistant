@@ -540,19 +540,54 @@ export const InventorySessionSchema = z.object({
   state: z.string().min(1),
 });
 
+/**
+ * M3 B.2a: hard cap on one outbound inventory snapshot. The daemon publishes
+ * every session it can enumerate, so a long-lived or multi-project workspace
+ * made the frame, the JSON, and the retained `lastInventory` copy grow with
+ * the session list rather than with anything the shell can display. The cap is
+ * on the SCHEMA, not only the producer, so 201 entries are rejected wherever
+ * they come from instead of being trimmed by one call site.
+ */
+export const INVENTORY_MAX_SESSIONS = 200;
+
 export const InventoryFrameSchema = z.object({
   type: z.literal('inventory'),
   seq: z.number().int().nonnegative(),
-  sessions: z.array(InventorySessionSchema),
+  sessions: z.array(InventorySessionSchema).max(INVENTORY_MAX_SESSIONS),
+  /**
+   * Total sessions the producer held, present ONLY when the snapshot was
+   * truncated. A shell that renders 200 rows with no count has been told less
+   * than it needs; a silent trim would look identical to a 200-session
+   * workspace, which is the same "asserts nothing is missing" defect class as
+   * `layaReady: true`. Additive and optional: an older shell ignores it, and a
+   * frame without it simply means the snapshot was complete.
+   */
+  totalSessions: z.number().int().nonnegative().optional(),
 });
 export type InventoryFrame = z.infer<typeof InventoryFrameSchema>;
 
-/** Producer-side constructor — throws on malformed input (fail-fast, never on the wire). */
+/**
+ * Producer-side constructor — throws on malformed input (fail-fast, never on the wire).
+ *
+ * FIRST `INVENTORY_MAX_SESSIONS`, in producer order: not a random sample, not a
+ * sort, and not the LAST N. The producer's own order is the daemon's inventory
+ * order, so keeping the head keeps the sessions it already considered
+ * front-of-house; taking the tail would silently change which ones a user
+ * sees, and sorting would make the frame order differ from every other call
+ * site that iterates the same list.
+ */
 export function buildInventoryFrame(
   seq: number,
   sessions: ReadonlyArray<{ sessionId: string; state: string }>,
 ): InventoryFrame {
-  return InventoryFrameSchema.parse({ type: 'inventory', seq, sessions: [...sessions] });
+  const truncated = sessions.length > INVENTORY_MAX_SESSIONS;
+  const kept = truncated ? sessions.slice(0, INVENTORY_MAX_SESSIONS) : [...sessions];
+  return InventoryFrameSchema.parse({
+    type: 'inventory',
+    seq,
+    sessions: kept,
+    ...(truncated ? { totalSessions: sessions.length } : {}),
+  });
 }
 
 // --- Agents stream (final polish): level-triggered discovered-agent snapshot.

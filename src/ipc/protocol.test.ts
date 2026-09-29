@@ -9,6 +9,7 @@ import {
   FrameReassembler,
   HelloFrameSchema,
   InventoryFrameSchema,
+  INVENTORY_MAX_SESSIONS,
   IPC_TOKEN_ENV,
   maskFrame,
   MAX_MESSAGE_BYTES,
@@ -298,6 +299,36 @@ describe('inventory frames (Phase 2b)', () => {
     const empty = buildInventoryFrame(8, []);
     expect(InventoryFrameSchema.safeParse(empty).success).toBe(true);
     expect(empty.sessions).toEqual([]);
+  });
+
+  test('B.2a: 250 sessions -> exactly 200, FIRST 200 kept, truncation recorded', () => {
+    // The snapshot was emitted whole, so a busy server could put an unbounded
+    // session list on the wire (and in the retained `lastInventory` copy). The
+    // cap is on the SCHEMA, not just the producer, so the 201st entry is
+    // rejected wherever it comes from.
+    const many = Array.from({ length: 250 }, (_, i) => ({ sessionId: `ses_${i}`, state: 'running' }));
+    const frame = buildInventoryFrame(9, many);
+    expect(INVENTORY_MAX_SESSIONS).toBe(200);
+    expect(frame.sessions).toHaveLength(200);
+    // FIRST 200, not last 200 and not a sorted sample: the oldest session
+    // survives and the newest is what gets dropped. A `slice(-200)` or a
+    // `.reverse().slice(0,200)` implementation fails these two.
+    expect(frame.sessions[0]!.sessionId).toBe('ses_0');
+    expect(frame.sessions[199]!.sessionId).toBe('ses_199');
+    // Truncation must be RECORDED, not silent — a shell that shows 200 rows
+    // with no count has been told less than it needs to know.
+    expect(frame.totalSessions).toBe(250);
+    expect(
+      InventoryFrameSchema.safeParse({ type: 'inventory', seq: 0, sessions: many }).success,
+    ).toBe(false);
+    // ...and it must be ABSENT when nothing was truncated. An always-present
+    // field passes every assertion above and silently mis-signals truncation on
+    // every ordinary snapshot — the additive-field trap: a consumer that reads
+    // `totalSessions !== undefined` as "there are more" is wrong forever.
+    const exact = buildInventoryFrame(10, many.slice(0, INVENTORY_MAX_SESSIONS));
+    expect(exact.sessions).toHaveLength(INVENTORY_MAX_SESSIONS);
+    expect(exact.totalSessions, 'no truncation, so no truncation field').toBeUndefined();
+    expect(buildInventoryFrame(11, []).totalSessions).toBeUndefined();
   });
 
   test('malformed sessions throw at the producer, never on the wire', () => {
