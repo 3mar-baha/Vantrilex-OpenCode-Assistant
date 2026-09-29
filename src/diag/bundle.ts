@@ -81,8 +81,13 @@ export const UI_CONTRACT_VERSION = '3.1.0';
  * EXCLUDED deliberately — a log line legitimately contains them, and calling a
  * line binary because it has a tab would flag every real file.
  */
-const CONTROL_BYTES = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
-const HAS_CONTROL_BYTES = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+/** Control characters are exactly what this bundle has to find, so `no-control-regex`
+ *  is inverted for these two lines — a rule that forbids the character class
+ *  would forbid the detector. `slash.ts` carries the same class for the same
+ *  reason; the disables there are the audit's pre-existing baseline, not a
+ *  precedent for adding more without cause. */
+const CONTROL_BYTES = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g; // oxlint-disable-line no-control-regex
+const HAS_CONTROL_BYTES = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/; // oxlint-disable-line no-control-regex
 
 // ── CLI flags ───────────────────────────────────────────────────────────────
 
@@ -540,10 +545,10 @@ function fingerprintsOf(material: readonly string[]): {
  * quote and report a secret that is not there.
  */
 const ASSIGNMENT_SCAN =
-  /\b(password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|auth)\b["']?\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;)}\]]+)/gi;
+  /\b(password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|auth)\b["']?\s*[:=]\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\[[^\]]*\]|[^\s,;)}\]]+)/gi;
 
 /** Marker text, brackets, quotes and separators: noise around a redacted value. */
-const NOISE = /[\[\]"'\s,;)}]*/g;
+const NOISE = /[[\]"'\s,;)}]*/g;
 
 function isNoiseOnly(value: string): boolean {
   // The bracket is optional on purpose: the assignment value class stops at the
@@ -571,14 +576,17 @@ export function hasResidualMaterial(text: string): boolean {
     const value = (m[2] ?? '').replace(/^["']|["']$/g, '');
     if (value.length > 0 && !isNoiseOnly(value)) return true;
   }
-  // 4. The ESCAPE ARTEFACT — MEASURED, not hypothetical:
-  //    redactString('{"password":"ab\\"cdefgh1234"}') returns
-  //    '{"password":"[REDACTED]"cdefgh1234"}'. The assignment pattern's
-  //    quoted-value alternative stops at the first inner quote, so a JSON-shaped
-  //    value containing an escaped quote LEAKS ITS TAIL. Nothing downstream can
-  //    tell a scrubbed value from that tail by shape alone, which is exactly what
-  //    a per-line [REDACTION-REFUSED] is for.
-  if (/["']\[REDACTED\]["']\s*[^\s,;)}\]]{4,}/.test(text)) return true;
+  // A fourth check used to live here: the ESCAPE ARTEFACT, which detected the
+  // shape `'"[REDACTED]"' <4+ chars>` left behind when the shared redactor cut a
+  // JSON value short at an inner quote. That defect is FIXED (`0b11ba9` made the
+  // quoted-value alternative consume escapes, and the bracketed alternative now
+  // consumes `]` too), and the check has become actively harmful: a quoted marker
+  // followed by an ordinary word — `"[REDACTED]"auth`, which is what a
+  // `"key":"value","kind":"auth"` fragment reduces to — matches it and refuses a
+  // line that is perfectly clean. A guard for a fixed bug, firing on good input,
+  // is worse than no guard: it trains the reader to ignore refusals. The
+  // regression it watched for is now pinned in `logger.test.ts` instead, at the
+  // place where it can actually happen.
   return false;
 }
 

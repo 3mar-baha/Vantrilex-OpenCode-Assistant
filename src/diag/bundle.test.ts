@@ -8,6 +8,7 @@ import {
   assertRedactionSafe,
   collectBundle,
   defaultBundleSources,
+  hasResidualMaterial,
   parseDoctorFlags,
   RedactionTrip,
   insideTestRun,
@@ -577,7 +578,10 @@ describe('logs: the four shapes that break naive readers', () => {
     const entry = bundle.logs.find((l) => l.name === 'opencode.log');
     expect(entry?.binary).toBe(true);
     expect(entry?.lines).toHaveLength(1);
-    expect(JSON.stringify(bundle)).not.toMatch(/[\u0000-\u0008]/);
+    // Control characters are exactly what this asserts absent, so
+    // `no-control-regex` is inverted for the line — the rule would forbid the
+    // detector. Same reasoning as the two constants in `bundle.ts`.
+    expect(JSON.stringify(bundle)).not.toMatch(/[\u0000-\u0008]/); // oxlint-disable-line no-control-regex
   });
 
   test('10k lines collapse to the last 200 and say so', async () => {
@@ -599,16 +603,61 @@ describe('logs: the four shapes that break naive readers', () => {
     expect(scrubbed.capped).toBe(true);
   });
 
-  test('a line that cannot be scrubbed is REFUSED, and the rest still ships', () => {
-    // MEASURED defect in the shared redactor, not a hypothetical:
-    //   redactString('{"password":"ab\\"cdefgh1234"}')
-    //     === '{"password":"[REDACTED]"cdefgh1234"}'
-    // The assignment pattern's quoted-value alternative stops at the first INNER
-    // quote, so the tail of a JSON-shaped value survives. Nothing downstream can
-    // tell that tail from ordinary text by shape, so the line is replaced.
-    const refused = scrubLogLine('{"password":"ab\\"cdefgh1234"}');
-    expect(refused.text).toBe('[REDACTION-REFUSED]');
-    expect(refused.refused).toBe(true);
+  test('a bracketed value is consumed whole, so nothing survives beside the marker', () => {
+    // Found by probing the shipped bundle, not by reading it. The unquoted
+    // value class `[^\s,;)}\]]+` STOPS at `]`, so a value that contains one
+    // was redacted only up to it and the tail shipped into an artifact whose
+    // entire purpose is to be pasted into a public ticket:
+    //
+    //   scrubLogLine('daemon: x-api-key: [value-with-bracket inside]')
+    //     was -> 'daemon: x-api-key: [REDACTED] inside]'   refused: false
+    //
+    // and the `[REDACTION-REFUSED]` net did not fire either, because
+    // `isNoiseOnly` treats the captured `[REDACTED` as pure noise. Both the
+    // shared redactor and this bundle's own scan now carry a bracketed-value
+    // alternative, so the value is consumed as a unit.
+    const scrubbed = scrubLogLine('daemon: x-api-key: [value-with-bracket inside]');
+    expect(scrubbed.text).not.toContain('inside');
+    expect(scrubbed.text).toContain('[REDACTED]');
+    expect(scrubbed.refused).toBe(false);
+
+    // The already-marker form must still read as fully redacted, or every
+    // honest `[REDACTED]` would look like residual material and refuse the line.
+    const clean = scrubLogLine('daemon: apiKey=[REDACTED]');
+    expect(clean.refused).toBe(false);
+    expect(clean.text).toBe('daemon: apiKey=[REDACTED]');
+  });
+
+  test('a clean line whose marker is followed by a word is NOT refused', () => {
+    // The regression from removing the escape-artefact check. That check
+    // existed for a real defect (the shared redactor cutting a JSON value short
+    // at an inner quote) which is now FIXED, so the check only produced false
+    // positives: `"[REDACTED]"auth` — what a clean `"key":"value","kind":"auth"`
+    // fragment reduces to — matched it and refused a perfectly good line. A
+    // refusal the reader learns to ignore is worse than no refusal at all.
+    const clean = scrubLogLine('daemon: {"kind":"auth","apiKey":"[REDACTED]"}');
+    expect(clean.refused).toBe(false);
+    expect(clean.text).toContain('[REDACTED]');
+  });
+
+  test('the refusal arm still exists and is wired to the oracle', () => {
+    // The oracle itself: material-level, so it fires on things a pattern-based
+    // check would miss and stays quiet on a correctly redacted value.
+    expect(hasResidualMaterial('Bearer Zm9vYmFyYmF6cXV1eA==')).toBe(true);
+    expect(hasResidualMaterial('SK-OR-V1-AAAABBBBCCCC')).toBe(true);
+    expect(hasResidualMaterial('apiKey=[REDACTED]')).toBe(false);
+    expect(scrubLogLine('apiKey=[REDACTED]').text).toBe('apiKey=[REDACTED]');
+  });
+
+  test('an escaped quote inside a JSON value is now SCRUBBED, not refused', () => {
+    // The regression that fix 0b11ba9 removed, pinned so it cannot return.
+    // Before: '{"password":"[REDACTED]"cdefgh1234"}' — the tail survived and
+    // the line had to be refused wholesale. After: the whole value is consumed
+    // and the line ships.
+    const scrubbed = scrubLogLine('{"password":"ab\\"cdefgh1234"}');
+    expect(scrubbed.text).not.toContain('cdefgh1234');
+    expect(scrubbed.refused).toBe(false);
+    expect(scrubbed.scrubbed).toBe(true);
   });
 
   test('an uppercase provider key is SCRUBBED by the bundle\'s own sweep, not refused', () => {
@@ -634,7 +683,24 @@ describe('logs: the four shapes that break naive readers', () => {
   });
 
   test('a refused line does not stop the rest of the file being collected', async () => {
-    const h = harness({}, { 'daemon.log': `ok line\n{"password":"ab\\"cdefgh1234"}\nok again` });
+    // The property is bundle-or-nothing: one line the bundle cannot prove safe
+    // is replaced, and every other line still ships. A bundle that refused to
+    // exist would be worse than one missing a line, so this is load-bearing.
+    //
+    // The trigger is REAL, not mocked and not contrived. After `0b11ba9` the
+    // shipped redactors cover every credential shape a brute-force sweep could
+    // assemble, so what is left is a line the bundle cannot PROVE safe for a
+    // structural reason: the 2000-char cap truncates in the middle of the
+    // redaction marker, leaving `apiKey=[REDAC` — which reads as an assignment
+    // still holding a value. Refusing is the correct answer there, and it is
+    // the one shape that still reaches the arm.
+    const long = `${'a'.repeat(1990)} apiKey=secretvalue123`;
+    const line = scrubLogLine(long);
+    expect(line.capped).toBe(true);
+    expect(line.refused, 'a marker cut in half by the cap cannot be proven safe').toBe(true);
+    expect(line.text).toBe('[REDACTION-REFUSED]');
+
+    const h = harness({}, { 'daemon.log': `ok line\n${long}\nok again` });
     const { bundle, notes } = await collectBundle(h.sources);
     const entry = bundle.logs.find((l) => l.name === 'daemon.log');
     expect(entry?.lines).toEqual(['ok line', '[REDACTION-REFUSED]', 'ok again']);

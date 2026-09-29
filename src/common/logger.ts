@@ -97,7 +97,7 @@ export const GENERIC_SK_EXCLUSIONS: readonly string[] = ['or-v1-', 'fish-'];
  * the fix.
  */
 const SECRET_ASSIGNMENT =
-  /\b(password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|auth)\b(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;)}\]]+)/gi;
+  /\b(password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|auth)\b(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\[[^\]]*\]|[^\s,;)}\]]+)/gi;
 
 /** Depth and breadth bounds. Reaching one fails closed instead of recursing forever. */
 const MAX_DEPTH = 8;

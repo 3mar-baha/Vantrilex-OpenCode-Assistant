@@ -79,14 +79,33 @@ if (!useLocal) {
 }
 
 const out = run();
-const m = out.match(/Found (\d+) warnings? and (\d+) errors?/);
-if (m === null) {
+// Measure by counting the diagnostic lines oxlint actually printed, not by
+// parsing its summary sentence.
+//
+// The summary ("Found N warnings and M errors") is emitted by SOME formatter
+// builds and not others: with `--format=github` the pinned local binary prints
+// it, with the default formatter it prints nothing, and this gate started
+// failing at exit 2 with "could not parse oxlint output" on a tree whose
+// warning count had not moved at all. A gate that depends on a tool's prose
+// summary is a gate that breaks when the tool changes its formatter, and the
+// failure looks like a lint regression when nothing regressed.
+//
+// The counts below are still fail-closed: a line only counts if it carries
+// oxlint's own `warning`/`error` token after a `path:line:col`, so unrelated
+// output cannot inflate them, and an output with zero counted lines AND a
+// non-empty result is treated as unparseable rather than as "clean".
+const counted = (token) => {
+  const re = new RegExp(`^\\S+:\\d+:\\d+: ${token}\\b`, 'gm');
+  return (out.match(re) ?? []).length;
+};
+const summary = out.match(/Found (\d+) warnings? and (\d+) errors?/);
+const warnings = summary ? Number(summary[1]) : counted('warning');
+const errors = summary ? Number(summary[2]) : counted('error');
+if (warnings === 0 && errors === 0 && out.trim().length > 0) {
   console.error('could not parse oxlint output; refusing to guess');
   console.error(out.slice(-500));
   process.exit(2);
 }
-const warnings = Number(m[1]);
-const errors = Number(m[2]);
 
 // A committed baseline file wins when present, so the number is reviewable in a
 // diff rather than buried in this script.

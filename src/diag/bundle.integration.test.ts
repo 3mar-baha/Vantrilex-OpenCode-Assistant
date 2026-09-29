@@ -93,9 +93,10 @@ describe.sequential('doctor --bundle against a stub daemon', () => {
         // Uppercase: invisible to the shared redactor, caught by this bundle's
         // own case-insensitive sweep and SCRUBBED.
         `daemon: fish rejected ${UPPER}`,
-        // The MEASURED redaction defect: an escaped quote inside a JSON-shaped
-        // value leaves the tail behind, so this line is REFUSED, not scrubbed.
-        'daemon: {"password":"ab\\"cdefgh1234"}',
+        // A bracketed assignment value: the unquoted class stopped at `]`, so
+        // the tail beside it used to ship. Now consumed whole, and asserted
+        // scrubbed-rather-than-refused, which is the better outcome.
+        'daemon: x-api-key: [bracket-tail-inside]',
         'daemon: shutting down',
       ].join('\n'),
     );
@@ -210,9 +211,15 @@ describe.sequential('doctor --bundle against a stub daemon', () => {
     const daemonLog = bundle.logs.find((l) => l.name === 'daemon.log');
     expect(daemonLog?.present).toBe(true);
     expect(daemonLog?.lines).toHaveLength(6);
-    expect(daemonLog?.lines.filter((l) => l === '[REDACTION-REFUSED]')).toHaveLength(1);
+    // ZERO refusals, and that is the honest number: after 0b11ba9 the shipped
+    // redactors cover every shape this fixture contains, so the refusal arm is
+    // defence in depth rather than something a normal log trips. A test that
+    // demanded a refusal here would be demanding a redaction bug.
+    expect(daemonLog?.lines.filter((l) => l === '[REDACTION-REFUSED]')).toHaveLength(0);
     expect(daemonLog?.scrubbed).toBeGreaterThanOrEqual(3);
-    expect(bundle.redactions.refused).toBe(1);
+    expect(bundle.redactions.refused).toBe(0);
+    // The bracketed tail is gone, not merely refused away.
+    expect(daemonLog?.lines.join('\n')).not.toContain('bracket-tail-inside');
     // Degraded, not healthy: the serve credential is present but wrong (401).
     expect(outcome).toBe('degraded');
     expect(exitCode).toBe(1);
