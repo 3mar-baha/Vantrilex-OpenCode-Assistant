@@ -33,20 +33,16 @@ import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, keyAdvanced, withKey, type AcquiredKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
-import { bytesToFloat32, isLoudWindow } from './voice/ingest.js';
+import { isLoudWindow } from './voice/ingest.js';
 // NOT imported statically. `runtime/vad.js` pulls in `onnxruntime-node`, a
 // native module the sidecar does not bundle, so a static import made a missing
 // package a hard module-load failure: the daemon died with ERR_MODULE_NOT_FOUND
 // and never bound 4097. Found by cold-launching the real installer, not by the
 // gates. The dynamic import below degrades to the RMS energy gate instead, which
-// is the fail-closed behaviour the design always intended.
-// VAD_WINDOW_SAMPLES is a plain constant (512), mirrored here to keep the frame
-// geometry local and avoid loading the module just to read a number.
-const VAD_WINDOW_SAMPLES = 512;
-type SileroVadLike = {
-  isSpeech(window: Float32Array): Promise<boolean>;
-  reset(): void;
-};
+// is the fail-closed behaviour the design always intended. The gate itself lives
+// in `runtime/vad-gate.ts` (M3-B.4) and is transport-blind: it imports neither
+// this file nor the ONNX module.
+import { makeVadGate, type VadModule } from './runtime/vad-gate.js';
 import { writeKeyPools } from './voice/key-store.js';
 import { TelemetryWriter } from './telemetry/index.js';
 import type { SanitizedErrorClass, TelemetryInput } from './telemetry/index.js';
@@ -790,30 +786,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // `buildVoicePipeline` (and therefore the saveApiKeys rebuild path) stays
   // synchronous. Fail-closed: a missing or unloadable model falls back to the
   // RMS energy gate in `ingest.ts`, never to "transcribe everything".
-  let vadLoad: Promise<SileroVadLike | null> | null = null;
-  const loadVad = (): Promise<SileroVadLike | null> => {
+  //
+  // M3-B.4: the decision logic (frame loop, deadline, abandoned-promise
+  // handling) moved to `runtime/vad-gate.ts`. What stays here is the one thing
+  // that is daemon-specific: the lazy dynamic import and its config read.
+  let vadLoad: Promise<VadModule | null> | null = null;
+  const loadVad = (): Promise<VadModule | null> => {
     if (vadLoad === null) {
       const cfg = loadConfig();
       // The import itself can fail (missing native package in the sidecar), so
       // it lives inside the promise where `.catch` can actually see it.
       vadLoad = import('./runtime/vad.js')
-        .then((m) => m.SileroVad.load(cfg.vad.modelPath, { threshold: cfg.vad.threshold }) as Promise<SileroVadLike>)
+        .then((m) => m.SileroVad.load(cfg.vad.modelPath, { threshold: cfg.vad.threshold }))
         .catch(() => null);
     }
     return vadLoad;
   };
 
-  const vadGate = async (window: Uint8Array): Promise<boolean> => {
-    const vad = await loadVad();
-    if (vad === null) return isLoudWindow(window);
-    // A 5 s window is 156 Silero frames; any speech frame admits the window.
-    const frames = Math.floor(window.byteLength / 2 / VAD_WINDOW_SAMPLES);
-    for (let f = 0; f < frames; f += 1) {
-      const frame = bytesToFloat32(window, f * VAD_WINDOW_SAMPLES * 2, VAD_WINDOW_SAMPLES);
-      if (await vad.isSpeech(frame)) return true;
-    }
-    return false;
-  };
+  const vadGate = makeVadGate(loadVad, isLoudWindow);
 
   const setVoicePhase = (phase: 'idle' | 'listening' | 'thinking' | 'speaking', transcript?: string): void => {
     if (phase === voicePhase && transcript === undefined) return;
