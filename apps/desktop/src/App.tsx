@@ -6,6 +6,7 @@ import { AgentModelBadge } from './components/session/AgentModelBadge.js';
 import { SessionChip } from './components/session/SessionChip.js';
 import { ContextGauge } from './components/session/ContextGauge.js';
 import { ConfirmPortal } from './components/portals/ConfirmPortal.js';
+import { CalibrationWizard } from './components/portals/CalibrationWizard.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
 import {
   CreditBanner,
@@ -67,6 +68,11 @@ export function App(): JSX.Element {
   const [lastTranscript, setLastTranscript] = useState('');
   const [micEnergy, setMicEnergy] = useState(0);
   const [pendingConfirm, setPendingConfirm] = useState<{ id: string; detail: string } | null>(null);
+  // M4 C.6 — the calibration wizard is measure-and-ADVISE. It writes no
+  // threshold, sends no command and touches `announce` never; see
+  // CalibrationWizard.tsx for why persistence is deferred rather than merely
+  // unfinished.
+  const [calibrating, setCalibrating] = useState(false);
   const [sessionState, dispatchSession] = useReducer(sessionsReducer, initialSessionsState);
   const [agentModel, setAgentModel] = useState<{ agent: string | null; model: string | null }>({
     agent: null,
@@ -870,8 +876,22 @@ export function App(): JSX.Element {
           >
             مفاتيح الـ API
           </button>
+          <span className="w-px bg-[#26282e]" />
+          {/* C.6 — a third footer cell. `truncate` is not decoration: the card
+              is a fixed 440px, and a label that wrapped to two lines would
+              grow the auto-sized surface by a row. */}
+          <button
+            data-testid="open-calibration"
+            title="معايرة الميكروفون — قياس ضجيج الغرفة مقابل عتبة الكلام"
+            onClick={() => setCalibrating(true)}
+            className="min-w-0 flex-1 truncate px-2 py-2.5 text-xs text-[#a1a1aa] hover:bg-[#1d1e23] hover:text-[#f4f4f5]"
+          >
+            معايرة الميكروفون
+          </button>
         </div>
       </div>
+
+      {calibrating && <CalibrationWizard onClose={() => setCalibrating(false)} />}
 
       {pendingConfirm !== null && (
         <ConfirmPortal
