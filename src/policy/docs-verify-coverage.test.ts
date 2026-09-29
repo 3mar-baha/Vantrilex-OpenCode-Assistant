@@ -164,6 +164,25 @@ describe('docs:verify keeps its claim set', () => {
     expect(SRC, 'the old shrinkable total is back').not.toMatch(/results\.length - skipped\.length/);
   });
 
+  test('cited anchors are checked for CONTENT, not just line existence', () => {
+    // Found by a Reality Checker audit: 2 of the 5 `file.ts:NNN` anchors AGENTS.md
+    // cited pointed at a comment, a brace and a blank line, and the gate was
+    // GREEN. `citedAnchors()` only asserted `line <= fileLineCount`, so a pointer
+    // that had drifted to unrelated code passed exactly as a valid one did. The
+    // script's own header admitted the limit, which made it a documented
+    // non-check being cited as a check.
+    //
+    // The structural guarantee now required is that the anchor checker can see
+    // the text of a cited line — otherwise the next drift is invisible again.
+    const idx = SRC.indexOf('function citedAnchors');
+    expect(idx, 'citedAnchors is gone from the script').toBeGreaterThan(-1);
+    const body = SRC.slice(idx, idx + 2600);
+    // It must read the file contents, not just stat the line count.
+    expect(body, 'citedAnchors never reads a line of the cited file').toMatch(/readFileSync\(/);
+    // And it must compare something about that line.
+    expect(body).toMatch(/lineText|contentAt|\.slice\(line|lines\[line/);
+  });
+
   test('UNVERIFIED is fatal, not a warning', () => {
     // Removing a documented figure silently disables its check. Observed by
     // break-testing: deleting the earcon count left every other claim green and

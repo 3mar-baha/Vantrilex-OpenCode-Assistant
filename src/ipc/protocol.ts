@@ -234,12 +234,42 @@ const KNOWN_OPCODES: ReadonlySet<number> = new Set([
  * Connection-scoped reassembler — the fix for fragments split across TCP
  * chunks. Feed every inbound chunk to push(); complete messages come out.
  * Protocol violations throw WsProtocolError; the caller must destroy the
- * connection (fail-closed, no unbounded buffering).
+ * connection.
+ *
+ * Both halves of that last sentence are load-bearing, and the second one used to
+ * be false. `MAX_MESSAGE_BYTES` was enforced on each FRAME by `parseHeader`, not
+ * on the ASSEMBLED message: `pendingParts` accumulated with no running total and
+ * the message was then built with a single `Buffer.concat(pendingParts)`. A client
+ * could send any number of continuation frames each just under 1 MiB and the
+ * result grew to the sum, so the effective limit was the client's patience rather
+ * than the constant. Now a cumulative total is checked BEFORE a part is stored, so
+ * the payload is never copied into the array past the cap — capping at concat
+ * time would still have allocated it.
+ *
+ * The same root cause weakened the project's `MAX_AUDIO_BYTES` guarantee: that
+ * check runs on the REASSEMBLED payload, so an oversized fragmented binary
+ * message used to be fully allocated and only then rejected. "Never reaches the
+ * pipeline" was always true; "bounded" is now true too.
  */
 export class FrameReassembler {
   private buffer = Buffer.alloc(0);
   private pendingOpcode: Opcode | null = null;
   private readonly pendingParts: Uint8Array[] = [];
+  /** Running total of `pendingParts` — the assembled size, not the frame size. */
+  private pendingBytes = 0;
+
+  /** Reject a message that has already grown past the cap. */
+  private accountFor(bytes: number): void {
+    this.pendingBytes += bytes;
+    if (this.pendingBytes > MAX_MESSAGE_BYTES) {
+      // Reset first: a throw leaves the connection to be destroyed by the caller,
+      // and a half-cleared assembler must not be reusable if it is.
+      this.pendingBytes = 0;
+      this.pendingParts.length = 0;
+      this.pendingOpcode = null;
+      throw new WsProtocolError('assembled message exceeds message cap — refusing allocation');
+    }
+  }
 
   push(chunk: Uint8Array): WsFrame[] {
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
@@ -271,17 +301,20 @@ export class FrameReassembler {
 
       if (header.opcode === Opcode.Continuation) {
         if (this.pendingOpcode === null) continue; // stray continuation — drop
+        this.accountFor(payload.byteLength);
         this.pendingParts.push(payload);
         if (header.fin) {
           frames.push({ fin: true, opcode: this.pendingOpcode, payload: Buffer.concat(this.pendingParts) });
           this.pendingOpcode = null;
           this.pendingParts.length = 0;
+          this.pendingBytes = 0;
         }
         continue;
       }
       if (header.opcode === Opcode.Text || header.opcode === Opcode.Binary) {
         if (!header.fin) {
           this.pendingOpcode = header.opcode;
+          this.accountFor(payload.byteLength);
           this.pendingParts.push(payload);
           continue;
         }

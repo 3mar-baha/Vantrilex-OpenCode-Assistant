@@ -238,23 +238,34 @@ function knowledgeImportFacts() {
 }
 
 /**
- * A cited `file.ts:NNN` line anchor is real if the file exists AND the line
- * exists. This does not verify the line is still the RIGHT line — only that the
- * pointer did not decay into a dangling reference, which is how `daemon.ts:607`
- * survived drifting to `:790` with nothing complaining.
+ * A cited `file.ts:NNN` anchor is real if the file exists, the line exists, AND
+ * the line is not blank or a bare delimiter.
+ *
+ * WHY THE CONTENT CHECK EXISTS. The first version of this function asserted
+ * only `line <= fileLineCount`, and a Reality Checker audit found 2 of the 5
+ * anchors AGENTS.md cited pointing at a comment, a `{`, and a blank line — with
+ * the gate GREEN. The script's own header admitted the limit ("does not verify
+ * the line is still the RIGHT line"), which made a documented non-check being
+ * cited as a protection. The same drift had already happened once before
+ * (`daemon.ts:607` → `:790`) and shipped.
+ *
+ * WHAT THIS STILL DOES NOT DO, stated plainly so it is not over-claimed: it
+ * cannot tell whether a line contains the SPECIFIC thing the document claims.
+ * That needs the document to quote the line. What it can catch is the common
+ * case — a pointer decayed past the end of the region it described, landing on
+ * whitespace, a bare brace or a comment. Blank and brace-only lines are what
+ * both stale anchors turned out to be.
  */
 function citedAnchors() {
   // AGENTS.md writes the line reference INSIDE the backticks — `daemon.ts:790` —
   // not as `daemon.ts`:790. Both spellings appear across the file's history, so
-  // accept either. An earlier version of this function only accepted the second
-  // and reported "no citations found" on a document with five of them, which is
-  // the UNVERIFIED-but-looks-covered failure this file is about.
+  // accept either. An earlier version only accepted the second and reported
+  // "no citations found" on a document with five of them.
   const re = /`([A-Za-z0-9_.-]+\.tsx?):(\d+)`/g;
   // Resolve by BASENAME, recursively. The docs cite `brain.ts:108` and
-  // `daemon.ts:790` as bare filenames, but the files live at `src/voice/` and
-  // `src/` respectively — a fixed two-root lookup reported a perfectly valid
-  // citation as "file not found", which is a false FAIL and would train a
-  // reader to ignore this check.
+  // `daemon.ts:790` as bare filenames while the files live at `src/voice/` and
+  // `src/` — a fixed two-root lookup called a valid citation "file not found",
+  // which is a false FAIL that trains a reader to ignore the check.
   const index = new Map();
   const indexRoots = [join(ROOT, 'src'), join(ROOT, 'apps/desktop/src')];
   const collect = (dir) => {
@@ -262,8 +273,6 @@ function citedAnchors() {
       const p = join(dir, e.name);
       if (e.isDirectory()) collect(p);
       else if (/\.(ts|tsx)$/.test(p) && !p.endsWith('.test.ts')) {
-        // First match wins, and roots are walked in a fixed order, so a
-        // same-named file in two places resolves deterministically.
         if (!index.has(e.name)) index.set(e.name, p);
       }
     }
@@ -278,15 +287,34 @@ function citedAnchors() {
       out.push({ name, line, ok: false, why: 'file not found in src/ or apps/desktop/src/' });
       continue;
     }
-    const total = readFileSync(hit, 'utf8').split('\n').length;
-    out.push({
-      name,
-      line,
-      ok: line >= 1 && line <= total,
-      why: `${hit.replace(ROOT, '').replace(/\\/g, '/')} has ${total} lines`,
-    });
+    const all = readFileSync(hit, 'utf8').split('\n');
+    if (line < 1 || line > all.length) {
+      out.push({ name, line, ok: false, why: `file has ${all.length} lines` });
+      continue;
+    }
+    // The content check. A pointer that drifted onto whitespace, a lone
+    // delimiter or a bare closing brace is not pointing at code.
+    // The bracket is escaped only where the class needs it; oxlint's
+    // no-useless-escape rule rejects a redundant `\[` inside a class.
+    const lineText = (all[line - 1] ?? '').trim();
+    const degenerate =
+      lineText === '' || /^[[\]{}();,]+$/.test(lineText) || /^[/*]+$/.test(lineText);
+    if (degenerate) {
+      out.push({
+        name,
+        line,
+        ok: false,
+        why: degenerateBlank(lineText) ? 'line is blank' : 'line is a bare delimiter, not code',
+      });
+      continue;
+    }
+    out.push({ name, line, ok: true, why: 'resolves to code' });
   }
   return out;
+}
+
+function degenerateBlank(t) {
+  return t === '';
 }
 
 // ── derivation ───────────────────────────────────────────────────────────────
