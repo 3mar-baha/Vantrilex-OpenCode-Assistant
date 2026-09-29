@@ -20,6 +20,8 @@ export const MAX_CONNECTIONS = 8;
 export const RESUME_BUFFER_CAP = 256;
 /** Hard inbound message cap — a single frame may never exceed this. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
+/** M3 B.1: hard cap on the pre-header buffer — see FrameReassembler.push. */
+export const MAX_PREHEADER_BYTES = 2 * MAX_MESSAGE_BYTES;
 /** Voice capture contract (P4): 16 kHz mono Int16 PCM over binary frames. */
 export const AUDIO_SAMPLE_RATE = 16000;
 export const AUDIO_FRAME_MS = 100;
@@ -312,6 +314,25 @@ export class FrameReassembler {
 
   push(chunk: Uint8Array): WsFrame[] {
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
+    // M3 B.1 — pre-header cap. Everything above is per-MESSAGE accounting: it
+    // only starts once a full header parses, so a peer that keeps the head frame
+    // incomplete grew this buffer with no counter consulted. Measured, though,
+    // the head frame CANNOT be larger than the cap (parseHeader refuses a larger
+    // declared length), so a 1-byte dribble is self-limiting at
+    // 1_048_590 B and 4_000_000 single-byte pushes threw nothing; a real socket
+    // also hands onData at most 65_536 B per 'data' event. This is therefore
+    // defence-in-depth against a future larger read buffer, not a path a peer
+    // can drive today — and it is why the bound is 2x rather than 1x: a legal
+    // MAX_MESSAGE_BYTES message arriving in one push needs 1_048_590 B of buffer,
+    // so 1x would reject valid traffic (pinned by B.1-P3).
+    if (this.buffer.byteLength > MAX_PREHEADER_BYTES) {
+      // Reset first, for the same reason `accountFor` does: the caller destroys
+      // the connection on the throw, and a half-cleared assembler must not be
+      // reusable if it is.
+      this.buffer = Buffer.alloc(0);
+      this.discardPending();
+      throw new WsProtocolError('pre-header buffer exceeds cap — refusing accumulation');
+    }
     const frames: WsFrame[] = [];
     for (;;) {
       const header = parseHeader(this.buffer, 0);
@@ -364,7 +385,12 @@ export class FrameReassembler {
         this.discardPending();
         if (!header.fin) {
           this.pendingOpcode = header.opcode;
-                    this.pendingParts.push(payload);
+          // M3-B.6: the opening fragment counts too. Without this, a 1 MiB
+          // head (uncharged) plus a 1 MiB continuation (charged: 1 MiB total)
+          // assembled 2 MiB silently — the cap was 2x loose in the live path
+          // while `decodeFrames` on the identical wire threw.
+          this.accountFor(payload.byteLength);
+          this.pendingParts.push(payload);
           continue;
         }
         frames.push({ fin: true, opcode: header.opcode, payload });

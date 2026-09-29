@@ -12,6 +12,7 @@ import {
   IPC_TOKEN_ENV,
   maskFrame,
   MAX_MESSAGE_BYTES,
+  MAX_PREHEADER_BYTES,
   Opcode,
   parseSeq,
   UI_SUBPROTOCOL,
@@ -132,6 +133,157 @@ describe('FrameReassembler (cross-chunk fragments)', () => {
   test('fragmented control frame throws', () => {
     const re = new FrameReassembler();
     expect(() => re.push(Buffer.from([0x09, 0x00]))).toThrow(WsProtocolError); // FIN=false ping
+  });
+
+  // --- M3 B.1 — pre-header buffer cap ---------------------------------------
+  //
+  // `push()` concatenates every inbound chunk into `this.buffer`, and until a
+  // FULL header parses the only thing consulted is `parseHeader` returning null.
+  // Two measurements taken against this revision shaped the four tests below;
+  // both are reproducible from `dist/` and neither is an assumption:
+  //
+  //   1. A 1-byte dribble is SELF-LIMITING, not unbounded. The head frame
+  //      drains at header(14) + declared(<= MAX_MESSAGE_BYTES) = 1_048_590 B,
+  //      because `parseHeader` refuses any declared length above the cap, so
+  //      the loop cannot stall behind a frame larger than that. 4_000_000
+  //      single-byte pushes threw nothing. The cap is therefore crossed by ONE
+  //      inbound chunk, not by patience — and a real socket hands `onData` at
+  //      most 65_536 B per 'data' event (measured on the upgrade socket), so
+  //      2x MAX_MESSAGE_BYTES is defence-in-depth against a future larger read
+  //      buffer rather than a path a peer can drive today. The dribble prefix
+  //      is kept because it is the attack's shape; 4096 is where the O(n^2)
+  //      concat stops being free.
+  //   2. A legal MAX_MESSAGE_BYTES message pushed in ONE call already needs
+  //      1_048_590 B of buffer, so a 1x cap would reject legal traffic. That is
+  //      precisely what the 2x buys, and B.1-P3b is the test that pins it.
+  describe('M3 B.1 pre-header cap', () => {
+    /** Client frame header declaring `declared` bytes: masked, 64-bit length. */
+    const head = (declared: number, opcode: Opcode, fin: boolean): Buffer => {
+      const h = Buffer.alloc(14);
+      h[0] = (fin ? 0x80 : 0x00) | opcode;
+      h[1] = 0x80 | 127;
+      h.writeUInt32BE(0, 2);
+      h.writeUInt32BE(declared, 6);
+      return h; // masking key stays 0x00 — XOR 0 is identity, so payloads read plain
+    };
+
+    // P1 — the guard exists, and it bounds the right thing.
+    test('B.1-P1: dribbling is uncounted, and one push over the cap throws', () => {
+      const re = new FrameReassembler();
+      // The head frame declares the largest legal length, so the parse loop
+      // never completes it and `buffer` grows one byte per push with no cap
+      // consulted. All of this is legal and must not throw.
+      let pushed = 0;
+      for (const b of head(MAX_MESSAGE_BYTES, Opcode.Text, false)) {
+        expect(re.push(Buffer.from([b]))).toHaveLength(0);
+        pushed += 1;
+      }
+      while (pushed < 4096) {
+        expect(re.push(Buffer.from([0x41]))).toHaveLength(0);
+        pushed += 1;
+      }
+      // One push over the cap throws. The bound is on the post-concat buffer —
+      // what `Buffer.concat` actually allocates — so it fires on the FIRST push
+      // that overshoots, however little was retained behind it.
+      expect(() => re.push(Buffer.alloc(MAX_PREHEADER_BYTES))).toThrow(WsProtocolError);
+    });
+
+    // P2 — the off-by-one pin. `>` not `>=`: a post-concat buffer of exactly the
+    // cap is legal. Change the comparison and BOTH halves of this test fail.
+    //
+    // Each case needs its own reassembler, and that is a measured property
+    // rather than tidiness: a buffer of exactly the cap does not STAY at the
+    // cap, because the parse loop inside that same push drains the head frame
+    // (it cannot exceed 1_048_590 B by construction). So "retained at the cap,
+    // then one more byte" is not a state a peer can produce, and a test that
+    // asserted it would pin a fiction.
+    test('B.1-P2: exactly the cap passes, one byte more throws', () => {
+      const atCap = new FrameReassembler();
+      expect(() => atCap.push(Buffer.alloc(MAX_PREHEADER_BYTES, 0x41))).not.toThrow();
+
+      const overCap = new FrameReassembler();
+      expect(() => overCap.push(Buffer.alloc(MAX_PREHEADER_BYTES + 1, 0x41))).toThrow(WsProtocolError);
+    });
+
+    // P3 — legal traffic survives. (a) is the brief's fragmentation case and (b)
+    // is the one that actually discriminates 1x from 2x: a 1 MiB message in a
+    // single push is 1_048_590 B of buffer, so a 1x cap would kill it.
+    test('B.1-P3: legitimate messages still reassemble under the cap', () => {
+      const mask = Buffer.from([9, 8, 7, 6]);
+      const split = new FrameReassembler();
+      const whole = 'z'.repeat(512 * 1024);
+      const chunks = Math.ceil(whole.length / 4096);
+      for (let i = 0; i < chunks; i += 1) {
+        const isLast = i === chunks - 1;
+        const piece = whole.slice(i * 4096, Math.min((i + 1) * 4096, whole.length));
+        // Only the FIRST piece may be Text: a new data frame mid-message
+        // discards the fragment in flight, so the chain is Text(!fin) then
+        // Continuations, per RFC 6455 §5.4.
+        const opcode = i === 0 ? Opcode.Text : Opcode.Continuation;
+        const frames = split.push(maskFrame(opcode, Buffer.from(piece, 'utf8'), mask, isLast));
+        if (isLast) {
+          expect(frames).toHaveLength(1);
+          expect(frames[0]!.payload.byteLength).toBe(512 * 1024);
+        } else {
+          expect(frames).toHaveLength(0);
+        }
+      }
+
+      const oneShot = new FrameReassembler();
+      const frames = oneShot.push(maskFrame(Opcode.Text, Buffer.alloc(MAX_MESSAGE_BYTES, 0x41), mask));
+      expect(frames).toHaveLength(1);
+      expect(frames[0]!.payload.byteLength).toBe(MAX_MESSAGE_BYTES);
+    });
+
+    // P4 — the throw RESETS, it does not merely throw. Two halves, both of which
+    // a "throw and leave the buffer" fix would fail: the pre-header buffer is
+    // zeroed (a valid small frame decodes next), and the in-flight fragment is
+    // discarded (its continuation is dropped as a stray rather than concatenated
+    // onto stale parts).
+    test('B.1-P4: the throw resets buffer and pending state', () => {
+      const re = new FrameReassembler();
+      re.push(maskFrame(Opcode.Text, Buffer.from('in-flight'), Buffer.from([1, 1, 1, 1]), false));
+      expect(() => re.push(Buffer.alloc(MAX_PREHEADER_BYTES + 1, 0x41))).toThrow(WsProtocolError);
+
+      // Pending discarded, checked FIRST: the abandoned fragment's continuation
+      // is a stray and yields nothing. Order matters — a new data frame also
+      // discards the fragment, so probing this after any valid frame would
+      // clear the very state under test and pass whatever the throw did.
+      expect(re.push(maskFrame(Opcode.Continuation, Buffer.from('orphaned'), Buffer.from([3, 3, 3, 3])))).toHaveLength(0);
+
+      // Buffer zeroed: a small legal frame decodes with its real payload.
+      const frames = re.push(maskFrame(Opcode.Text, Buffer.from('{"kind":"ping"}'), Buffer.from([2, 2, 2, 2])));
+      expect(frames).toHaveLength(1);
+      expect(Buffer.from(frames[0]!.payload).toString('utf8')).toBe('{"kind":"ping"}');
+    });
+  });
+
+  describe('M3 B.6 — the opening fragment counts toward the cumulative cap', () => {
+    // Found next door to B.1: the head of a fragmented message was pushed
+    // WITHOUT accountFor, so head(1 MiB, uncharged) + continuation(1 MiB,
+    // charged as 1 MiB) assembled 2 MiB silently — while `decodeFrames` on
+    // the identical wire threw. The cap was 2x loose in the live path.
+    const mask = Buffer.from([5, 5, 5, 5]);
+    const MiB = 1024 * 1024;
+
+    test('B.6-P1: head + continuation exceeding the cap throws', () => {
+      const re = new FrameReassembler();
+      re.push(maskFrame(Opcode.Text, Buffer.alloc(MiB, 0x41), mask, false));
+      // Break: remove the accountFor on the head and this never throws —
+      // the continuation alone charges exactly 1 MiB, at (not over) the cap.
+      expect(() =>
+        re.push(maskFrame(Opcode.Continuation, Buffer.alloc(MiB, 0x42), mask, true)),
+      ).toThrow(WsProtocolError);
+    });
+
+    test('B.6-P2: a legal split still assembles', () => {
+      const re = new FrameReassembler();
+      const half = MiB / 2;
+      re.push(maskFrame(Opcode.Text, Buffer.alloc(half, 0x41), mask, false));
+      const frames = re.push(maskFrame(Opcode.Continuation, Buffer.alloc(half, 0x42), mask, true));
+      expect(frames).toHaveLength(1);
+      expect(frames[0]!.payload.byteLength).toBe(MiB);
+    });
   });
 });
 
