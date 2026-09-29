@@ -7,6 +7,15 @@ import { SessionChip } from './components/session/SessionChip.js';
 import { ContextGauge } from './components/session/ContextGauge.js';
 import { ConfirmPortal } from './components/portals/ConfirmPortal.js';
 import { MicGlyph, MicOffGlyph, BotGlyph, BotOffGlyph } from './components/icons/ControlGlyphs.js';
+import {
+  CreditBanner,
+  INITIAL_CREDIT,
+  creditDismiss,
+  creditNotice,
+  creditVoice,
+  isCreditNotice,
+  type CreditState,
+} from './components/status/CreditBanner.js';
 import { AudioCapture } from './audio/capture.js';
 import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
 import { bargePolicy, micFailureNotice, micPolicy } from './audio/vad.js';
@@ -40,6 +49,9 @@ export function App(): JSX.Element {
   const [botMuted, setBotMuted] = useState(false);
   const [announce, setAnnounce] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
+  // M4 C.3 — the credit banner's own state, separate from `notice` so a credit
+  // frame can NEVER be mistaken for a generic warn (see CreditBanner.tsx).
+  const [credit, setCredit] = useState<CreditState>(INITIAL_CREDIT);
   const [voicePhase, setVoicePhase] = useState<VoicePhase>('idle');
   const [lastTranscript, setLastTranscript] = useState('');
   const [micEnergy, setMicEnergy] = useState(0);
@@ -127,6 +139,14 @@ export function App(): JSX.Element {
           }
         },
         onNotice: (n) => {
+          // C.3: a credit notice takes the dedicated banner INSTEAD of the
+          // generic strip. Both would otherwise show the same Arabic sentence
+          // twice, and the generic strip's dismiss would leave a stale copy —
+          // and the latched overdue arm would be dismissible through it.
+          if (isCreditNotice(n.code)) {
+            setCredit((s) => creditNotice(s, n.code, n.detail));
+            return;
+          }
           setNotice({ code: n.code, detail: n.detail, level: n.level });
           // L22: follow a persona change made in the settings window.
           //
@@ -141,6 +161,12 @@ export function App(): JSX.Element {
         },
         onVoice: (v) => {
           setVoicePhase(v.phase);
+          // C.3: the ONLY auto-clear. A `speaking` phase means the turn reached
+          // TTS without the credit fault reproducing, so the banner stops
+          // claiming voice is dead. A fault that still reproduces re-emits its
+          // notice, which re-arms it. No command is sent and `announce` is not
+          // written — a silent banner is not a status line.
+          setCredit((s) => creditVoice(s, v.phase));
           if (v.transcript !== undefined && v.transcript.length > 0) setLastTranscript(v.transcript);
         },
         // Phase 4: context-window occupancy for the gauge.
@@ -554,6 +580,12 @@ export function App(): JSX.Element {
             انقطع الاتصال بالخادم — تتم إعادة المحاولة تلقائياً…
           </p>
         )}
+
+        {/* C.3 — IN FLOW, above the generic notice strip. Not a modal and not a
+            toast: the window auto-sizes to its content (`useAutoSize`), so an
+            absolutely-positioned overlay would either be clipped by the measured
+            height or push the HUD out of frame. */}
+        <CreditBanner state={credit} onDismiss={() => setCredit((s) => creditDismiss(s))} />
 
         {notice !== null && (
           <p
