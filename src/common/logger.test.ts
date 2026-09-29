@@ -125,6 +125,31 @@ describe('non-string arguments', () => {
     expect(containsSecret(err)).toBe(true);
   });
 
+  test('a JSON value with an ESCAPED quote is redacted whole, not up to the escape', () => {
+    // The regression this pins, measured before the fix:
+    //   redactString('{"password":"ab\\"cdefgh1234"}')
+    //     -> '{"password":"[REDACTED]"cdefgh1234"}'      tail intact
+    // `"[^"]*"` stops at the first quote INCLUDING an escaped one, so a value
+    // containing `\"` was cut short and everything after it survived. Any
+    // provider error that echoes a request body reaches this, and the artifact
+    // most likely to be pasted into a public ticket is built from these lines.
+    // Synthetic material only.
+    const line = '{"password":"ab\\"cdefgh1234"}';
+    const out = redactString(line);
+    // BOTH halves matter. The "no marker at all" assert passes on a fix that
+    // simply declined to redact; the "no tail" assert is the one that fails on
+    // the half-redaction this replaces.
+    expect(out).not.toContain('cdefgh1234');
+    expect(out).toContain(REDACTION_MARKER);
+    expect(containsSecret(line), 'the scanner shares the pattern, so it shared the bug').toBe(true);
+    expect(redactString(line)).not.toContain('\\"');
+
+    // The same shape single-quoted, and a value with a trailing backslash —
+    // both reach the alternation this changed.
+    expect(redactString("{'token':'ab\\'cdefgh1234'}")).not.toContain('cdefgh1234');
+    expect(redactString('{"apiKey":"trailing\\\\"}')).not.toContain('trailing');
+  });
+
   test('a self-referencing object does not throw or hang', () => {
     const cyclic: Record<string, unknown> = { apiKey: synthetic('gsk_') };
     cyclic['self'] = cyclic;

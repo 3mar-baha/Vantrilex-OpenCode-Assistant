@@ -78,9 +78,26 @@ export const GENERIC_SK_EXCLUSIONS: readonly string[] = ['or-v1-', 'fish-'];
  * object writes `"apiKey":"…"`, where a closing quote sits between the name and
  * the colon. Without it the pattern misses every JSON-shaped value — which is
  * exactly the shape this module is asked to handle.
+ *
+ * The quoted-value branch is `"(?:[^"\\]|\\.)*"` and NOT `"[^"]*"`, and that
+ * distinction is a security fix, not a style preference. `[^"]*` stops at the
+ * first quote, including one that is ESCAPED, so a JSON value containing an
+ * escaped quote was redacted only up to that point and its tail survived
+ * whole. Measured, before this change:
+ *
+ *   redactString('{"password":"ab\\"cdefgh1234"}')
+ *     -> '{"password":"[REDACTED]"cdefgh1234"}'      <-- tail intact
+ *
+ * That is reachable from any provider error that echoes a request body, and
+ * M5 hit it while building the diagnostic bundle — which is precisely the
+ * artifact designed to be pasted into a public ticket. The `\\.` alternative
+ * consumes an escape plus its payload as one unit, so the value is matched to
+ * its true closing quote. Pinned by the escaped-quote test in
+ * `logger.test.ts`; `containsSecret` shares this pattern and therefore shares
+ * the fix.
  */
 const SECRET_ASSIGNMENT =
-  /\b(password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|auth)\b(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;)}\]]+)/gi;
+  /\b(password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|auth)\b(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;)}\]]+)/gi;
 
 /** Depth and breadth bounds. Reaching one fails closed instead of recursing forever. */
 const MAX_DEPTH = 8;
