@@ -512,6 +512,15 @@ impl Supervisor {
 }
 
 fn runtime_dir() -> Option<PathBuf> {
+    // VOICE_RUNTIME_DIR overrides the whole directory. This exists because the
+    // credential tests need a scratch path: without it, `ensure_machine_key` and
+    // its siblings resolve under the operator's real USERPROFILE, where a test
+    // run would rewrite the live install's key and make the vault undecryptable.
+    if let Some(explicit) = std::env::var_os("VOICE_RUNTIME_DIR") {
+        if !explicit.is_empty() {
+            return Some(PathBuf::from(explicit));
+        }
+    }
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
     let mut path = PathBuf::from(home);
     path.push(".opencode-voice-runtime");
@@ -819,6 +828,101 @@ fn restrict_to_owner(path: &Path) -> Result<(), String> {
 /// When this process generates the file, it is created with a protected
 /// owner-only DACL (see `restrict_to_owner`) — not Unix `0600`, which is a
 /// no-op on Windows. A pre-existing file is read as-is and not rewritten.
+/// Adopt `machine.key`: the 32-byte root secret every vault cipher is derived
+/// from. Returned as lowercase hex so the daemon can take it from an env var
+/// rather than reading the file itself.
+///
+/// WHY THIS LIVES HERE AND NOT IN NODE. The daemon used to create this file
+/// with `{ mode: 0o600 }`, which on Windows is `SetFileAttributes`: it toggles
+/// READONLY, returns Ok, and changes no ACL. The obvious repair from Node was
+/// `icacls /inheritance:r /grant:r <user>:(F)`, and it was implemented, tested
+/// and REMOVED: it returns "Successfully processed 1 files" and then produces a
+/// file the named account cannot read, because `icacls` grants a NAME and cannot
+/// name the owner SID. A fix that locks the owner out of the key file would
+/// strand every saved provider key, which is strictly worse than the inherited
+/// ACL it claimed to remove. This works because `restrict_to_owner` calls
+/// `SetNamedSecurityInfoW` with a NULL `oldacl`, preserving the owner SID by
+/// construction - a primitive Node cannot reach without a native addon.
+///
+/// ADOPTION, NOT JUST CREATION. A pre-existing file is re-locked, because a file
+/// written by an older install is exactly the one whose protection was a no-op.
+/// That is the only way the gap actually closes for existing users, and the
+/// test exercises the adopt path in isolation for the same reason: locking the
+/// creation path would otherwise mask a broken adopt branch.
+///
+/// Fail-closed: a wrong-length file is removed and reported, and a DACL failure
+/// deletes the file, because a weakly-permissioned key would be adopted on every
+/// later launch and the problem would never surface again.
+fn ensure_machine_key() -> Result<String, String> {
+    const MACHINE_KEY_BYTES: usize = 32;
+    let dir = runtime_dir().ok_or_else(|| "no home directory".to_string())?;
+    let path = dir.join("machine.key");
+    fs::create_dir_all(&dir).map_err(|e| format!("runtime dir: {e}"))?;
+
+    if let Ok(existing) = fs::read(&path) {
+        if existing.len() == MACHINE_KEY_BYTES {
+            if let Err(e) = restrict_to_owner(&path) {
+                let _ = fs::remove_file(&path);
+                return Err(format!("machine.key: {e}"));
+            }
+            return Ok(to_hex(&existing));
+        }
+        // Wrong length: it cannot be a key this install generated, and adopting
+        // it would make every vault undecryptable in a way that reads as
+        // corruption rather than as a bad file.
+        let _ = fs::remove_file(&path);
+        return Err(format!(
+            "machine.key: {} bytes, expected {MACHINE_KEY_BYTES} - removed; a new key will be generated, and any existing vault is now unreadable",
+            existing.len()
+        ));
+    }
+
+    let key = secure_random_bytes::<MACHINE_KEY_BYTES>()?;
+    fs::write(&path, &key).map_err(|e| format!("machine.key: {e}"))?;
+    if let Err(e) = restrict_to_owner(&path) {
+        let _ = fs::remove_file(&path);
+        return Err(format!("machine.key: {e}"));
+    }
+    Ok(to_hex(&key))
+}
+
+/// Lowercase hex, for handing bytes to a child process through an env var.
+fn to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// Re-apply the owner-only DACL to the vault, after Node rewrote it.
+///
+/// `resolve_vault_dir` locks `keyring.dat` down once at startup, and that is
+/// not enough: the Node daemon rewrites the whole file every time the user
+/// saves keys, and `Keyring.save` renames a temp file over the original. A
+/// rename REPLACES the file, so the new one carries whatever ACL its temp name
+/// had - the inherited profile ACL. The startup lock is silently undone by the
+/// first save, which is why this exists.
+#[tauri::command]
+fn restrict_vault_file() -> Result<bool, String> {
+    #[cfg(not(windows))]
+    return Ok(false);
+    #[cfg(windows)]
+    {
+        let keyring = resolve_vault_dir(None).join("keyring.dat");
+        if !keyring.exists() {
+            return Ok(false);
+        }
+        // Fail-closed and delete, like write_protected_secret.
+        if let Err(e) = restrict_to_owner(&keyring) {
+            let _ = fs::remove_file(&keyring);
+            return Err(format!("keyring.dat: {e}"));
+        }
+        log_line("vault: keyring.dat DACL re-applied after save");
+        Ok(true)
+    }
+}
+
 fn ensure_ipc_token() -> Result<String, String> {
     if let Ok(explicit) = std::env::var("VOICE_RUNTIME_IPC_TOKEN") {
         if !explicit.trim().is_empty() {
@@ -1384,6 +1488,11 @@ fn ensure_opencode(app: &tauri::AppHandle) -> Result<String, String> {
 /// user staring at a disconnected HUD with a green light, and spawning a second
 /// daemon there is worse — it can only fail to bind.
 fn ensure_daemon(app: &tauri::AppHandle, ipc_token: &str) -> Result<String, String> {
+    // Adopted next to the owner key because the whole point is that this file
+    // gets a real DACL rather than a Unix mode Windows ignores. Env var, not a
+    // path: the daemon must never re-implement the ACL, and a path would invite
+    // it to open the file directly.
+    let machine_key = ensure_machine_key()?;
     // Resolved before the port probe because the probe needs it to recognise
     // our own daemon, and a key that cannot be created must not be a silent
     // downgrade to "adopt anything".
@@ -1426,6 +1535,9 @@ fn ensure_daemon(app: &tauri::AppHandle, ipc_token: &str) -> Result<String, Stri
         // C2: the identity the daemon republishes so a LATER launch can tell
         // this daemon apart from anything else holding 4097. Never logged.
         .env("VOXAURA_OWNER_KEY", &owner_key)
+    // Hex rather than raw bytes: 32 raw bytes in an env var is awkward to log
+    // safely, and hex stays readable in a support diff.
+    .env("VOXAURA_MACHINE_KEY", &machine_key)
         .env("VOXAURA_VAULT_DIR", resolve_vault_dir(Some(&entry)));
     // D12: capture BOTH streams. The failure mode this replaces was a silently
     // swallowed File::create error degrading to Stdio::null(), which left a
@@ -2645,6 +2757,192 @@ mod s2_secret_tests {
         );
     }
 
+    /// Serialises the tests that mutate `VOICE_RUNTIME_DIR`.
+    ///
+    /// `std::env::set_var` is process-wide and the harness runs these in parallel
+    /// threads, so two tests touching the same variable interleave. The symptom
+    /// is not an obvious race: one test wipes the directory the other just wrote
+    /// and the failure lands as an unrelated-looking assertion. Both machine-key
+    /// tests passed under `--test-threads=1` and failed in a normal run, which is
+    /// the signature of exactly this. The fix is the lock, not a serial-run flag.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Is `path`'s DACL marked PROTECTED (SE_DACL_PROTECTED), i.e. unable to
+    /// inherit from the parent? Read through `GetFileSecurityW`, the same read
+    /// `restrict_to_owner` performs, so the test observes the real descriptor
+    /// rather than trusting the writer's return value.
+    #[cfg(windows)]
+    fn dacl_is_protected(path: &Path) -> bool {
+        use windows_sys::Win32::Security::{
+            GetFileSecurityW, PSECURITY_DESCRIPTOR, SECURITY_DESCRIPTOR,
+        };
+        // `requestedinformation` is a plain u32 in windows-sys 0.59, and
+        // PSECURITY_DESCRIPTOR is *mut c_void, so both are used in their real
+        // form rather than as imported constants that do not exist here.
+        const SE_FILE_OBJECT: u32 = 1;
+        const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+        let wide: Vec<u16> = path
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut storage = vec![0u8; 1024];
+        let mut needed: u32 = 0;
+        let ok = unsafe {
+            GetFileSecurityW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT | DACL_SECURITY_INFORMATION,
+                storage.as_mut_ptr() as PSECURITY_DESCRIPTOR,
+                1024,
+                &mut needed,
+            )
+        } != 0;
+        if !ok {
+            return false;
+        }
+        unsafe {
+            let sd = storage.as_mut_ptr() as *mut SECURITY_DESCRIPTOR;
+            (*sd).Control & 0x1000 != 0
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn dacl_is_protected(_path: &Path) -> bool {
+        true
+    }
+
+    /// Put `path` back on an INHERITABLE DACL: the state a file written by an
+    /// older install is in, and the precondition adoption has to repair. Shells
+    /// out to `icacls /reset`, which means exactly "inherit from the parent
+    /// again" and is the documented inverse of what `restrict_to_owner` does.
+    ///
+    /// This is a test fixture restoring the PRE-FIX state, which is the only way
+    /// to prove the fix repairs it.
+    #[cfg(windows)]
+    fn icacls_reset(path: &Path) {
+        let status = std::process::Command::new("icacls")
+            .arg(path)
+            .args(["/reset"])
+            .output();
+        assert!(
+            status.is_ok_and(|o| o.status.success()),
+            "icacls /reset failed; the adoption precondition cannot be staged"
+        );
+    }
+
+    #[cfg(not(windows))]
+    fn icacls_reset(_path: &Path) {}
+
+    /// `machine.key` is ADOPTED, not recreated, stays readable by its owner, and
+    /// has its DACL re-applied even when the file already existed.
+    #[test]
+    fn the_machine_key_is_adopted_not_recreated() {
+        let _guard = env_lock();
+        let dir = std::env::temp_dir().join("voxaura-mkey-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("machine.key");
+
+        let restore = std::env::var("VOICE_RUNTIME_DIR").ok();
+        std::env::set_var("VOICE_RUNTIME_DIR", &dir);
+
+        let first = ensure_machine_key().expect("first key");
+        let second = ensure_machine_key().expect("adopted key");
+        assert_eq!(first, second, "the key must be stable across calls");
+        assert_eq!(first.len(), 64, "32 bytes rendered as lowercase hex");
+        assert!(
+            first.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "the key must be lowercase hex: {first}"
+        );
+        assert_eq!(fs::read(&path).expect("reread").len(), 32);
+        assert!(dacl_is_protected(&path), "a freshly created key must be locked down");
+
+        // THE ADOPTION PATH, ISOLATED. Everything above passes even if
+        // `restrict_to_owner` is deleted from the ADOPT branch, because the first
+        // call CREATED the file and the creation branch still locks it down. That
+        // is the real shape of the gap - a file written by an older install - so
+        // it is exercised on its own: strip the DACL, then adopt and require the
+        // helper to restore it. Break-testing reported this guard as MISSED while
+        // the test was genuinely green until the two paths were separated.
+        icacls_reset(&path);
+        assert!(
+            !dacl_is_protected(&path),
+            "precondition failed: the DACL was expected to be inheritable before adoption"
+        );
+        assert_eq!(ensure_machine_key().expect("adopt after reset"), first);
+        assert!(
+            dacl_is_protected(&path),
+            "adopting an existing key must RE-APPLY the owner-only DACL, not assume it"
+        );
+
+        // Readability after the lockdown. This is the assertion that killed the
+        // icacls approach, which reported success and produced a file its own
+        // named grantee could not open.
+        assert_eq!(
+            fs::read(&path).expect("owner must still read its own key").len(),
+            32,
+            "the DACL locked the owner out - that is the failure that removed icacls"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        match restore {
+            Some(v) => std::env::set_var("VOICE_RUNTIME_DIR", v),
+            None => std::env::remove_var("VOICE_RUNTIME_DIR"),
+        }
+    }
+
+    /// A wrong-length key must be refused and removed, never adopted: it cannot
+    /// be a key this install generated, and adopting it would make every vault
+    /// undecryptable in a way that reads as corruption.
+    #[test]
+    fn a_wrong_length_machine_key_is_refused_and_removed() {
+        let _guard = env_lock();
+        let dir = std::env::temp_dir().join("voxaura-mkey-bad");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("machine.key");
+        fs::write(&path, b"too short").expect("seed");
+
+        let restore = std::env::var("VOICE_RUNTIME_DIR").ok();
+        std::env::set_var("VOICE_RUNTIME_DIR", &dir);
+        let err = ensure_machine_key().expect_err("must refuse");
+        assert!(
+            err.contains("expected 32"),
+            "the error must name the real problem, not fail generically: {err}"
+        );
+        assert!(!path.exists(), "a wrong-length key must not be left on disk");
+
+        let _ = fs::remove_dir_all(&dir);
+        match restore {
+            Some(v) => std::env::set_var("VOICE_RUNTIME_DIR", v),
+            None => std::env::remove_var("VOICE_RUNTIME_DIR"),
+        }
+    }
+
+    /// The machine key must come from the CSPRNG. This is the same defect class
+    /// as the original `ipc.token`, which shipped with an xorshift seeded by
+    /// `nanos ^ pid` - and it now guards the ROOT of every vault cipher rather
+    /// than one credential among several.
+    #[test]
+    fn the_machine_key_is_csprng_not_a_seeded_prng() {
+        let body = include_str!("main.rs");
+        let start = body.find("fn ensure_machine_key").expect("fn exists");
+        let section = &body[start..];
+        let end = section.find("\nfn ").map(|i| i + 1).unwrap_or(section.len());
+        let f = &section[..end];
+        assert!(
+            f.contains("secure_random_bytes"),
+            "machine.key must come from the CSPRNG, not a seeded PRNG"
+        );
+        assert!(
+            !f.contains("nanos") && !f.contains("SystemTime"),
+            "machine.key must not be seeded from the clock: a vault root derived that way is guessable"
+        );
+    }
+
     /// The write path must produce a file, and must be a real file with content.
     #[test]
     fn write_protected_secret_creates_a_readable_file() {
@@ -2967,7 +3265,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ipc_token,
             ensure_all_services,
-            shutdown_all_services
+            shutdown_all_services,
+            restrict_vault_file
         ])
         .setup(|app| {
             // Write the per-install IPC token SYNCHRONOUSLY, before the webview

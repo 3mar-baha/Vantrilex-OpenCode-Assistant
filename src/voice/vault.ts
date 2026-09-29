@@ -26,20 +26,44 @@ interface PoolSecrets {
 // per load would drown the log it exists to produce.
 let warnedAboutAcl = false;
 
+/**
+ * The 32-byte root secret every vault cipher is derived from.
+ *
+ * SUPPLIED BY THE RUST SUPERVISOR, not created here. The supervisor already owns
+ * `write_protected_secret` and `restrict_to_owner`, and `SetNamedSecurityInfoW`
+ * is the only way to express an owner-only DACL that does not lock the owner
+ * out of the file — `icacls` was implemented here, measured, and removed for
+ * exactly that reason. The supervisor passes the key as hex in
+ * `VOXAURA_MACHINE_KEY`.
+ *
+ * The Node fallback is NOT equivalent and does not pretend to be: it creates the
+ * file with a Unix mode Windows ignores, so a daemon run outside the supervisor
+ * produces a key with no DACL. That is reported once rather than shipped as a
+ * silent no-op, because the difference decides whether a profile's other users
+ * can read the vault.
+ */
 function machineKey(): Buffer {
+  const supplied = process.env['VOXAURA_MACHINE_KEY'];
+  if (supplied !== undefined && supplied !== '') {
+    const key = Buffer.from(supplied, 'hex');
+    if (key.byteLength === 32) return key;
+    // A wrong-length key would make every pool fail to decrypt with a checksum
+    // error, which reads as vault corruption rather than a bad env var. Say what
+    // is actually wrong instead.
+    throw new OrchestratorError(
+      'VAULT_CORRUPT',
+      false,
+      `VOXAURA_MACHINE_KEY is ${key.byteLength} bytes, expected 32`,
+    );
+  }
+
   const keyPath = join(homedir(), '.opencode-voice-runtime', 'machine.key');
-  // The DACL on this file is NOT applied, and the reason is measured rather than
-  // assumed: `icacls` cannot express owner-only from Node — it grants a NAME,
-  // and the resulting file is unreadable even by that account, so a "fix" built
-  // on it would strand every saved provider key. `win-acl.ts` carries the
-  // reproduction. The `{ mode: 0o600 }` below is correct on POSIX and inert on
-  // Windows; that inertness is the whole of the remaining gap, and it is
-  // reported rather than papered over.
   const acl = ownerOnlyAclAvailable();
   if (!acl.supported && !warnedAboutAcl) {
     warnedAboutAcl = true;
     process.emitWarning(
-      `machine.key has no owner-only DACL on this platform — ${acl.reason}`,
+      `machine.key was created by the daemon with no owner-only DACL — ${acl.reason}. ` +
+        'Run the app through the supervisor (or voxaura.exe) to have the Rust side create it properly.',
       'VoxauraVault',
     );
   }
