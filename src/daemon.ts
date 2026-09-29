@@ -13,7 +13,8 @@ import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, INTAKE_MODEL, type ChatFn, type IntakeAck } from './orchestrator/coordinator.js';
 import { TaskQueue, type TaskResult } from './orchestrator/task-queue.js';
 import { DeliveryBuffer, type DeliveryItem } from './orchestrator/delivery.js';
-import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
+import { createFishTransport } from './voice/fish-ws.js';
+import { isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { FishCreditError } from './voice/tts.js';
 import { TtsCreditMonitor } from './voice/tts-credit.js';
 import { openRouterChat } from './voice/brain.js';
@@ -822,7 +823,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // — on the next rebuild and at stop. Closure-scoped single reference, not
       // a collection: there is only ever one pipeline ring.
       liveRing = ring;
-      const fish = new FishHttpTransport(ring);
+      // M2 Pattern 6b rollback: `TTS_TRANSPORT` unset (or anything but the exact
+      // string "ws") builds `FishHttpTransport`, which is the measured path. The
+      // factory lives in fish-ws.ts because tts.ts cannot import it back
+      // without a cycle.
+      const fish = createFishTransport(ring);
         const chat: ChatFn = async (model, system, user, options) => {
           return withKey(ring, 'openrouter', (key) =>
             openRouterChat(keyMaterial(key), model, system, user, fetch, {

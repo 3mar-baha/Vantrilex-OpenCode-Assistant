@@ -12,7 +12,8 @@ import { Keyring, withKey } from './voice/keyring.js';
 import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
 import { OpenRouterBrainClient, requiresConfirmation } from './voice/brain.js';
 import { ensureVault, resolveVaultRoot } from './memory/vault.js';
-import { FishHttpTransport, TtsEngine, FileAudioOut } from './voice/tts.js';
+import { createFishTransport } from './voice/fish-ws.js';
+import { TtsEngine, FileAudioOut } from './voice/tts.js';
 import { loadConfig as loadFullConfig } from './common/config.js';
 import { assertParity, buildIndex, verifyKnowledge } from './knowledge/index.js';
 
@@ -83,7 +84,9 @@ async function liveLoop(): Promise<number> {
 
       // 1. Fish TTS of the Ammani test phrase (uses keyring internally).
       const cfg = loadFullConfig();
-      const transport = new FishHttpTransport(ring);
+      // `TTS_TRANSPORT=ws` measures the live WS transport against the HTTP one;
+      // unset it and this is FishHttpTransport again.
+      const transport = createFishTransport(ring);
       const out = new FileAudioOut();
       const engine = new TtsEngine(cfg.cache, transport, out);
       const ttsStart = Date.now();
