@@ -568,7 +568,14 @@ export class FishHttpTransport implements FishTransport {
         this.fetchImpl,
       );
       if (!res.ok || res.body === null) {
-        this.keyring.release(key, false, res.status);
+        // A.3: 402 and 429 are CREDIT faults, and `release` advances the pool on
+        // 429. Releasing before branching — which is what this used to do —
+        // therefore retired a perfectly good key every time Fish rate-limited
+        // us, and rotating changes nothing about a rate limit. It is called
+        // `credit` rather than `isCreditFault` because the latter name is
+        // already taken by the getter on FishCreditError.
+        const credit = res.status === 402 || res.status === 429;
+        this.keyring.release(key, credit, res.status);
         const message = fishErrorMessage(res.status, await fishErrorDetail(res));
         // The credit/rate-limit interceptor. 402 and 429 are the two statuses whose
         // fix is to top up rather than rotate a key, and until now they were
@@ -576,7 +583,7 @@ export class FishHttpTransport implements FishTransport {
         // Error, read prose, and the user saw voice go quiet with no instruction.
         // Throwing a typed error here is what lets the caller say WHY and WHAT TO
         // DO instead of failing silently.
-        if (res.status === 402 || res.status === 429) {
+        if (credit) {
           throw new FishCreditError(res.status, message);
         }
         throw new Error(message);

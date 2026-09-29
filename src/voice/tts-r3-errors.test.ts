@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'vitest';
-import { fishErrorMessage, fishErrorDetail, fishHeaders, fishRequestBody, TTS_MODEL } from './tts.js';
+import {
+  fishErrorMessage,
+  fishErrorDetail,
+  fishHeaders,
+  fishRequestBody,
+  TTS_MODEL,
+  FishCreditError,
+  FishHttpTransport,
+} from './tts.js';
+import { Keyring } from './keyring.js';
 
 // R3: every Fish failure status used to collapse to `TTS failed: HTTP ${status}`.
 // That is a restatement, not a diagnostic, and it hid the single most expensive
@@ -119,5 +128,103 @@ describe('latency is tuned and the free tier is pinned (R2, R7)', () => {
     expect(b['chunk_length']).toBeLessThanOrEqual(300);
     expect(b['min_chunk_length']).toBeGreaterThanOrEqual(0);
     expect(b['min_chunk_length']).toBeLessThanOrEqual(100);
+  });
+});
+
+/**
+ * A.3: a 429 is a CREDIT fault, not a credential fault, and the two have
+ * opposite fixes. `release` advanced the pool on 429/401/403, and
+ * `synthesizeStream` released BEFORE branching on the status — so a rate limit
+ * burned a perfectly good key and changed nothing, ten times over.
+ *
+ * 401/403 are asserted here too, on purpose. A fix that stops rotating on 429
+ * by stopping rotating on auth faults is an overcorrection, and it would be
+ * invisible without these: the 429 test passes either way.
+ */
+describe('a credit fault does not burn a key, an auth fault still does (A.3)', () => {
+  // A bodyless failure response, which is what a real provider rejection
+  // usually looks like to us: the status is the whole signal.
+  const failing = (status: number): typeof fetch =>
+    (async () => ({ ok: false, status, body: null })) as unknown as typeof fetch;
+
+  // All three pools must be non-empty: `fromKeys` is fail-closed per pool
+  // (keyring.ts:52), and only `fish` is exercised here.
+  const ring = (): Keyring => Keyring.fromKeys({ groq: ['g1'], fish: ['k1', 'k2'], openrouter: ['o1'] });
+
+  test('a null body is handled before any body is read (precondition)', async () => {
+    // Not assumed: `fishErrorDetail` must not touch `.json()` on these.
+    for (const status of [401, 402, 403, 429, 500]) {
+      expect(await fishErrorDetail(failing(status)('https://example.invalid/tts') as unknown as Response), String(status)).toBeNull();
+    }
+  });
+
+  test('429 throws FishCreditError and leaves the pool untouched', async () => {
+    const keys = ring();
+    try {
+      const t = new FishHttpTransport(keys, 'https://example.invalid/tts', { fetchImpl: failing(429) });
+      const err = await t.synthesize('مرحبا', 'ref-1').then(() => null, (e: unknown) => e);
+
+      expect(err).toBeInstanceOf(FishCreditError);
+      expect((err as FishCreditError).status).toBe(429);
+      expect((err as FishCreditError).isCreditFault).toBe(true);
+      // The defect: the key was good and is now retired.
+      expect(keys.rolloverLog).toHaveLength(0);
+      const next = keys.acquire('fish');
+      expect(next.keyId).toBe('K1');
+      keys.release(next, true);
+    } finally {
+      keys.destroy();
+    }
+  });
+
+  test('401 and 403 DO still rotate, with reason auth-failed (anti-overcorrection)', async () => {
+    for (const status of [401, 403]) {
+      const keys = ring();
+      try {
+        const t = new FishHttpTransport(keys, 'https://example.invalid/tts', { fetchImpl: failing(status) });
+        const err = await t.synthesize('مرحبا', 'ref-1').then(() => null, (e: unknown) => e);
+
+        // A rejected credential is exactly the case the pool exists to handle.
+        expect(err, String(status)).not.toBeInstanceOf(FishCreditError);
+        expect(keys.rolloverLog).toHaveLength(1);
+        expect(keys.rolloverLog[0]?.reason).toBe('auth-failed');
+        const next = keys.acquire('fish');
+        expect(next.keyId, String(status)).toBe('K2');
+        keys.release(next, true);
+      } finally {
+        keys.destroy();
+      }
+    }
+  });
+
+  test('402 does not rotate (pinned: unchanged behaviour, not an accident)', async () => {
+    const keys = ring();
+    try {
+      const t = new FishHttpTransport(keys, 'https://example.invalid/tts', { fetchImpl: failing(402) });
+      const err = await t.synthesize('مرحبا', 'ref-1').then(() => null, (e: unknown) => e);
+
+      expect(err).toBeInstanceOf(FishCreditError);
+      expect((err as FishCreditError).status).toBe(402);
+      expect(keys.rolloverLog).toHaveLength(0);
+      keys.release(keys.acquire('fish'), true);
+    } finally {
+      keys.destroy();
+    }
+  });
+
+  test('500 does not rotate and is not typed as a credit fault', async () => {
+    const keys = ring();
+    try {
+      const t = new FishHttpTransport(keys, 'https://example.invalid/tts', { fetchImpl: failing(500) });
+      const err = await t.synthesize('مرحبا', 'ref-1').then(() => null, (e: unknown) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(FishCreditError);
+      // A provider fault says nothing about the key, so the key stays in play.
+      expect(keys.rolloverLog).toHaveLength(0);
+      keys.release(keys.acquire('fish'), true);
+    } finally {
+      keys.destroy();
+    }
   });
 });
