@@ -926,9 +926,17 @@ half still undone — see `personas/WIRING.md` §6 (re-resolved).
 
 ### Carried forward from this checkpoint
 
-- Triad A.3–A.7 (429 rotation, 402 retry, credit-clock reset, key lifetime,
-  monitor states) · B.1–B.3 (pre-header buffer, replay buffer, queue watermarks)
-  · C.2/C.3/C.5 (shutdown control, credit banner, turn receipts).
+- M1 CLOSED (A.3, A.4, A.5, A.6, A.2, A.1 — twelve commits): root 722,
+  desktop 152/25, e2e 20/14, cargo 52, docs:verify 31/31.
+- M2-6c landed: `onUtterance` drains `synthesizeStream` per chunk instead of
+  awaiting the whole sentence (first audible frame ≈ Fish TTFB 426–556 ms,
+  not sentence-end). Behaviour change: barge-in now truncates mid-sentence;
+  the shell FIFO plays the partial MP3 out (no flush signal). Credit path
+  intact (`FishCreditError` on first `next()`); per-chunk `isCurrent`;
+  downlink still ≤32 KiB + 3 B per frame via `splitAudio`.
+- Triad A.7 (monitor states), A.8–A.14 · B.1–B.3 (pre-header buffer, replay
+  buffer, queue watermarks) · C.2/C.3/C.5 (shutdown control, credit banner,
+  turn receipts).
 - Fish publishes no API-tier renewal date — credit banner triggers on observed
   402/429 only, never a countdown (the old "expires 2026-11-30" row above was a
   site-quota figure, not an API-tier date; do not plan against it).
