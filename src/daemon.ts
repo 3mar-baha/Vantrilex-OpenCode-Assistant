@@ -858,9 +858,26 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
             try {
               for (const sentence of sentences) {
                 if (!speechGate.isCurrent(gen)) return;
-                const mp3 = await fish.synthesize(sentence, voiceId);
-                if (!speechGate.isCurrent(gen)) return;
-                ui.broadcastAudio(mp3);
+                // M2-6c: DRAIN, do not await. `fish.synthesize` concatenated the
+                // whole sentence before a single byte reached the shell, so the
+                // measured 426-556 ms Fish time-to-first-byte was spent in
+                // silence and then re-spent as a stall between sentences. The
+                // stream hands each chunk over as Fish emits it.
+                //
+                // BOUND: `broadcastAudio` still runs every payload through
+                // `splitAudio` (ipc/audio.ts), so a downlink frame is at most
+                // MAX_AUDIO_CHUNK (32 KiB) + a 3-byte header no matter how large
+                // a Fish chunk is. That per-call frame cap is the load-bearing
+                // claim (pinned below); MAX_AUDIO_BYTES (64 KiB) is the inbound
+                // reassembly cap and the downlink was never subject to it.
+                // Pinned by `daemon.test.ts > M2-6c`.
+                for await (const chunk of fish.synthesizeStream(sentence, voiceId)) {
+                  // Per CHUNK, not per sentence: a barge-in now lands within one
+                  // chunk instead of one whole sentence. Returning here closes
+                  // the generator, so the transport's `finally` cancels the reader.
+                  if (!speechGate.isCurrent(gen)) return;
+                  ui.broadcastAudio(chunk);
+                }
               }
               record({ subsystem: 'TTS', status: 'OK', latencyMs: Date.now() - t0 });
             } catch (err) {

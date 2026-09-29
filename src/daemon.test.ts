@@ -12,6 +12,7 @@ import {
   ipcTokenPath,
   parseDaemonOwnerMarker,
 } from './daemon.js';
+import { decodeAudioChunk, MAX_AUDIO_CHUNK } from './ipc/audio.js';
 import { decodeFrames, maskFrame, Opcode } from './ipc/protocol.js';
 import { FishCreditError } from './voice/tts.js';
 import { readKeyPools, writeKeyPools } from './voice/key-store.js';
@@ -22,11 +23,25 @@ import { Keyring } from './voice/keyring.js';
 // Groq (hermetic, and no quota). It rejects instantly, so a test can wait for
 // the daemon's `stt-failed` notice as the deterministic signal that the pipeline
 // ring has already ACQUIRED a key — which is the state A.6 is about.
+//
+// MUTABLE, and the default is still the rejection every other test here depends
+// on. A turn that must reach `onUtterance` needs a real transcript, and the only
+// other way to get one is a live Whisper call. The object is read inside
+// `create` (at call time), never in the factory body, so hoisting cannot catch
+// it in TDZ.
+const sttState: { text: string | null } = { text: null };
+
 vi.mock('groq-sdk', () => ({
   default: class StubGroq {
     readonly audio = {
       transcriptions: {
-        create: (): Promise<never> => Promise.reject(new Error('stubbed STT provider')),
+        create: (): Promise<{ text: string; segments: unknown[] }> =>
+          sttState.text === null
+            ? Promise.reject(new Error('stubbed STT provider'))
+            : // `segments: []` is not a shortcut: `meanNoSpeechProb` returns
+              // undefined for an empty array, so the window is NOT dropped by the
+              // `no_speech_prob > 0.6` gate and the turn really reaches think().
+              Promise.resolve({ text: sttState.text, segments: [] }),
       },
     };
   },
@@ -650,6 +665,255 @@ describe('C2: the daemon publishes who owns the IPC port', () => {
       else process.env[DAEMON_OWNER_KEY_ENV] = previous;
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// M2-6c: the Fish response is DRAINED, not awaited whole.
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve: (v: T) => void;
+}
+function deferred<T>(): Deferred<T> {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+interface AudioShell {
+  /** Resolves once the 101 completed; `frames` is meaningless before that. */
+  readonly ready: Promise<void>;
+  /** One entry per broadcast downlink frame, still wire-encoded. */
+  readonly frames: Buffer[];
+  readonly failures: string[];
+  send(payload: Buffer): void;
+  close(): void;
+}
+
+/**
+ * A real shell socket, used as BOTH directions: it uplinks one loud PCM window
+ * and records every downlink audio frame the daemon broadcasts.
+ *
+ * End to end on purpose. `broadcastAudio` is private to `startDaemon` and
+ * `onUtterance` is a closure inside it, so the only place the drain is
+ * observable from outside the process is the wire itself — a test that injected
+ * a fake synthesizer would be asserting against its own fake.
+ */
+function openAudioShell(port: number, token: string): AudioShell {
+  const frames: Buffer[] = [];
+  const failures: string[] = [];
+  let acc = Buffer.alloc(0);
+  let head = Buffer.alloc(0);
+  let upgraded = false;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((r) => {
+    resolveReady = r;
+  });
+  const sock = createConnection({ host: '127.0.0.1', port }, () => {
+    sock.write(
+      Buffer.from(
+        [
+          'GET /v1/ui HTTP/1.1',
+          'Host: 127.0.0.1',
+          'Upgrade: websocket',
+          'Connection: Upgrade',
+          'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+          'Sec-WebSocket-Version: 13',
+          `Sec-WebSocket-Protocol: voice-ui.v1, ${token}`,
+          '',
+          '',
+        ].join('\r\n'),
+        'utf8',
+      ),
+    );
+  });
+  sock.on('error', (err) => failures.push(err.message));
+  sock.on('data', (chunk: Buffer) => {
+    let rest = chunk;
+    if (!upgraded) {
+      head = Buffer.concat([head, chunk]);
+      const idx = head.indexOf('\r\n\r\n');
+      if (idx === -1) return;
+      upgraded = true;
+      resolveReady();
+      rest = head.subarray(idx + 4);
+    }
+    acc = Buffer.concat([acc, rest]);
+    const { frames: decoded, remaining } = decodeFrames(acc);
+    acc = Buffer.from(remaining);
+    for (const f of decoded) if (f.opcode === Opcode.Binary) frames.push(Buffer.from(f.payload));
+  });
+  return {
+    ready,
+    frames,
+    failures,
+    send: (payload) => sock.write(maskFrame(Opcode.Binary, payload, Buffer.from([1, 2, 3, 4]))),
+    close: () => sock.destroy(),
+  };
+}
+
+describe('M2-6c: the Fish response is drained, not awaited whole', () => {
+  // The RMS fallback, not Silero: `models/*.onnx` is gitignored and ships in no
+  // build, and a developer checkout that HAS one would correctly reject a
+  // full-scale DC tone as non-speech — gating the window and silently making
+  // this suite assert nothing.
+  const PREV_VAD = process.env['VAD_MODEL_PATH'];
+  beforeEach(() => {
+    process.env['VAD_MODEL_PATH'] = 'models/m2-6c-absent-vad.onnx';
+    sttState.text = null;
+  });
+  afterEach(() => {
+    sttState.text = null;
+    // Peer review: unstub here, not in each test's finally — a throw inside
+    // boot() skips the finally and leaks the fetch stub into later tests.
+    vi.unstubAllGlobals();
+    if (PREV_VAD === undefined) delete process.env['VAD_MODEL_PATH'];
+    else process.env['VAD_MODEL_PATH'] = PREV_VAD;
+  });
+
+  const keyedVault = (prefix: string): string => {
+    const path = join(mkdtempSync(join(tmpdir(), prefix)), 'keyring.dat');
+    writeKeyPools(new FileVault(path), { groq: ['g1'], fish: ['f1'], openrouter: ['o1'] });
+    return path;
+  };
+
+  /**
+   * Boot a keyed daemon whose Fish endpoint is a body that yields `chunks` and
+   * then parks on `gate` before the LAST one.
+   *
+   * `pulled` is the observable that matters: it counts what the DAEMON has asked
+   * for, so a value of 1 with a frame already on the wire is proof the broadcast
+   * did not wait for synthesis to finish.
+   */
+  function bootGatedFish(chunks: Uint8Array[]): {
+    readonly pulls: () => number;
+    readonly yielded: () => number;
+    readonly gate: Deferred<void>;
+  } {
+    const gate = deferred<void>();
+    let pulled = 0;
+    let yielded = 0;
+    const realFetch = globalThis.fetch;
+    // Stubbed BEFORE `startDaemon`, not after: `FishHttpTransport` captures
+    // `fetch` in its constructor (`options.fetchImpl ?? fetch`), and the daemon
+    // builds the transport inside `buildVoicePipeline`. A later stub would be
+    // dead code wearing a test's clothes.
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (!url.startsWith('https://api.fish.audio')) return realFetch(input, init);
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller): Promise<void> | void {
+              pulled += 1;
+              if (pulled > chunks.length) {
+                controller.close();
+                return;
+              }
+              // A ReadableStream refills its queue to the high-water mark, so
+              // `pulled` reaches the LAST chunk while the previous one is still
+              // in flight — it measures what the daemon ASKED for, not what
+              // exists. `yielded` is the honest one: it moves only when bytes
+              // actually enter the queue, and the last pull is what parks here.
+              const next = chunks[pulled - 1] as Uint8Array;
+              const emit = (): void => {
+                yielded += 1;
+                controller.enqueue(next);
+                controller.close();
+              };
+              if (pulled < chunks.length) {
+                controller.enqueue(next);
+                yielded += 1;
+                return;
+              }
+              return gate.promise.then(emit);
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'audio/mpeg' } },
+        ),
+      );
+    });
+    return { pulls: () => pulled, yielded: () => yielded, gate };
+  }
+
+  test('the first audio frame is on the wire while the LAST Fish chunk is still pending', async () => {
+    sttState.text = '/compact';
+    const A = Buffer.alloc(4096, 0xa1);
+    const B = Buffer.alloc(2048, 0xb2);
+    const rig = bootGatedFish([new Uint8Array(A), new Uint8Array(B)]);
+    const handle = await boot(keyedVault('m2-6c-drain-'));
+    const shell = openAudioShell(handle.ipcPort, 'test-ipc-token');
+    try {
+      await shell.ready;
+      // 50 x 100 ms of full-scale PCM: one 160,000-byte window, over the
+      // -30 dBFS energy gate.
+      const loud = Buffer.alloc(3200, 0x7f);
+      for (let i = 0; i < 50; i += 1) shell.send(loud);
+
+      await until(() => rig.pulls() >= 2, 5_000);
+      // Generous for what is left: an `for await` resume plus a loopback write.
+      // Not a sleep-for-pass — the assertions below are the real gate.
+      await new Promise((r) => setTimeout(r, 300));
+
+      expect(
+        rig.yielded(),
+        'Fish must still be holding the last chunk back — a stream that finished early proves nothing',
+      ).toBe(1);
+      expect(
+        shell.frames.length,
+        'the first chunk must be broadcast while the last is still pending — ' +
+          'awaiting the whole sentence hid the measured 426-556 ms Fish TTFB',
+      ).toBeGreaterThan(0);
+      expect(shell.failures).toEqual([]);
+
+      rig.gate.resolve();
+      await until(() => shell.frames.length >= 2, 5_000);
+
+      const chunks = shell.frames.map((f) => decodeAudioChunk(new Uint8Array(f)));
+      expect(chunks.filter((c) => c === null).length, 'every downlink frame must be audio').toBe(0);
+      const seqs = chunks.map((c) => c?.seq ?? -1);
+      expect(seqs, 'the shell player is strict FIFO, so seq must be dense and ascending').toEqual(
+        seqs.map((_, i) => i),
+      );
+      const bytes = Buffer.concat(chunks.flatMap((c) => (c === null ? [] : [Buffer.from(c.audio)])));
+      expect(bytes.equals(Buffer.concat([A, B])), 'the drained bytes must arrive in order and intact').toBe(
+        true,
+      );
+    } finally {
+      shell.close();
+    }
+  }, 20_000);
+
+  test('a Fish chunk larger than the 64 KiB audio cap is still split under 32 KiB', async () => {
+    // The drain moves the split from "one whole sentence" to "one Fish chunk",
+    // and a Fish chunk has no size guarantee — so the bound that keeps the
+    // downlink inside the 64 KiB MAX_AUDIO_BYTES envelope now has to come from
+    // `splitAudio`, per call, rather than from the sentence total.
+    sttState.text = '/compact';
+    const big = new Uint8Array(100 * 1024).fill(0x5a);
+    const rig = bootGatedFish([big]);
+    const handle = await boot(keyedVault('m2-6c-cap-'));
+    const shell = openAudioShell(handle.ipcPort, 'test-ipc-token');
+    try {
+      await shell.ready;
+      const loud = Buffer.alloc(3200, 0x7f);
+      for (let i = 0; i < 50; i += 1) shell.send(loud);
+      rig.gate.resolve();
+      await until(() => rig.pulls() >= 1, 5_000);
+      await until(() => shell.frames.length >= 4, 5_000);
+
+      const sizes = shell.frames.map((f) => decodeAudioChunk(new Uint8Array(f))?.audio.byteLength ?? -1);
+      expect(Math.max(...sizes), 'no frame may exceed the 32 KiB downlink chunk').toBeLessThanOrEqual(
+        MAX_AUDIO_CHUNK,
+      );
+      expect(Math.max(...sizes), 'and so none can approach MAX_AUDIO_BYTES').toBeLessThan(64 * 1024);
+      expect(sizes.reduce((n, s) => n + s, 0)).toBe(big.byteLength);
+    } finally {
+      shell.close();
+    }
+  }, 20_000);
 });
 
 describe('env resolvers', () => {
