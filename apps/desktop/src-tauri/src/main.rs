@@ -1633,12 +1633,6 @@ fn ensure_all_services(app: tauri::AppHandle) -> Result<BringUpStatus, String> {
     }
 }
 
-#[tauri::command]
-fn shutdown_all_services(app: tauri::AppHandle) -> Result<String, String> {
-    app.state::<Supervisor>().reap();
-    Ok("children stopped".to_string())
-}
-
 // ---------------------------------------------------------------------------
 // Phase 2 TDD — process supervision and log capture.
 //
@@ -3265,7 +3259,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ipc_token,
             ensure_all_services,
-            shutdown_all_services,
             restrict_vault_file
         ])
         .setup(|app| {
