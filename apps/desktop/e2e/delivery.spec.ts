@@ -98,4 +98,14 @@ test('the barge-in button still aborts the turn — playbackStarted is not a con
   await expect
     .poll(async () => (await commands()).filter((c) => c.kind === 'abort').length, { timeout: 10_000 })
     .toBe(abortsBefore + 1);
+
+  // Leave the campsite clean (M2 close-gate fix): the /fire event above is
+  // RETAINED in the stub's resume buffer, and the next spec's fresh page
+  // connects with ?lastSeq=0 — so it replays our stale `running` event,
+  // lands matrix=2, and reads "processing" instead of "ready". An `idle`
+  // close-out restores the shared stub for whoever runs next. (This is the
+  // B.2c resume-gap hole, confirmed live: silence vs missed-everything are
+  // indistinguishable without it. Product fix is M3 scope.)
+  await post('/fire', { state: 'idle' });
+  await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
 });
