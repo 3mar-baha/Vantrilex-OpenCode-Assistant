@@ -20,6 +20,17 @@ import { AudioCapture } from './audio/capture.js';
 import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
 import { bargePolicy, micFailureNotice, micPolicy } from './audio/vad.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
+import {
+  LOCAL_TASK_KEY,
+  TASK_CARD_OVERFLOW_KEY,
+  TASK_CHIP_CLASS,
+  TASK_LABEL_AR,
+  TASK_STRIP_MAX_HEIGHT_PX,
+  TASK_TONE,
+  queuedCard,
+  taskCardsFromInventory,
+  type TaskCard,
+} from './matrix/task-state.js';
 import { initialSessionsState, sessionsReducer } from './sessions/store.js';
 import { envToken, resolveIpcTokenWithRetry } from './settings/ipc-token.js';
 import { ensureServices } from './settings/services.js';
@@ -63,6 +74,11 @@ export function App(): JSX.Element {
   });
   const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
   const [context, setContext] = useState<ContextMsg | null>(null);
+  // M4 C.5 Phase 1 — the ONE locally-synthesised task card. It is a display-only
+  // receipt placed when the daemon reports the turn started, and it emits no
+  // command; see `matrix/task-state.ts` for why it can never be reconciled to a
+  // real session row.
+  const [taskReceipt, setTaskReceipt] = useState<TaskCard | null>(null);
   const activeSession = sessionState.activeId;
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const captureRef = useRef<AudioCapture | null>(null);
@@ -168,6 +184,16 @@ export function App(): JSX.Element {
           // written — a silent banner is not a status line.
           setCredit((s) => creditVoice(s, v.phase));
           if (v.transcript !== undefined && v.transcript.length > 0) setLastTranscript(v.transcript);
+          // C.5: utterance time. `thinking` is the daemon reporting that it has
+          // the turn and the user's words, which is the closest thing to "sent"
+          // the shell can observe without inventing a round-trip. Any later
+          // phase means the thinking window is over, so the receipt is retired.
+          // Set state and NOTHING else — no command, no `announce` write.
+          if (v.phase === 'thinking') {
+            setTaskReceipt(queuedCard(v.transcript ?? ''));
+          } else {
+            setTaskReceipt(null);
+          }
         },
         // Phase 4: context-window occupancy for the gauge.
         onContext: (c) => setContext(c),
@@ -177,8 +203,14 @@ export function App(): JSX.Element {
           if (mapped !== null) setMatrix(mapped);
           lastFrameAt.current = Date.now();
         },
-        onInventory: (sessions) =>
-          dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) }),
+        onInventory: (sessions) => {
+          dispatchSession({ kind: 'replace', sessions: sessions.map((x) => ({ id: x.sessionId, state: x.state })) });
+          // C.5: a real snapshot supersedes the local receipt, because the
+          // receipt covers exactly the window before the next snapshot. An EMPTY
+          // snapshot is the documented error/unready shape (`protocol.ts`), so it
+          // carries no evidence and must NOT retire a live receipt.
+          if (sessions.length > 0) setTaskReceipt(null);
+        },
         onAgents: (list) => setAgents(list.map((a) => ({ id: a.id, name: a.name }))),
         onAudio: (bytes) => {
           if (playerRef.current === null) {
@@ -538,6 +570,26 @@ export function App(): JSX.Element {
   const live = matrix !== 0;
   const noSessions = sessionState.sessions.length === 0;
 
+  /**
+   * M4 C.5 Phase 1 — the task-card strip, derived from `inventory`.
+   *
+   * NOT from `event`: that frame has zero production producers
+   * (`broadcast()` is called only by tests and the E2E stub), so a card strip
+   * built on it would be green over a call the daemon never makes. The
+   * `event` caller is Phase 2 (M2 producer) and ships nothing today.
+   *
+   * The strip renders NOTHING when there are no cards, so the common case costs
+   * no height at all — not even an empty 88px box.
+   */
+  // The store names the id field `id`; the wire row names it `sessionId`
+  // (`InventorySessionSchema`). Mapped here rather than by loosening the module,
+  // which is written against the frame, not against this reducer.
+  const taskCards = taskCardsFromInventory(
+    sessionState.sessions.map((s) => ({ sessionId: s.id, state: s.state })),
+    activeSession,
+    taskReceipt,
+  );
+
   return (
     <div
       dir="rtl"
@@ -620,6 +672,60 @@ export function App(): JSX.Element {
 
         <div className="flex flex-col gap-3 border-b border-[#26282e] px-4 py-3">
           <SessionChip sessions={sessionState.sessions} activeId={activeSession} onSelect={handleSelectSession} />
+          {taskCards.length > 0 && (
+            // IN FLOW and BOUNDED, and the bound is the point: the window
+            // auto-sizes to its content (`useAutoSize` measures the root's
+            // `scrollHeight`), so an unbounded in-flow list would resize the OS
+            // window on every 15 s inventory tick, with no user action. The rows
+            // live INSIDE this scroll container, so the measured root sees one
+            // bounded box instead of N stacked rows.
+            //
+            // The inline `maxHeight` duplicates the Tailwind class on purpose:
+            // the class is what the real renderer compiles, and the inline
+            // value is what a test can read as a RESOLVED style (happy-dom has
+            // no layout engine, so `scrollHeight` is always 0 there and the
+            // bound cannot be proven by measuring).
+            <div
+              data-testid="task-strip"
+              dir="rtl"
+              title="حالة المهام — محدّثة كل ١٥ ثانية"
+              className={`max-h-[${TASK_STRIP_MAX_HEIGHT_PX}px] overflow-y-auto rounded-[6px] border border-[#26282e] bg-[#0e0f12] p-1`}
+              style={{ maxHeight: TASK_STRIP_MAX_HEIGHT_PX }}
+            >
+              {taskCards.map((card) => (
+                <div
+                  key={card.key}
+                  data-task-card=""
+                  data-task-key={card.key}
+                  data-state={card.state}
+                  data-tone={TASK_TONE[card.state]}
+                  // Arabic, and the raw wire token goes in the title so the
+                  // verdict is auditable on hover without a second wording of it.
+                  title={`${TASK_LABEL_AR[card.state]}${card.key === LOCAL_TASK_KEY || card.key === TASK_CARD_OVERFLOW_KEY ? '' : ` — ${card.rawState}`}`}
+                  className="flex items-center gap-2 px-1 py-0.5"
+                >
+                  {card.key === TASK_CARD_OVERFLOW_KEY ? (
+                    <span className="truncate text-[10px] text-[#71717a]">
+                      {card.count ?? 0} جلسة أخرى غير معروضة
+                    </span>
+                  ) : (
+                    <>
+                      <span className="vx-mono-metric min-w-0 flex-1 truncate text-[10px] text-[#a1a1aa]">
+                        {card.key === LOCAL_TASK_KEY ? (card.transcript ?? '') : card.key}
+                      </span>
+                      <span
+                        data-testid="task-chip"
+                        data-tone={TASK_TONE[card.state]}
+                        className={TASK_CHIP_CLASS[card.state]}
+                      >
+                        {TASK_LABEL_AR[card.state]}
+                      </span>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <ContextGauge
             {...(context !== null
               ? {
