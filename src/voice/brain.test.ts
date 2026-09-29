@@ -89,6 +89,34 @@ describe('OpenRouterBrainClient', () => {
     await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_AUTH', retryable: false });
   });
 
+  // A.4 — 402 is out of credit, not a rate limit. It must never be retried
+  // (an empty balance spends the same empty balance) and it must never rotate
+  // the key pool (the credential is fine; the account has no funds). Reusing
+  // RATE_LIMITED would fix the retry and keep the rotation, because
+  // httpStatusOf maps that code to 429 — hence BRAIN_CREDIT -> 402.
+  test('HTTP 402 is BRAIN_CREDIT, is never retried, and is one fetch', async () => {
+    let calls = 0;
+    const counting = ((...args: Parameters<typeof fetch>) => {
+      calls += 1;
+      return mockFetch([{ status: 402, body: {} }])(...args);
+    }) as unknown as typeof fetch;
+    const c = new OpenRouterBrainClient('k', undefined, counting);
+    await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: 'BRAIN_CREDIT', retryable: false });
+    expect(calls).toBe(1);
+  });
+
+  test('402 maps each provider status to its own code', async () => {
+    for (const [status, expected] of [
+      [402, 'BRAIN_CREDIT'],
+      [401, 'BRAIN_AUTH'],
+      [429, 'RATE_LIMITED'],
+      [503, 'BRAIN_REJECTED'],
+    ] as const) {
+      const c = new OpenRouterBrainClient('k', undefined, mockFetch([{ status, body: {} }]));
+      await expect(c.respond('hi', 'ctx')).rejects.toMatchObject({ code: expected });
+    }
+  });
+
   test('HTTP 429 is RATE_LIMITED and is never retried', async () => {
     let calls = 0;
     const counting = ((...args: Parameters<typeof fetch>) => {
@@ -232,6 +260,21 @@ describe('openRouterChat (shared P5 transport)', () => {
     const empty = async () =>
       openRouterChat('k', 'm', 's', 'u', mockFetch([{ status: 200, body: { choices: [{ message: { content: ' ' } }] } }]));
     await expect(empty()).rejects.toMatchObject({ code: 'BRAIN_REJECTED', retryable: true });
+  });
+
+  // A.4 — the shared transport carries the same 402 rule, and the call counter
+  // matters because the coordinator and narrator both run through here.
+  test('402 rejects BRAIN_CREDIT non-retryable on a single fetch', async () => {
+    let calls = 0;
+    const counting = ((...args: Parameters<typeof fetch>) => {
+      calls += 1;
+      return mockFetch([{ status: 402, body: {} }])(...args);
+    }) as unknown as typeof fetch;
+    await expect(openRouterChat('k', 'm', 's', 'u', counting)).rejects.toMatchObject({
+      code: 'BRAIN_CREDIT',
+      retryable: false,
+    });
+    expect(calls).toBe(1);
   });
 });
 

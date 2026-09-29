@@ -34,6 +34,14 @@ describe('httpStatusOf recovers the status a rotation depends on', () => {
     expect(httpStatusOf(new OrchestratorError('RATE_LIMITED', false, 'x'))).toBe(429);
   });
 
+  // A.4: 402 is out of credit, and it is deliberately NOT collapsed into 429.
+  // If it were, `release` would advance the pool on an empty balance — the key
+  // is perfectly valid, only the funds are gone — and the user would be walked
+  // through every credential in the pool for nothing.
+  test('an out-of-credit error maps to 402, not 429', () => {
+    expect(httpStatusOf(new OrchestratorError('BRAIN_CREDIT', false, 'x'))).toBe(402);
+  });
+
   test('provider, timeout and parse failures map to nothing', () => {
     // These must NOT rotate: a 5xx or an empty completion says nothing about
     // whether the key is valid, and burning a pool on them would strand the
@@ -123,6 +131,33 @@ describe('withKey reports the real outcome to the pool', () => {
       expect(ring.acquire('openrouter').keyId).toBe('K2');
     } finally {
       ring.destroy();
+    }
+  });
+
+  // A.4: the observable consequence of the 402 -> undefined decision. Compared
+  // against 429 in the same test because the difference between them is the
+  // whole point: 429 rotates, 402 must not.
+  test('an out-of-credit error does NOT rotate, while 429 does', async () => {
+    const empty = Keyring.fromKeys(pools);
+    try {
+      await withKey(empty, 'openrouter', () =>
+        Promise.reject(new OrchestratorError('BRAIN_CREDIT', false, 'no funds')),
+      ).catch(() => undefined);
+      expect(empty.rolloverLog).toHaveLength(0);
+      expect(empty.acquire('openrouter').keyId).toBe('K1');
+    } finally {
+      empty.destroy();
+    }
+
+    const limited = Keyring.fromKeys(pools);
+    try {
+      await withKey(limited, 'openrouter', () =>
+        Promise.reject(new OrchestratorError('RATE_LIMITED', false, 'throttled')),
+      ).catch(() => undefined);
+      expect(limited.rolloverLog.length).toBeGreaterThan(0);
+      expect(limited.acquire('openrouter').keyId).toBe('K2');
+    } finally {
+      limited.destroy();
     }
   });
 

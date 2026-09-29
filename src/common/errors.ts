@@ -10,6 +10,13 @@ export type ErrorCode =
   // provider actually returned; 401/403 and 429 get their own codes because the
   // user action differs (rotate the key vs wait for quota).
   | 'BRAIN_REJECTED' | 'BRAIN_AUTH'
+  // A.4: HTTP 402 is an exhausted balance, which is NOT the same fault as 429.
+  // Collapsing it into RATE_LIMITED would look right at the throw site and be
+  // wrong everywhere else: `httpStatusOf` maps RATE_LIMITED to 429, and
+  // `Keyring.release` advances the pool on 429, so a 402 would rotate a key that
+  // is perfectly valid and spend three requests per turn on an empty balance.
+  // Its own code is what makes "do not retry" and "do not rotate" independent.
+  | 'BRAIN_CREDIT'
   | 'TTS_FAILED' | 'AUDIO_DEVICE_MISSING' | 'VAULT_CORRUPT'
   | 'POOL_EXHAUSTED' | 'RATE_LIMITED' | 'APPROVAL_EXPIRED'
   | 'CONFIG_INVALID' | 'ALREADY_RUNNING' | 'HIGH_STAKES_CONFIRM_REQUIRED';
@@ -52,6 +59,11 @@ export function httpStatusOf(err: unknown): number | undefined {
   if (err instanceof OrchestratorError) {
     // 401 and 403 are the same failure here; RATE_LIMITED is only ever 429.
     if (err.code === 'BRAIN_AUTH') return 401;
+    // A.4, and it must precede the RATE_LIMITED arm: 402 is an empty balance,
+    // not a throttle, so it must never be reported as 429 (which `release` treats
+    // as a rotation trigger). It is returned as 402 only so the status is visible
+    // to callers; `release` branches on 429/401/403, so 402 does not rotate.
+    if (err.code === 'BRAIN_CREDIT') return 402;
     if (err.code === 'RATE_LIMITED') return 429;
     // Everything else is a provider, network or parse failure: not a key fault.
     return undefined;

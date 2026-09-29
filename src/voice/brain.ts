@@ -232,6 +232,13 @@ export async function openRouterChat(
     if (res.status === 429) {
       throw new OrchestratorError('RATE_LIMITED', false, 'brain rate limited or out of quota (HTTP 429)');
     }
+    // A.4: an empty balance, checked before the generic !res.ok arm, which would
+    // otherwise call it a retryable BRAIN_REJECTED and spend three requests per
+    // turn. Non-retryable, and its own code rather than RATE_LIMITED so the pool
+    // is not advanced for a credential that is still good.
+    if (res.status === 402) {
+      throw new OrchestratorError('BRAIN_CREDIT', false, 'brain out of credit (HTTP 402)');
+    }
     if (!res.ok) {
       throw new OrchestratorError('BRAIN_REJECTED', true, `brain endpoint HTTP ${res.status}`);
     }
@@ -330,6 +337,11 @@ export class OpenRouterBrainClient implements BrainClient {
         // Quota or upstream load. Retrying immediately just burns the same
         // exhausted budget, so this is the one non-2xx that is NOT retryable.
         throw new OrchestratorError('RATE_LIMITED', false, 'brain rate limited or out of quota (HTTP 429)');
+      }
+      if (res.status === 402) {
+        // A.4: same rule as the shared transport above — one attempt, and the
+        // pool is left alone because the credential is not what ran out.
+        throw new OrchestratorError('BRAIN_CREDIT', false, 'brain out of credit (HTTP 402)');
       }
       if (!res.ok) {
         throw new OrchestratorError('BRAIN_REJECTED', true, `brain endpoint HTTP ${res.status}`);
