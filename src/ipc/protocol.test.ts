@@ -175,6 +175,9 @@ describe('frame schemas', () => {
   test('renderer commands are closed-vocabulary with ids', () => {
     for (const kind of [
       'abort',
+      // M2 Pattern 2 — speech-only barge-in. ADDITIVE, so a daemon that predates
+      // it keeps working and an old shell simply never sends it.
+      'stopSpeech',
       'mute',
       'deafen',
       'arm',
@@ -190,6 +193,23 @@ describe('frame schemas', () => {
     }
     expect(UiCommandSchema.safeParse({ id: 'cmd-1', kind: 'format-disk' }).success).toBe(false);
     expect(UiCommandSchema.safeParse({ kind: 'abort' }).success).toBe(false);
+  });
+
+  // M2 Pattern 2 — the vocabulary is CLOSED, and `stopSpeech` is the one kind
+  // whose name a misspelling would silently degrade into the wrong behaviour.
+  // A shell that sent `stopSpeach` was reaching for speech-only barge-in; if
+  // that typo parsed, the router would answer `unsupported command` and the user
+  // would hear the assistant keep talking over them — a refusal, not a repair.
+  test('M2-P2: stopSpeech parses; its near-miss spellings are refused', () => {
+    for (const kind of ['stopSpeech'] as const) {
+      expect(UiCommandSchema.safeParse({ id: 'cmd-1', kind }).success).toBe(true);
+    }
+    for (const typo of ['stopSpeach', 'stop_speech', 'stopspeech', 'StopSpeech', 'abortSpeech']) {
+      expect(
+        UiCommandSchema.safeParse({ id: 'cmd-1', kind: typo }).success,
+        `${typo} must not be accepted`,
+      ).toBe(false);
+    }
   });
 
   // L23 — the command envelope is the trust boundary. It accepted arbitrary

@@ -427,6 +427,11 @@ export const UiCommandSchema = z
     id: z.string().min(1).max(128).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters'),
     kind: z.enum([
       'abort',
+      // M2 Pattern 2 — speech-only barge-in. ADDITIVE: an old shell never sends
+      // it, a new shell against an old daemon gets `unsupported command` and the
+      // audio simply keeps playing (degraded, never wrong). It is NOT `abort`:
+      // a voice burst must not cancel the turn the user is paying for.
+      'stopSpeech',
       'mute',
       'deafen',
       'arm',

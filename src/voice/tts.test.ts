@@ -203,6 +203,119 @@ describe('stripSpeechText', () => {
 // L9 — the Fish fetch had no timeout, so a hung socket wedged the utterance
 // and the speech phase forever. brain.ts already uses this exact idiom
 // (`fetchImpl` + AbortController); the transport now matches it.
+// M2 Pattern 2 — the transport half of speech-only barge-in.
+//
+// The daemon already stopped BROADCASTING stale audio on a barge, but the
+// provider call kept running: `synthesizeStream` had no signal, so Fish kept
+// synthesising audio nobody would ever hear, on a free tier where a wasted
+// synthesis is a wasted credit. This is the seam: `SpeechGate.signalFor(gen)`
+// hands the utterance an AbortSignal that fires when the gate moves, and the
+// transport must honour it.
+describe('M2-P2: SpeechGate.signalFor + transport cancellation', () => {
+  /** A transport whose keyring calls are no-ops; only the fetch matters here. */
+  function noRing(): ConstructorParameters<typeof FishHttpTransport>[0] {
+    return {
+      acquire: () => ({ material: new Uint8Array([1]) }),
+      release: () => undefined,
+    } as unknown as ConstructorParameters<typeof FishHttpTransport>[0];
+  }
+
+  test('signalFor hands out a live signal that fires on abort', () => {
+    const gate = new SpeechGate();
+    const gen = gate.capture();
+    const signal = gate.signalFor(gen);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted, 'a live generation must not start pre-aborted').toBe(false);
+    gate.abort();
+    expect(signal.aborted, 'the barge must reach the in-flight provider call').toBe(true);
+  });
+
+  test('signalFor is stable within a generation and pre-aborted for a stale one', () => {
+    // A synthesis that begins after the barge already landed must not start at
+    // all. Fail-closed: a stale generation hands back an ALREADY aborted signal,
+    // which is what makes "never synthesize after a barge" unrepresentable
+    // rather than a check someone can forget.
+    const gate = new SpeechGate();
+    const gen = gate.capture();
+    expect(gate.signalFor(gen), 'same generation, same signal').toBe(gate.signalFor(gen));
+    gate.abort();
+    expect(gate.signalFor(gen).aborted, 'the old generation stays dead').toBe(true);
+    expect(gate.signalFor(gate.capture()).aborted, 'the new generation is live').toBe(false);
+  });
+
+  test('an unrelated abort does not signal a LATER generation retroactively', () => {
+    const gate = new SpeechGate();
+    const first = gate.signalFor(gate.capture());
+    gate.abort();
+    const second = gate.signalFor(gate.capture());
+    expect(first.aborted).toBe(true);
+    expect(second.aborted, 'the new utterance must be synthesizable').toBe(false);
+  });
+
+  test('synthesizeStream forwards the caller signal into the fetch', async () => {
+    const captured: Array<AbortSignal | null | undefined> = [];
+    // The request is parked, which is the only state in which "the barge reaches
+    // the provider" is a real claim: `fetchWithTimeout` builds its OWN
+    // controller and overwrites `init.signal`, so a caller abort has to be
+    // forwarded to it. (Aborting AFTER the request settled would prove nothing
+    // — there is nothing left to abort.)
+    const t = new FishHttpTransport(noRing(), 'https://fish.invalid', {
+      timeoutMs: 60,
+      fetchImpl: (_u, init) => {
+        captured.push(init?.signal);
+        return new Promise<Response>(() => undefined);
+      },
+    });
+    const controller = new AbortController();
+    const pending = t.synthesizeStream('مرحبا', 'ref', { signal: controller.signal }).next();
+    const settled = pending.catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(captured[0], 'precondition: the request is open').toBeInstanceOf(AbortSignal);
+    expect(captured[0]?.aborted).toBe(false);
+    controller.abort();
+    expect(captured[0]?.aborted, 'the fetch signal must follow the caller signal').toBe(true);
+    await settled;
+  });
+
+  test('aborting mid-stream cancels the body reader and ends the stream', async () => {
+    // The real barge case: the response is open, one chunk already arrived, and
+    // the user talks over the assistant. Without reader cancellation the loop
+    // sits on a `read()` that never settles, holding the turn open.
+    const gate = new SpeechGate();
+    const gen = gate.capture();
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const t = new FishHttpTransport(noRing(), 'https://fish.invalid', {
+      timeoutMs: 5_000,
+      fetchImpl: async () => new Response(body, { status: 200 }),
+    });
+    const seen: number[] = [];
+    const drain = (async () => {
+      for await (const chunk of t.synthesizeStream('مرحبا', 'ref', { signal: gate.signalFor(gen) })) {
+        seen.push(chunk[0] ?? -1);
+      }
+    })();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(seen, 'precondition: the first chunk arrived').toEqual([1]);
+    gate.abort();
+    // A stream that never stops is a FAILURE, so the race must reject: swallowing
+    // it here would make this test pass on exactly the defect it exists for.
+    await Promise.race([
+      drain,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('stream did not stop')), 1_000)),
+    ]);
+    expect(seen, 'no chunk may arrive after the barge').toEqual([1]);
+    expect(cancelled, 'the reader must be cancelled, not abandoned').toBe(true);
+  });
+});
+
 describe('fetchWithTimeout (L9)', () => {
   test('aborts a hung request and throws a typed, distinguishable error', async () => {
     const hung = new Promise<Response>(() => undefined);

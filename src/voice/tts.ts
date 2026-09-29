@@ -188,6 +188,8 @@ export function splitSentences(text: string): string[] {
  */
 export class SpeechGate {
   private generation = 0;
+  /** One controller per live generation, so the map is bounded by 1. */
+  private readonly signals = new Map<number, AbortController>();
 
   capture(): number {
     return this.generation;
@@ -197,8 +199,40 @@ export class SpeechGate {
     return gen === this.generation;
   }
 
+  /**
+   * M2 Pattern 2 — the AbortSignal for one utterance, so a barge reaches the
+   * PROVIDER and not only the broadcast.
+   *
+   * The generation counter was already sufficient to stop stale audio leaving
+   * the daemon, and that is all it did: Fish kept synthesising a reply nobody
+   * would hear, and on a free tier a wasted synthesis is a wasted credit. The
+   * gate had no way to say "stop" to the transport, so there was nothing to
+   * pass down.
+   *
+   * Fail-closed on a stale generation: a caller that asks after the barge
+   * already landed gets an ALREADY-aborted signal, which makes "never
+   * synthesise after a barge" a property of the type rather than a check
+   * someone has to remember.
+   */
+  signalFor(gen: number): AbortSignal {
+    if (gen !== this.generation) return AbortSignal.abort();
+    const existing = this.signals.get(gen);
+    if (existing !== undefined) return existing.signal;
+    const controller = new AbortController();
+    this.signals.set(gen, controller);
+    return controller.signal;
+  }
+
   abort(): void {
     this.generation += 1;
+    // Fire and drop: an aborted generation's controller must not stay
+    // reachable, and the map must not grow by one per barge.
+    for (const [gen, controller] of this.signals) {
+      if (gen < this.generation) {
+        controller.abort();
+        this.signals.delete(gen);
+      }
+    }
   }
 }
 
@@ -235,8 +269,12 @@ export class FileAudioOut implements AudioOut {
 
 export interface FishTransport {
   synthesize(text: string, fishVoiceId: string): Promise<Uint8Array>;
-  /** Progressive synthesis; engine times first yield as first-chunk TTFB. */
-  synthesizeStream?(text: string, fishVoiceId: string): AsyncGenerator<Uint8Array>;
+  /**
+   * Progressive synthesis; engine times first yield as first-chunk TTFB.
+   * `options.signal` (M2 Pattern 2) aborts an utterance in flight — see
+   * `SpeechGate.signalFor`.
+   */
+  synthesizeStream?(text: string, fishVoiceId: string, options?: { signal?: AbortSignal }): AsyncGenerator<Uint8Array>;
 }
 
 /**
@@ -505,9 +543,21 @@ export async function fetchWithTimeout(
   fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
   const controller = new AbortController();
+  // M2 Pattern 2: a caller-supplied signal must reach the request. This
+  // function OVERWRITES `init.signal` with its own controller, so without the
+  // forward below a barge could not stop a synthesis in flight — the timeout was
+  // the only abort, and it is 20 s of wasted provider time.
+  const callerSignal = init.signal ?? null;
+  const forwardAbort = (): void => controller.abort();
+  if (callerSignal !== null) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener('abort', forwardAbort, { once: true });
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const expiry = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      timedOut = true;
       controller.abort();
       reject(new TtsTimeoutError(timeoutMs));
     }, timeoutMs);
@@ -515,14 +565,20 @@ export async function fetchWithTimeout(
   try {
     return await Promise.race([fetchImpl(url, { ...init, signal: controller.signal }), expiry]);
   } catch (err) {
-    // If the signal fired, report the timeout even if the underlying call
+    // If OUR timer fired, report the timeout even if the underlying call
     // rejected with something else (a socket reset during teardown, say), so
     // callers see one cause rather than a different error per transport.
-    if (controller.signal.aborted && !(err instanceof TtsTimeoutError)) throw new TtsTimeoutError(timeoutMs);
+    if (timedOut && !(err instanceof TtsTimeoutError)) throw new TtsTimeoutError(timeoutMs);
+    // A caller abort is neither a timeout nor a failure — it is the barge
+    // working. Surfacing it as a timeout would bill a deliberate cancel as a
+    // 20 s stall in telemetry and print "TTS timed out" to a user who simply
+    // started talking. Propagate the signal's own reason (an AbortError).
+    if (callerSignal !== null && callerSignal.aborted) throw callerSignal.reason;
     throw err;
   } finally {
     // Always disarm: a live timer keeps the event loop (and the daemon) alive.
     if (timer !== undefined) clearTimeout(timer);
+    if (callerSignal !== null) callerSignal.removeEventListener('abort', forwardAbort);
   }
 }
 
@@ -554,7 +610,11 @@ export class FishHttpTransport implements FishTransport {
     return out;
   }
 
-  async *synthesizeStream(text: string, fishVoiceId: string): AsyncGenerator<Uint8Array> {
+  async *synthesizeStream(
+    text: string,
+    fishVoiceId: string,
+    options: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<Uint8Array> {
     const key = this.keyring.acquire('fish');
     try {
       const res = await fetchWithTimeout(
@@ -563,6 +623,7 @@ export class FishHttpTransport implements FishTransport {
           method: 'POST',
           headers: fishHeaders(Buffer.from(key.material).toString('utf8')),
           body: JSON.stringify(fishRequestBody(text, fishVoiceId)),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         },
         this.timeoutMs,
         this.fetchImpl,
@@ -590,6 +651,19 @@ export class FishHttpTransport implements FishTransport {
       }
       this.keyring.release(key, true);
       const reader = res.body.getReader();
+      // M2 Pattern 2: a barge has to unblock the `read()` below, not merely stop
+      // the broadcast. The fetch signal already tells Fish to stop, and the
+      // `finally` cancels the reader on every exit — this third path exists
+      // because those two depend on the transport honouring our signal, and a
+      // barge that leaves a `read()` pending holds the utterance open.
+      const onAbort = (): void => {
+        void reader.cancel().catch(() => undefined);
+      };
+      const signal = options.signal;
+      if (signal !== undefined) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
       try {
         for (;;) {
           const { done, value } = await reader.read();
@@ -597,6 +671,7 @@ export class FishHttpTransport implements FishTransport {
           yield value;
         }
       } finally {
+        if (signal !== undefined) signal.removeEventListener('abort', onAbort);
         await reader.cancel().catch(() => undefined);
       }
     } catch (err) {

@@ -21,10 +21,19 @@ import { App } from './App.js';
 let played: number[] = [];
 /** Every command the HUD pushed at the bridge, in order. */
 let sent: Array<{ kind: string }> = [];
+/** The events the mocked `AudioCapture.start` was handed, so a test can speak. */
+let captureEvents: {
+  onFrame?(bytes: Uint8Array): void;
+  onEnergy?(energy: number): void;
+  onError?(err: unknown): void;
+} | null = null;
+/** Every PCM frame the HUD pushed up, in order. */
+let pcmUp: number[] = [];
 /** The options App handed to the bridge, so a test can push frames back in. */
 let bridgeOptions: {
   onAudio?: (audio: Uint8Array) => void;
   onVoice?: (v: { phase: string }) => void;
+  onEvent?: (e: { state: string }) => void;
 } = {};
 
 vi.mock('./settings/ipc-token.js', () => ({
@@ -50,7 +59,8 @@ vi.mock('./bridge/ws.js', () => ({
     dispose(): void {
       /* nothing to do */
     }
-    sendPcm(): boolean {
+    sendPcm(bytes: Uint8Array): boolean {
+      pcmUp.push(bytes[0] ?? -1);
       return true;
     }
     async sendCommand(cmd: { kind: string }): Promise<boolean> {
@@ -62,6 +72,25 @@ vi.mock('./bridge/ws.js', () => ({
       return { ok: true };
     }
   },
+}));
+
+vi.mock('./audio/capture.js', () => ({
+  AudioCapture: class AudioCapture {
+    // `start` is promise-returning in the real class (`App.tsx` chains `.catch`).
+    start(events: {
+      onFrame?(bytes: Uint8Array): void;
+      onEnergy?(energy: number): void;
+      onError?(err: unknown): void;
+    }): Promise<void> {
+      captureEvents = events;
+      return Promise.resolve();
+    }
+    stop(): void {
+      captureEvents = null;
+    }
+  },
+  // Re-exported so nothing that imports the real module shape breaks.
+  encodeFrame: (samples: Int16Array): Uint8Array => new Uint8Array(samples.buffer),
 }));
 
 vi.mock('./audio/playback.js', async (importOriginal) => {
@@ -128,6 +157,8 @@ function statusPill(): string {
 beforeEach(() => {
   played = [];
   sent = [];
+  pcmUp = [];
+  captureEvents = null;
   bridgeOptions = {};
 });
 
@@ -194,5 +225,92 @@ describe('App: assistant mute is a real gate, not an ok:true (W6)', () => {
     // The daemon answers `mute` with `ok:true` while doing nothing and then pays
     // a model call to narrate it. A renderer-owned control must not ask.
     expect(sent.map((c) => c.kind)).not.toContain('mute');
+  });
+});
+
+// M2 Pattern 2 — speech-only barge-in, renderer half.
+//
+// Barge-in used to send `{kind:'abort'}`, which the daemon turned into a FULL
+// turn cancel: the plan the user was already paying for (p50 1,950 ms on the
+// free tier) was discarded and never spoken. The renderer is where the two
+// intents were conflated, so this is where the break-guard lives.
+//
+// Reverting App.tsx:257 to `abort` fails test 1. Deleting the whole barge block
+// fails test 1 too (`sent` is empty). Breaking the button fails test 4.
+describe('App: barge-in stops SPEECH, the button stops the TURN (M2-P2)', () => {
+  /** A loud voice burst: ~-12 dBFS, comfortably over the -30 dB gate. */
+  function loudFrame(): Uint8Array {
+    const samples = new Int16Array(160);
+    for (let i = 0; i < samples.length; i += 1) samples[i] = 8000;
+    return new Uint8Array(samples.buffer);
+  }
+  /** Room tone: ~-60 dBFS, must be ducked, never a barge. */
+  function quietFrame(): Uint8Array {
+    const samples = new Int16Array(160);
+    for (let i = 0; i < samples.length; i += 1) samples[i] = 32;
+    return new Uint8Array(samples.buffer);
+  }
+
+  /** Mount, start the assistant's speech (so `speakingRef` is true), open the mic. */
+  async function speakingWithMicOpen(): Promise<void> {
+    await mountApp();
+    await deliverAudio(1);
+    expect(played, 'precondition: the assistant is audibly speaking').toEqual([1]);
+    await act(async () => {
+      (document.body.querySelector('[data-testid="mic-toggle"]') as HTMLElement).click();
+    });
+    expect(captureEvents, 'precondition: the mic is live').not.toBeNull();
+    // Unmuting itself sends `deafen`; only what the FRAME causes is measured.
+    sent = [];
+  }
+
+  test('a barge sends stopSpeech and NOT abort, and the frame still goes up', async () => {
+    await speakingWithMicOpen();
+    await act(async () => {
+      captureEvents?.onFrame?.(loudFrame());
+    });
+    expect(sent.map((c) => c.kind)).toEqual(['stopSpeech']);
+    expect(sent.map((c) => c.kind), 'abort would cancel the turn the user is paying for').not.toContain(
+      'abort',
+    );
+    // The barge frame itself is the user's new words — it must still be sent.
+    expect(pcmUp).toHaveLength(1);
+  });
+
+  test('the control: a loud frame while SILENT sends no command at all', async () => {
+    // Without this, test 1 would also pass on a HUD that never barged.
+    await mountApp();
+    await act(async () => {
+      (document.body.querySelector('[data-testid="mic-toggle"]') as HTMLElement).click();
+    });
+    expect(captureEvents).not.toBeNull();
+    sent = [];
+    await act(async () => {
+      captureEvents?.onFrame?.(loudFrame());
+    });
+    expect(sent).toEqual([]);
+    expect(pcmUp).toHaveLength(1);
+  });
+
+  test('room tone during speech is still ducked, not treated as a barge', async () => {
+    await speakingWithMicOpen();
+    await act(async () => {
+      captureEvents?.onFrame?.(quietFrame());
+    });
+    expect(sent, 'echo suppression must not regress into a barge storm').toEqual([]);
+    expect(pcmUp, 'a ducked frame never reaches STT').toEqual([]);
+  });
+
+  test('the explicit abort button still sends abort, never stopSpeech', async () => {
+    await mountApp();
+    // The button's branch is `matrix !== 0` (`App.tsx:480`), so a real turn has
+    // to be on screen first — `matrixForDaemonState('running')` is 2.
+    await act(async () => {
+      bridgeOptions.onEvent?.({ state: 'running' });
+    });
+    await act(async () => {
+      (document.body.querySelector('[data-testid="abort-button"]') as HTMLElement).click();
+    });
+    expect(sent.map((c) => c.kind)).toEqual(['abort']);
   });
 });

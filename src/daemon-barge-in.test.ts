@@ -128,6 +128,8 @@ function rig(): Rig {
     activeSessionId: () => 'ses_a' as SessionId,
     projectDirectory: () => process.cwd(),
     onAbort: () => abortTurn(gate, () => state.pipeline),
+    // M2 Pattern 2: exactly what `startDaemon` wires — a bare gate trip.
+    onStopSpeech: () => gate.abort(),
   });
 
   return state;
@@ -276,6 +278,187 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
       /abortTurn\(speechGate,\s*\(\)\s*=>\s*audio\)/,
     );
     expect(wiring, 'a null pipeline is the pre-C4 bug in disguise').not.toMatch(/\(\)\s*=>\s*null/);
+  });
+
+  // M2 Pattern 2 — speech-only barge-in. A voice burst must stop the AUDIO and
+  // let the turn finish; the button keeps the full cancel. Measured cost of
+  // conflating them: the planner call (p50 1,950 ms on the free tier) is paid
+  // for and its answer is thrown away, every single time the user talks over
+  // the assistant — which is the normal way a voice product gets used.
+  test('M2-P2: startDaemon wires stopSpeech to the speech gate, not to abortTurn', () => {
+    // STRUCTURAL, labelled as such, for the same reason as the test above:
+    // `audio` is private to `startDaemon`, so the real handler cannot be
+    // reached without a booted daemon. The behaviour is pinned by the rig tests;
+    // this pins the call site. Non-vacuous — passing `abortTurn(speechGate, …)`
+    // here fails it.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const lines = src.split('\n').filter((l) => /^\s*onStopSpeech:/.test(l));
+    expect(lines, 'startDaemon must wire an onStopSpeech into the command handler').toHaveLength(1);
+    const wiring = lines[0] ?? '';
+    expect(wiring, `speech-only barge-in must be a bare gate trip: ${wiring.trim()}`).toMatch(
+      /onStopSpeech:\s*\(\)\s*=>\s*speechGate\.abort\(\)/,
+    );
+    expect(wiring, 'stopSpeech must never cancel the turn').not.toMatch(/abortTurn/);
+    expect(wiring, 'stopSpeech must never reach the pipeline').not.toMatch(/audio/);
+  });
+
+  test('M2-P2: an executed stopSpeech is never narrated back to the user', () => {
+    // STRUCTURAL, same rationale: `onExecuted` is an inline closure in
+    // `startDaemon`, so the skip itself is pinned here while the rig tests pin
+    // the behaviour around it. Without the early return, every barge would
+    // pull session details, spend an Inkling call, and speak over the
+    // still-running turn — the exact waste this split exists to remove.
+    // Non-vacuous — deleting the `if` line fails both asserts below.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const start = src.indexOf('onExecuted: (executed, outcome)');
+    expect(start, 'the executed-narration closure must exist').toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('},', start));
+    expect(body.length, 'the closure must terminate').toBeGreaterThan(0);
+    expect(
+      body,
+      'a barge is not an outcome to speak: stopSpeech must return before narrateOutcome',
+    ).toMatch(/if\s*\(\s*executed\.kind\s*===\s*['"]stopSpeech['"]\s*\)\s*return;/);
+  });
+
+  test('M2-P2: the utterance loop hands the barge to the PROVIDER, and does not bill it as a failure', () => {
+    // STRUCTURAL again, and for the same two reasons as above: the utterance
+    // closure is private to `startDaemon`. Two properties that are otherwise
+    // invisible, and both were wrong when this shipped:
+    //   1. without `signalFor(gen)` the barge stops the broadcast but Fish keeps
+    //      synthesising audio nobody hears (wasted free-tier credit);
+    //   2. without the catch's gate check the deliberate cancel raises
+    //      `TTS_FAILED` + a red `تعذّر توليد الصوت` notice at a user who did
+    //      nothing but talk over the reply.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const start = src.indexOf('onUtterance: (utterance)');
+    expect(start, 'the onUtterance handler must still exist').toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n      });', start));
+    expect(body, 'the barge must reach the provider').toMatch(/signal:\s*speechGate\.signalFor\(gen\)/);
+    const catchAt = body.indexOf('} catch (err) {');
+    expect(catchAt).toBeGreaterThan(-1);
+    // The window has to clear the explanatory comment, or the guard is invisible
+    // to the check — which is exactly how a source-reading test goes vacuous.
+    const tail = body.slice(catchAt);
+    const guardAt = tail.indexOf('if (!speechGate.isCurrent(gen)');
+    expect(guardAt, 'the catch must bail on a cancelled utterance').toBeGreaterThan(-1);
+    expect(
+      tail.indexOf("errorCode: 'TTS_FAILED'") ,
+      'the bail must come BEFORE any TTS_FAILED telemetry, or a barge is billed as a failure',
+    ).toBeGreaterThan(guardAt);
+    expect(tail, 'a credit fault must survive the barge guard — it is the actionable one').toMatch(
+      /!speechGate\.isCurrent\(gen\) && !\(err instanceof FishCreditError\) && abortedByBarge/,
+    );
+    // Peer review: the guard must ALSO be shaped by the error, not only the
+    // generation — a genuine 401/403 or timeout arriving after any barge must
+    // still bill and notify. Only a caller abort (AbortError) goes quiet.
+    expect(
+      tail,
+      'abortedByBarge must mean AbortError, so real errors still bill after a barge',
+    ).toMatch(/\.name === 'AbortError'/);
+    // Ordering, as the roadmap states it: abort → idle → notify. The `finally`
+    // that publishes `idle` is what notifies the shell, and it must still run.
+    expect(body.slice(catchAt)).toMatch(/finally\s*\{\s*setVoicePhase\('idle'\);/);
+  });
+
+  test('M2-P2: a parked plan survives a speech-only barge and is delivered', async () => {
+    const planner = deferred<{ reply: string }>();
+    const r = rig();
+    r.think = () => planner.promise;
+    const pushed = r.pipeline.pushChunk(speechWindow());
+    await settle();
+
+    const genBefore = r.gate.capture();
+    expect(await r.handle({ id: 'cmd-barge', kind: 'stopSpeech' })).toEqual({ ok: true });
+    expect(r.gate.isCurrent(genBefore), 'the audio must stop').toBe(false);
+
+    // The planner is NOT cancelled: it is a dispatched provider call, and it
+    // completes. Its answer must now reach the user.
+    planner.resolve({ reply: 'السير شغّال. كله تمام.' });
+    await pushed;
+    await settle(20);
+
+    expect(r.utterances, 'the parked plan must still be delivered').toHaveLength(1);
+    expect(r.synthesized.length, 'and spoken').toBeGreaterThan(0);
+    expect(r.broadcast, 'and broadcast').toHaveLength(r.synthesized.length);
+  });
+
+  test('M2-P2: speech-only barge-in does not trip the turn generation', async () => {
+    // The non-interference claim from the roadmap, asserted directly: the barge
+    // handler is `speechGate.abort()` and nothing else, so the pipeline's own
+    // generation cannot move. A pipeline that also aborted here would silently
+    // reinstate the paid-and-discarded plan — the exact bug being fixed.
+    const planner = deferred<{ reply: string }>();
+    const r = rig();
+    r.think = () => planner.promise;
+    let cancelled = 0;
+    const spy = r.pipeline.cancel.bind(r.pipeline);
+    r.pipeline.cancel = (): void => {
+      cancelled += 1;
+      spy();
+    };
+    const pushed = r.pipeline.pushChunk(speechWindow());
+    await settle();
+    await r.handle({ id: 'cmd-barge2', kind: 'stopSpeech' });
+    expect(cancelled, 'stopSpeech must not cancel the voice pipeline').toBe(0);
+    planner.resolve({ reply: 'تمام.' });
+    await pushed;
+    await settle(20);
+  });
+
+  test('M2-P2: the abort button still cancels a parked plan that a barge left running', async () => {
+    // The pair, in sequence — the realistic user action: talk over the
+    // assistant (audio stops, plan survives), then hit stop. The second command
+    // must still be the full cancel, or the first change would have quietly
+    // downgraded the button into another speech-only barge.
+    const planner = deferred<{ reply: string }>();
+    const r = rig();
+    r.think = () => planner.promise;
+    const pushed = r.pipeline.pushChunk(speechWindow());
+    await settle();
+    expect(await r.handle({ id: 'cmd-barge3', kind: 'stopSpeech' })).toEqual({ ok: true });
+    expect(await r.handle({ id: 'cmd-btn', kind: 'abort' })).toEqual({ ok: true });
+    planner.resolve({ reply: 'ملغى' });
+    await pushed;
+    await settle(20);
+    expect(r.utterances, 'the button is still a real cancel').toEqual([]);
+    expect(r.broadcast).toEqual([]);
+  });
+
+  test('M2-P2: speech-only barge-in mid-narration stops the audio in flight', async () => {
+    // The barge case the abort test above covers, re-run through `stopSpeech`:
+    // the sentence inside the provider and every sentence after it must be
+    // dropped, while the TURN that produced them was never a participant.
+    const r = rig();
+    r.think = async () => ({ reply: 'الجملة الأولى. الجملة الثانية. الجملة الثالثة.' });
+    const held = deferred<number>();
+    r.synthesize = async (_sentence, seq) => (seq === 2 ? held.promise : seq);
+
+    const pushed = r.pipeline.pushChunk(speechWindow());
+    for (let i = 0; i < 40 && r.synthesized.length < 2; i += 1) await settle(2);
+    expect(r.synthesized, 'precondition: two sentences reached the provider').toHaveLength(2);
+    expect(r.broadcast, 'precondition: only the first was broadcast').toEqual([1]);
+
+    await r.handle({ id: 'cmd-barge4', kind: 'stopSpeech' });
+    held.resolve(2);
+    await settle(20);
+
+    expect(r.broadcast, 'the in-flight sentence must not be broadcast').toEqual([1]);
+    expect(r.synthesized, 'no sentence may be requested after the barge').toHaveLength(2);
+    void pushed;
+  });
+
+  test('M2-P2: stopSpeech on a keyless daemon (no pipeline) is still ok', async () => {
+    const gate = new SpeechGate();
+    const handle = createCommandHandler({
+      client: noopClient,
+      switchSession: () => undefined,
+      activeSessionId: () => undefined,
+      projectDirectory: () => process.cwd(),
+      onStopSpeech: () => gate.abort(),
+    });
+    const gen = gate.capture();
+    expect(await handle({ id: 'cmd-keyless', kind: 'stopSpeech' })).toEqual({ ok: true });
+    expect(gate.isCurrent(gen)).toBe(false);
   });
 
   test('startDaemon is importable without a live serve (module-load sanity)', () => {

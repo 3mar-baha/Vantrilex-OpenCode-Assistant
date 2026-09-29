@@ -462,6 +462,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ui.context(sessionId, usage.used, usage.limit, usage.percent, usage.messageCount);
     },
     onExecuted: (executed, outcome) => {
+      // M2-P2: a barge is not an outcome to speak. narrateOutcome would pull
+      // session details and spend an Inkling call per interruption, then talk
+      // over the still-running turn the user just asked to quiet.
+      if (executed.kind === 'stopSpeech') return;
       const target =
         typeof executed.model === 'string'
           ? executed.model
@@ -497,7 +501,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ui.setPersona(persona);
       ui.notice('persona-changed', persona, 'info');
     },
+    // The EXPLICIT stop (the HUD button): the whole turn, not just the audio.
     onAbort: () => abortTurn(speechGate, () => audio),
+    // M2 Pattern 2: a voice burst stops the SPEECH only. Barely more than
+    // `speechGate.abort()` on purpose — reaching the pipeline here would throw
+    // away a plan the user is already paying for. Structural guard:
+    // `daemon-barge-in.test.ts > M2-P2`.
+    onStopSpeech: () => speechGate.abort(),
     saveKeys: {
       saveKeys: async (keys) => {
         writeKeyPools(vault, {
@@ -871,7 +881,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
                 // claim (pinned below); MAX_AUDIO_BYTES (64 KiB) is the inbound
                 // reassembly cap and the downlink was never subject to it.
                 // Pinned by `daemon.test.ts > M2-6c`.
-                for await (const chunk of fish.synthesizeStream(sentence, voiceId)) {
+                for await (const chunk of fish.synthesizeStream(sentence, voiceId, {
+                  // M2 Pattern 2: the barge must reach Fish too, not just the
+                  // broadcast. Without a signal the provider kept synthesising
+                  // audio nobody would hear — wasted free-tier credit, paid on
+                  // the one interaction where the user already gave up on
+                  // hearing the rest. The gate check below still governs the
+                  // broadcast; this governs the generation.
+                  signal: speechGate.signalFor(gen),
+                })) {
                   // Per CHUNK, not per sentence: a barge-in now lands within one
                   // chunk instead of one whole sentence. Returning here closes
                   // the generator, so the transport's `finally` cancels the reader.
@@ -881,6 +899,28 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               }
               record({ subsystem: 'TTS', status: 'OK', latencyMs: Date.now() - t0 });
             } catch (err) {
+              // M2 Pattern 2: a barge is a CANCEL, not a failure. The signal
+              // fires, the provider read rejects, and the `finally` below drops
+              // the phase to idle (which is the `voice` frame the shell reads) —
+              // that is the whole ordered outcome: abort → idle → notify.
+              //
+              // Without this the deliberate cancel was billed as a TTS failure:
+              // a `TTS_FAILED` telemetry row and a red `تعذّر توليد الصوت` notice
+              // shown to a user who did nothing wrong but talk over the reply.
+              //
+              // A credit fault is the one exception: a 402/429 means the balance
+              // is gone, it is rare, and it is the only branch a user can act on
+              // — dropping it to keep a barge quiet would be the wrong trade.
+              //
+              // Peer review: gate on the error's SHAPE, not only the
+              // generation. A genuine 401/403 or timeout arriving after any
+              // barge must still bill and notify; only a caller abort
+              // (AbortError from our own signal) is the barge working.
+              const abortedByBarge =
+                typeof err === 'object' &&
+                err !== null &&
+                (err as { name?: unknown }).name === 'AbortError';
+              if (!speechGate.isCurrent(gen) && !(err instanceof FishCreditError) && abortedByBarge) return;
               record({
                 subsystem: 'TTS',
                 status: 'ERROR',

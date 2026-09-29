@@ -72,6 +72,8 @@ function isContextMsg(m: ContextMsg): boolean {
 
 export type CommandKind =
   | 'abort'
+  // M2 Pattern 2 — barge-in stops the SPEECH; the button above stops the TURN.
+  | 'stopSpeech'
   | 'mute'
   | 'deafen'
   | 'arm'

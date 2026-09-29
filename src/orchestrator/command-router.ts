@@ -47,8 +47,19 @@ export interface CommandRouterDeps {
    * Barge-in hook: an `abort` command trips the TTS speech gate so stale
    * reply sentences never synthesize or broadcast afterwards. Absent by
    * default (keyless daemons have no speech to stop).
+   *
+   * This is the EXPLICIT stop: the HUD button, and it cancels the whole turn.
    */
   readonly onAbort?: () => void;
+  /**
+   * M2 Pattern 2 — speech-only barge-in, the command a voice burst sends.
+   *
+   * Deliberately NOT the same hook as `onAbort`. A barge used to send `abort`,
+   * so talking over the assistant discarded the plan already paid for (free-tier
+   * p50 1,950 ms) and the user heard nothing. This stops the audio and leaves
+   * the turn running; the button remains the full cancel.
+   */
+  readonly onStopSpeech?: () => void;
   /** Phase 4: the directory a new session is created in (the project root). */
   readonly projectDirectory: () => string;
   /** Phase 4: publish context-window telemetry to the shell. */
@@ -200,6 +211,11 @@ export function createCommandHandler(
       }
       case 'abort':
         deps.onAbort?.();
+        return { ok: true };
+      // M2 Pattern 2: one line, no session contact, no FR-12 park. The barge is
+      // not a destructive act and must never cost a confirmation round-trip.
+      case 'stopSpeech':
+        deps.onStopSpeech?.();
         return { ok: true };
       // Phase 4 — OpenCode 360° session manager. Both are additive commands;
       // a client that predates them never sends them.

@@ -334,6 +334,76 @@ describe('createCommandHandler', () => {
     expect(await bare.handler(cmd({ kind: 'abort' }))).toEqual({ ok: true });
   });
 
+  // M2 Pattern 2 — speech-only barge-in. `stopSpeech` is the command a voice
+  // burst sends; `abort` is the button. They MUST NOT be the same handler: a
+  // barge that cancels the turn discards a plan the user already paid ~1.95 s
+  // of free-tier latency for. This pins the separation at the router: the
+  // speech hook runs, the abort hook does not, and the outcome IS forwarded
+  // to `onExecuted` (the daemon's own closure decides not to narrate it —
+  // pinned in daemon-barge-in.test.ts — the router must not make that choice).
+  test('M2-P2: stopSpeech stops audio only, and never runs the abort handler', async () => {
+    const calls: string[] = [];
+    const executed: Array<{ kind: string; ok: boolean }> = [];
+    const h = createCommandHandler({
+      client: {
+        setSessionAgent: async () => void calls.push('setSessionAgent'),
+        setSessionModel: async () => void calls.push('setSessionModel'),
+        toggleSessionSkill: async () => void calls.push('toggleSessionSkill'),
+        execSessionShell: async () => void calls.push('execSessionShell'),
+      },
+      switchSession: () => void calls.push('switchSession'),
+      activeSessionId: () => {
+        calls.push('activeSessionId');
+        return 'ses_active' as SessionId;
+      },
+      projectDirectory: () => {
+        calls.push('projectDirectory');
+        return 'O:/project';
+      },
+      onAbort: () => void calls.push('onAbort'),
+      onStopSpeech: () => void calls.push('onStopSpeech'),
+      onExecuted: (cmd, outcome) => void executed.push({ kind: cmd.kind, ok: outcome.ok }),
+    });
+    expect(await h(cmd({ kind: 'stopSpeech' }))).toEqual({ ok: true });
+    // Exactly one hook, and it is the speech hook. Reading the active session
+    // would be "session contact" — there is none. And the outcome IS forwarded
+    // to onExecuted (the daemon skips narration there; the router forwards).
+    expect(calls).toEqual(['onStopSpeech']);
+    expect(executed).toEqual([{ kind: 'stopSpeech', ok: true }]);
+  });
+
+  test('M2-P2: stopSpeech acks on a keyless daemon (no speech hook wired)', async () => {
+    // `rebuildVoice` leaves no pipeline without keys. A barge that arrived then
+    // must still ack: the router's catch would turn the mic's fire-and-forget
+    // send into a visible error frame for something the user cannot act on.
+    const bare = harness();
+    expect(await bare.handler(cmd({ kind: 'stopSpeech' }))).toEqual({ ok: true });
+    expect(bare.calls.agent).toEqual([]);
+    expect(bare.calls.shell).toEqual([]);
+    expect(bare.switched).toEqual([]);
+  });
+
+  test('M2-P2: the explicit abort button still runs the FULL abort handler', async () => {
+    // The other half of the split, and the one that must not regress: `abort`
+    // is still `onAbort`, and `onStopSpeech` is never a substitute for it.
+    const calls: string[] = [];
+    const h = createCommandHandler({
+      client: {
+        setSessionAgent: async () => undefined,
+        setSessionModel: async () => undefined,
+        toggleSessionSkill: async () => undefined,
+        execSessionShell: async () => undefined,
+      },
+      switchSession: () => undefined,
+      activeSessionId: () => undefined,
+      projectDirectory: () => 'O:/project',
+      onAbort: () => void calls.push('onAbort'),
+      onStopSpeech: () => void calls.push('onStopSpeech'),
+    });
+    expect(await h(cmd({ kind: 'abort' }))).toEqual({ ok: true });
+    expect(calls).toEqual(['onAbort']);
+  });
+
   test('unsafe shell metacharacters are rejected before parking', async () => {
     const h = harness();
     expect(await h.handler(cmd({ kind: 'execSessionShell', command: 'a; rm -rf /' }))).toEqual({

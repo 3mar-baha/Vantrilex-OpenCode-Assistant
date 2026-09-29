@@ -246,15 +246,21 @@ export function App(): JSX.Element {
         onFrame: (bytes) => {
           // Echo suppression + barge-in: while the assistant talks, quiet
           // frames (room tone / speaker echo) are ducked locally and never
-          // reach STT; a voice burst stops playback, aborts the daemon
-          // reply, and goes up immediately. Silent abort — no announce spam.
+          // reach STT; a voice burst stops playback, stops the daemon's
+          // SPEECH, and goes up immediately. Silent — no announce spam.
+          //
+          // M2 Pattern 2: this sends `stopSpeech`, not `abort`. A barge used to
+          // cancel the whole turn, so the plan the user was already paying for
+          // (free-tier p50 1,950 ms) was thrown away and they heard nothing —
+          // the most natural way to use a voice product was the one that made
+          // it go silent. The button (`abort-button`) is still the full cancel.
           const decision = bargePolicy(speakingRef.current, bytes);
           if (decision === 'duck') return;
           if (decision === 'barge') {
             playerRef.current?.stop();
             setSpeakingState(false);
             const live = bridgeRef.current;
-            if (live !== null) void live.sendCommand({ id: nextCmdId(), kind: 'abort' });
+            if (live !== null) void live.sendCommand({ id: nextCmdId(), kind: 'stopSpeech' });
           }
           bridgeRef.current?.sendPcm(bytes);
         },
