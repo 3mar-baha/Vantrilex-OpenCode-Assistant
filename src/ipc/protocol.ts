@@ -432,6 +432,15 @@ export const UiCommandSchema = z
       // audio simply keeps playing (degraded, never wrong). It is NOT `abort`:
       // a voice burst must not cancel the turn the user is paying for.
       'stopSpeech',
+      // M2 Pattern 3 — completion ≠ delivery. The renderer's player tells the
+      // daemon ONCE per utterance that audio actually began, which is the only
+      // evidence the daemon has that there is a live shell able to take audio.
+      // Without it the daemon cannot tell "the assistant is speaking" from "the
+      // assistant finished and nobody heard it", and a delivery into that gap is
+      // silence the user reads as being ignored. ADDITIVE, like `stopSpeech`: an
+      // old shell never sends it and a new shell against an old daemon gets
+      // `unsupported command`.
+      'playbackStarted',
       'mute',
       'deafen',
       'arm',
@@ -465,6 +474,24 @@ export const UiCommandSchema = z
     openrouterKey: z.string().min(1).max(512).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
     confirmId: z.string().min(1).max(128).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters').optional(),
     approve: z.boolean().optional(),
+    /**
+     * M2 Pattern 3 — optional correlation id for `playbackStarted`, bounded to
+     * 64 chars with no control characters. It is a LOG correlation token, not a
+     * path or a session handle, so it is deliberately NOT an opaque `ses_` id
+     * (that shape is reserved for things that reach `client.*`) and NOT parsed:
+     * bounded and printable is the whole requirement. Absent is valid — a shell
+     * that does not correlate simply says "something started".
+     */
+    playbackId: z
+      .string()
+      .min(1)
+      .max(64)
+      // Restricted charset, not just control-char-free: this is a correlation
+      // token that lands in `daemon.log`, so an unfiltered string would let a
+      // shell forge log lines. Same reasoning as `IDENT_RE`, without the
+      // path-ish `/-` this value has no use for.
+      .regex(/^[A-Za-z0-9._:-]{1,64}$/, 'invalid playback id')
+      .optional(),
     /** Phase 4: directory for `createSession`; model context limit for `sessionContext`. */
     title: z.string().min(1).max(200).optional(),
     contextLimit: z.number().int().positive().max(10_000_000).optional(),

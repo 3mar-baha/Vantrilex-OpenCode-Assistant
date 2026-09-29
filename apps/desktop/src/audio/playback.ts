@@ -13,7 +13,23 @@ export interface PlaybackSink {
 export interface AudioPlayerOptions {
   readonly decode: PlaybackDecoder['decode'];
   readonly sink: PlaybackSink;
-  readonly onStart?: () => void;
+  /**
+   * ONCE per contiguous run — which in production is roughly per sentence,
+   * not per utterance.
+   *
+   * M2 Pattern 3: `enqueue` fires this under `if (!this.started)`, and `started`
+   * is cleared in `drain`'s `finally` and in `stop()`. Fish synthesises
+   * sentence by sentence with multi-second gaps, so the queue empties between
+   * sentences and a five-sentence reply fires this ~five times. Peer review:
+   * claiming per-utterance was false (the latch is per queue residency, and
+   * the sink does not wait for audio to finish). Harmless for the daemon —
+   * its flag is sticky and the drain is idempotent — but the contract stated
+   * here is per-run, and the E2E asserts that shape, not per-utterance.
+   *
+   * The optional id is a correlation token for logs, bounded to 64 chars by the
+   * protocol. It is not a session handle and is never parsed.
+   */
+  readonly onStart?: (playbackId?: string) => void;
   readonly onEnd?: () => void;
   /** Release whatever the decode/sink pair owns (an AudioContext, say). */
   readonly dispose?: () => void;
@@ -34,6 +50,8 @@ export class AudioPlayer {
   private muted = false;
   private generation = 0;
   private droppedCount = 0;
+  /** Monotonic per-utterance correlation id (M2 Pattern 3). Rendered as `pb-<n>`. */
+  private runCount = 0;
 
   constructor(private readonly options: AudioPlayerOptions) {}
 
@@ -89,7 +107,13 @@ export class AudioPlayer {
     }
     if (!this.started) {
       this.started = true;
-      this.options.onStart?.();
+      this.runCount += 1;
+      // M2 Pattern 3: ONCE per contiguous run. `started` clears when the queue
+      // empties or `stop()` is called — and Fish gaps empty it between
+      // sentences — so this is roughly per sentence, not per utterance.
+      // Peer review corrected the stronger claim; the daemon side is
+      // unaffected (sticky flag, idempotent drain).
+      this.options.onStart?.(`pb-${this.runCount}`);
     }
     void this.drain();
   }
@@ -171,7 +195,7 @@ export class AudioPlayer {
 export const PLAYBACK_GAIN = 0.9;
 
 /** Production wiring: decode via AudioContext, play through the default output. */
-export function createDefaultPlayer(events?: { onStart?(): void; onEnd?(): void }): AudioPlayer {
+export function createDefaultPlayer(events?: { onStart?(playbackId?: string): void; onEnd?(): void }): AudioPlayer {
   if (typeof AudioContext === 'undefined') {
     throw new Error('audio output unavailable in this environment');
   }

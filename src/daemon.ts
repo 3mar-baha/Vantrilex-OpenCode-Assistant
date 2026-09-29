@@ -11,7 +11,8 @@ import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, INTAKE_MODEL, type ChatFn, type IntakeAck } from './orchestrator/coordinator.js';
-import { TaskQueue } from './orchestrator/task-queue.js';
+import { TaskQueue, type TaskResult } from './orchestrator/task-queue.js';
+import { DeliveryBuffer, type DeliveryItem } from './orchestrator/delivery.js';
 import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { FishCreditError } from './voice/tts.js';
 import { TtsCreditMonitor } from './voice/tts-credit.js';
@@ -368,18 +369,30 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
                 mission.cancelled === true ? ('ALREADY_RUNNING' as const) : ('BRAIN_FAILED' as const),
             }),
       });
+      // M2 Pattern 3: the `plan-held` notice is no longer fired HERE. It was
+      // fired from inside the planner, which is also inside the window where the
+      // assistant is speaking the acknowledgement — so the one message that needs
+      // a decision was the one guaranteed to be missed. The result is OFFERED to
+      // the buffer below, which delivers it on a quiet channel or not at all.
+      //
+      // The A.15 contract is unchanged: the task is COMPLETED and holds its plan,
+      // and the notice names the task id. Approval re-entry is a SEAM, not a
+      // path: `delivery.retry(taskId)` exists and is unit-tested, but no shell
+      // affordance calls it yet (peer review — claiming otherwise would be
+      // A.14-class). Wiring it is M4/C.5-Phase-2 work, never a second plan.
+      //
+      // Offered HERE rather than from `dispatch`, because `TaskQueue.runOne`
+      // deliberately does not call `dispatch` for a held task: a confirmation
+      // gate is not a dispatch. Both completion shapes have to be offered, and
+      // the two call sites are the only places that can tell them apart.
       if (mission.needsConfirmation === true) {
-        // A.15: from VOICE there is no shell `confirm` command and no pending
-        // map to park in — the park only ever existed on the WS path, so a
-        // destructive plan could not be confirmed at all. It is now a COMPLETED
-        // task holding its plan, and the notice names the task so approval can
-        // re-enter through `tasks.get(id)` without re-planning.
-        const held = mission.flagged ?? [];
-        ui.notice(
-          'plan-held',
-          `خطوات مدمّرة محفوظة للملفات ${held.join('، ')} — بانتظار التأكيد من الواجهة (المهمة ${task.id}).`,
-          'warn',
-        );
+        offerCompletion(task.id, task.epoch, {
+          ok: mission.ok,
+          receipt: mission.receipt,
+          ...(mission.detail !== undefined ? { detail: mission.detail } : {}),
+          needsConfirmation: true,
+          flagged: mission.flagged ?? [],
+        });
       }
       return {
         ok: mission.ok,
@@ -390,15 +403,101 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           : {}),
       };
     },
-    dispatch: () => {
-      // The receipt is already on the task record. Nothing is spoken here: the
-      // audible path for a plan is the plan's own narration, and speaking from
-      // the drain would talk over the NEXT utterance's ack.
+    dispatch: (task, result) => {
+      // M2 Pattern 3 (see `offerCompletion`): a HOLD is offered to the delivery
+      // buffer. A routine dispatch is NOT: its receipt is narrated by the
+      // plan's own line, and offering it would count a non-delivery in
+      // `stats().delivered` — the exact over-report a peer review caught.
+      // Nothing is SPOKEN here either way.
+      //
+      // M2 Pattern 3: offering is not speaking. The completion is offered and the
+      // buffer decides when there is a quiet channel; a hold whose channel is
+      // busy waits for the drain instead of colliding with this turn's speech.
+      if (result.needsConfirmation !== true) return;
+      offerCompletion(task.id, task.epoch, result);
     },
     // Peer review: the kill-switch must be operable, not just readable. An
     // affordance nothing can flip is A.14-class (reads as live, is not).
     enabled: process.env['VOXAURA_TASK_QUEUE'] !== 'off',
   });
+
+  // M2 Pattern 3 — completion ≠ delivery, daemon half.
+  //
+  // Daemon scope beside `tasks` and `speechGate` for the same reason: this state
+  // describes a conversation in progress and must not be rebuilt on a key save.
+  // It closes over `tasks` (for `retry`) and over the channel flags below, so it
+  // is constructed AFTER the queue and BEFORE the pipeline — the same late-
+  // binding dance `coordinatorRef` performs.
+  //
+  // THE DEFECT THIS CLOSES. `plan-held` was fired from inside the planner, i.e.
+  // while the assistant was usually still speaking the acknowledgement. A
+  // confirmation prompt that arrives mid-utterance is not read: the user hears
+  // two things at once and the one that needs a decision is the one they miss.
+  // Now the notice is OFFERED and delivered on a quiet channel, or not at all.
+  //
+  // Channel flags, kept separate rather than collapsed into one boolean: the
+  // `delivery.test.ts` channel table covers all three rows, and a single
+  // "busyish" flag here would silently make two of them unreachable.
+  let ttsInFlight = 0;
+  let playbackSeen = false;
+  /** The single offer seam. Both completion shapes go through it. */
+  function offerCompletion(taskId: string, epoch: number, result: TaskResult): void {
+    delivery.offer({ taskId, epoch, result });
+  }
+  const delivery = new DeliveryBuffer({
+    state: () => ({
+      // Peer review: 'thinking' is busy too — intake runs and the ack is
+      // spoken inside it, so a hold delivered then talks over the ack.
+      // 'listening' is NOT included: the mic streams continuously, so idle
+      // listening is indistinguishable from user speech at this layer, and
+      // gating on it would stall every delivery forever. That residual gap
+      // (user talking over an idle mic) is stated, not closed.
+      speechLive: voicePhase === 'speaking' || voicePhase === 'thinking' || ttsInFlight > 0,
+      ttsPlaying: ttsInFlight > 0,
+      // No shell has reported playback until one does. Deliberately pessimistic:
+      // a delivery into a player that does not exist is silence the user reads
+      // as being ignored, and an optimistic default would make that silence
+      // permanent — a held confirmation with nothing to flush it.
+      playbackReady: playbackSeen,
+    }),
+    deliver: deliverHeld,
+    resultFor: (id) => tasks.getResult(id),
+    // Peer review: without this, a shell that never sends `playbackStarted`
+    // holds a confirmation until TTL silently drops it — permanent silence
+    // for old shells. The expiry hook bounds it: worst case a terminal
+    // notice at 30 s, never no notice.
+    onExpired: (item) => {
+      ui.notice(
+        'delivery-expired',
+        `تأكيد معلق انتهت صلاحيته دون تسليم (المهمة ${item.taskId}) — قل الطلب مرة ثانية لو ما زال مهماً.`,
+        'warn',
+      );
+    },
+  });
+
+  /**
+   * The one place a held result reaches the user.
+   *
+   * Only an FR-12 HOLD is delivered, because that is the only completion that
+   * needs the user to do something: a dispatched plan's receipt already rides
+   * the task record and is narrated by the plan's own line. Delivering receipts
+   * here would put a second, redundant notice in front of every turn.
+   *
+   * Declared as a function (not a const arrow) so `delivery` above can name it
+   * before this point — the buffer is constructed at daemon scope and this
+   * closes over `ui`.
+   */
+  function deliverHeld(item: DeliveryItem): void {
+    // Only a HOLD needs the user to act; a dispatched plan's receipt is narrated
+    // by the plan's own line and repeating it here would double-report.
+    if (item.result.needsConfirmation !== true) return;
+    const held = item.result.flagged ?? [];
+    ui.notice(
+      'plan-held',
+      `خطوات مدمّرة محفوظة للملفات ${held.join('، ')} — بانتظار التأكيد من الواجهة (المهمة ${item.taskId}).`,
+      'warn',
+    );
+  }
 
   // A.6 — key material must not outlive the ring that holds it.
   //
@@ -549,6 +648,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // session details and spend an Inkling call per interruption, then talk
       // over the still-running turn the user just asked to quiet.
       if (executed.kind === 'stopSpeech') return;
+      // M2 Pattern 3: same reasoning, harder. `playbackStarted` fires ONCE per
+      // utterance from the renderer's player, so narrating it would add a second
+      // spoken line to every reply — the assistant talking about its own audio,
+      // and talking over it.
+      if (executed.kind === 'playbackStarted') return;
       const target =
         typeof executed.model === 'string'
           ? executed.model
@@ -591,6 +695,21 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // away a plan the user is already paying for. Structural guard:
     // `daemon-barge-in.test.ts > M2-P2`.
     onStopSpeech: () => speechGate.abort(),
+    // M2 Pattern 3: the shell's player began audio. This is the ONLY proof the
+    // daemon has that a live shell is taking audio, so it marks the delivery
+    // channel playable and drains anything held during the utterance.
+    //
+    // Ordering matters and is deliberate: `playbackSeen` is set BEFORE the drain
+    // so the drain's own `channelFree` check can see the new value. Draining
+    // first would find the channel closed and return 0, and the held
+    // confirmation would sit until the next unrelated event.
+    onPlaybackStarted: () => {
+      // The correlation id is deliberately NOT logged. It is a renderer-local
+      // counter: it names nothing the daemon can act on, and telemetry that
+      // records un-actionable values trains ops to ignore the column.
+      playbackSeen = true;
+      delivery.drain();
+    },
     saveKeys: {
       saveKeys: async (keys) => {
         writeKeyPools(vault, {
@@ -928,6 +1047,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
             // words parse; otherwise a barge followed by a misheard turn would
             // leave the stale plan dispatching.
             voiceEpoch += 1;
+            // M2 Pattern 3: the new utterance supersedes anything still waiting
+            // to be delivered. The queue gets its own `cancel` on the same signal;
+            // the delivery buffer needs it too, because a held FR-12 confirmation
+            // from the PREVIOUS turn is not stale data — it is a prompt for a plan
+            // the user has moved past, and answering it would be acting on an
+            // instruction they retracted.
+            delivery.cancelEpoch(voiceEpoch - 1);
             const ack = await coordinator.intake(task);
             record({
               subsystem: 'BRAIN',
@@ -1009,6 +1135,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               return;
             }
             setVoicePhase('speaking', text);
+            // M2 Pattern 3: the channel is NOT free from here until the audio is
+            // out and the phase is idle. Counted, not boolean, because the barge
+            // path returns from inside the loop and a naive `= false` in the
+            // `finally` could clear the flag while a second utterance is already
+            // synthesising.
+            ttsInFlight += 1;
             // Snapshot the persona for the whole utterance: a persona switch
             // mid-reply would otherwise split one sentence across two voices.
             const voiceId = VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'];
@@ -1100,7 +1232,20 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               }
               ui.notice('tts-failed', `تعذّر توليد الصوت: ${err instanceof Error ? err.message : 'خطأ'}`, 'error');
             } finally {
+              ttsInFlight -= 1;
               setVoicePhase('idle');
+              // M2 Pattern 3: the quiet window this whole module waits for. The
+              // ORDER is load-bearing: the phase drops to idle and the in-flight
+              // count reaches zero BEFORE the drain, or `channelFree` sees a busy
+              // channel, returns 0, and the held confirmation waits for an event
+              // that may never come.
+              //
+              // Peer review corrected the old claim here: this drain does NOT
+              // flush holds for a shell that never sends `playbackStarted`
+              // (`playbackReady` stays false). That case is bounded instead by
+              // the TTL expiry hook below — worst case a terminal notice at
+              // 30 s, never permanent silence.
+              delivery.drain();
             }
           })();
         },

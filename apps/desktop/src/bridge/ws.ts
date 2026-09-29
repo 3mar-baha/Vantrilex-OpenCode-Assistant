@@ -86,7 +86,11 @@ export type CommandKind =
   | 'saveApiKeys'
   | 'confirm'
   | 'sessionContext'
-  | 'createSession';
+  | 'createSession'
+  // M2 Pattern 3 — the player's `onStart`, once per utterance. Telemetry of the
+  // audio path, NOT a control path: the renderer never waits on the ack and the
+  // daemon must never narrate it.
+  | 'playbackStarted';
 
 export interface CommandMsg {
   readonly id: string;
@@ -104,6 +108,8 @@ export interface CommandMsg {
   readonly openrouterKey?: string;
   readonly confirmId?: string;
   readonly approve?: boolean;
+  /** M2 Pattern 3 — optional correlation id for `playbackStarted`, ≤64 chars. */
+  readonly playbackId?: string;
 }
 
 export interface CommandOutcome {

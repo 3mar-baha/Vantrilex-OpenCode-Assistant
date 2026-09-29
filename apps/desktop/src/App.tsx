@@ -158,7 +158,27 @@ export function App(): JSX.Element {
           if (playerRef.current === null) {
             try {
               playerRef.current = createDefaultPlayer({
-                onStart: () => setSpeakingState(true),
+                // M2 Pattern 3: this is the ONE place the renderer tells the
+                // daemon audio actually started, and it fires ONCE per utterance
+                // (see `AudioPlayer.onStart`). The daemon uses it as the only
+                // evidence a live shell is taking audio, so a held FR-12
+                // confirmation can be delivered instead of swallowed.
+                //
+                // Fire-and-forget on purpose: `void`, never awaited. A delivery
+                // signal that can block audio playback is worse than a lost one —
+                // the daemon also drains on its own quiet window, so dropping
+                // this costs nothing but a slightly later delivery.
+                onStart: (playbackId) => {
+                  setSpeakingState(true);
+                  const live = bridgeRef.current;
+                  if (live !== null) {
+                    void live.sendCommand({
+                      id: nextCmdId(),
+                      kind: 'playbackStarted',
+                      ...(playbackId !== undefined ? { playbackId } : {}),
+                    });
+                  }
+                },
                 // Latch briefly so a fast queue doesn't flicker the indicator.
                 onEnd: () => {
                   window.setTimeout(() => setSpeakingState(false), 1500);

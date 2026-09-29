@@ -60,6 +60,15 @@ export interface CommandRouterDeps {
    * the turn running; the button remains the full cancel.
    */
   readonly onStopSpeech?: () => void;
+  /**
+   * M2 Pattern 3 — the shell's player started audio, once per utterance.
+   *
+   * This is the delivery channel's liveness signal, nothing more: it does not
+   * carry the audio (that is the binary downlink) and it is not a barge. The
+   * daemon uses it to mark the channel playable so a held FR-12 confirmation is
+   * delivered when the user can hear it, rather than into an utterance.
+   */
+  readonly onPlaybackStarted?: (playbackId?: string) => void;
   /** Phase 4: the directory a new session is created in (the project root). */
   readonly projectDirectory: () => string;
   /** Phase 4: publish context-window telemetry to the shell. */
@@ -216,6 +225,12 @@ export function createCommandHandler(
       // not a destructive act and must never cost a confirmation round-trip.
       case 'stopSpeech':
         deps.onStopSpeech?.();
+        return { ok: true };
+      // M2 Pattern 3: one line, no session contact, no FR-12 park. Telemetry of
+      // the audio path, and it must never be narrated — see the `onExecuted`
+      // skip in daemon.ts, which is where that decision is enforced.
+      case 'playbackStarted':
+        deps.onPlaybackStarted?.(cmd.playbackId);
         return { ok: true };
       // Phase 4 — OpenCode 360° session manager. Both are additive commands;
       // a client that predates them never sends them.

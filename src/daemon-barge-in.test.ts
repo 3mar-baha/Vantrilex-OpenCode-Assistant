@@ -329,6 +329,35 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
     const window = src.slice(at, at + 300);
     expect(window, 'no spoken approval instruction without a handler').not.toMatch(/أكّد/);
     expect(window, 'the hold names shell approval').toMatch(/الواجهة/);
+    // M2 Pattern 3: the notice MOVED from the planner into `deliverHeld`. It must
+    // not come back: fired from inside `plan()` it lands while the assistant is
+    // speaking the acknowledgement, which is the one moment a confirmation prompt
+    // cannot be read. The delivery buffer exists precisely to hold it.
+    const planAt = src.indexOf('plan: async (task, signal)');
+    expect(planAt).toBeGreaterThan(-1);
+    const planWindow = src.slice(planAt, src.indexOf('\n    dispatch:', planAt));
+    expect(
+      planWindow,
+      "the plan-held notice must NOT be fired from inside the planner (M2-P3)",
+    ).not.toContain("'plan-held'");
+  });
+
+  test('M2-P3: an executed playbackStarted is never narrated back to the user', () => {
+    // STRUCTURAL, same rationale as the `stopSpeech` guard above: `onExecuted` is
+    // an inline closure in `startDaemon`.
+    //
+    // This one is not a nicety. `playbackStarted` fires ONCE per utterance from
+    // the renderer's player, so narrating it would add a second spoken line to
+    // every single reply — and spend a free-tier Inkling call each time. The
+    // assistant would be talking about its own audio, over its own audio.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const at = src.indexOf('onExecuted: (executed, outcome)');
+    expect(at).toBeGreaterThan(-1);
+    const window = src.slice(at, src.indexOf('switchSession:', at));
+    expect(
+      window,
+      'a playback-start is not an outcome to speak: it must return before narrateOutcome',
+    ).toMatch(/if\s*\(\s*executed\.kind\s*===\s*['"]playbackStarted['"]\s*\)\s*return;/);
   });
 
   test('M2-P2: the utterance loop hands the barge to the PROVIDER, and does not bill it as a failure', () => {
@@ -368,7 +397,27 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
     ).toMatch(/\.name === 'AbortError'/);
     // Ordering, as the roadmap states it: abort → idle → notify. The `finally`
     // that publishes `idle` is what notifies the shell, and it must still run.
-    expect(body.slice(catchAt)).toMatch(/finally\s*\{\s*setVoicePhase\('idle'\);/);
+    //
+    // M2 Pattern 3 widened the `finally` by one line (`ttsInFlight -= 1`) and
+    // added the delivery drain, so the old `finally { setVoicePhase('idle');`
+    // adjacency no longer describes the block. The PROPERTY is unchanged and is
+    // now asserted more strictly than before: the phase must drop AND the channel
+    // must be marked idle before the drain, or `channelFree` sees a busy channel,
+    // returns 0, and the held FR-12 confirmation waits for an event that may never
+    // come.
+    const tail2 = body.slice(catchAt);
+    const finallyAt = tail2.indexOf('} finally {');
+    expect(finallyAt, 'the finally must still exist').toBeGreaterThan(-1);
+    const finalBlock = tail2.slice(finallyAt);
+    expect(finalBlock, 'the finally must clear the in-flight counter').toMatch(/ttsInFlight -= 1;/);
+    const idleAt = finalBlock.indexOf("setVoicePhase('idle')");
+    const drainAt = finalBlock.indexOf('delivery.drain()');
+    expect(idleAt, 'the finally must publish idle').toBeGreaterThan(-1);
+    expect(drainAt, 'the quiet window must drain the delivery buffer').toBeGreaterThan(-1);
+    expect(
+      idleAt,
+      'idle MUST precede the drain — draining first makes channelFree report busy and swallows the held item',
+    ).toBeLessThan(drainAt);
   });
 
   test('M2-P2: a parked plan survives a speech-only barge and is delivered', async () => {
@@ -478,5 +527,40 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
     // this file would fail to load rather than fail a production launch.
     expect(typeof startDaemon).toBe('function');
     expect(typeof abortTurn).toBe('function');
+  });
+
+  test('M2-P3 review: routine dispatches are not offered, so stats stay honest', () => {
+    // STRUCTURAL: `dispatch` is an inline closure. Offering every completion
+    // inflated `stats().delivered` with receipts the plan's own line already
+    // narrated. Only holds go through `offerCompletion` now.
+    // Non-vacuous — removing the gate fails the second assert.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const at = src.indexOf('dispatch: (task, result)');
+    expect(at, 'the dispatch closure must exist').toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('},', at));
+    expect(body.length, 'the closure must terminate').toBeGreaterThan(0);
+    expect(body, 'only holds are offered').toMatch(/if \(result\.needsConfirmation !== true\) return;/);
+    expect(body, 'holds still offered').toMatch(/offerCompletion\(task\.id, task\.epoch, result\)/);
+  });
+
+  test('M2-P3 review: thinking counts as busy, listening-idle honestly excluded', () => {
+    // STRUCTURAL: a hold delivered during intake talks over the ack. 'thinking'
+    // covers that window; 'listening' cannot (the mic streams continuously, so
+    // idle listening is indistinguishable from user speech — stated, not closed).
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const at = src.indexOf('speechLive:');
+    expect(at, 'the channel sampler must exist').toBeGreaterThan(-1);
+    const line = src.slice(at, src.indexOf('\n', at));
+    expect(line, 'intake window is busy').toMatch(/voicePhase === 'thinking'/);
+    expect(line, 'idle listening stays out').not.toMatch(/'listening'/);
+  });
+
+  test('M2-P3 review: expired holds end in a terminal notice, never silence', () => {
+    // STRUCTURAL: a shell that never sends `playbackStarted` would otherwise
+    // hold a confirmation until TTL silently dropped it. The expiry hook
+    // bounds that silence at 30 s with a warn notice.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    expect(src, 'expiry hook wired').toMatch(/onExpired: \(item\) => \{/);
+    expect(src, 'terminal notice, not silence').toMatch(/'delivery-expired'/);
   });
 });
