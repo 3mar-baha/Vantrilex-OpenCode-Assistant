@@ -290,7 +290,7 @@ only `src/**`, `test/**`, `bench/**` — the archive is outside runner and `tsc`
 
 Operator-only pre-dispatch `ensureVault('voxaura', resolveVaultRoot())`
 (`:185-195`) runs for doctor/vault/live only — never `serve`.
-`startDaemon()` (`daemon.ts:190`) is the composition root: guards → ServeClient
+`startDaemon()` (`daemon.ts:202`) is the composition root: guards → ServeClient
 → OpenCodeBridge → memoised `envCache` (fail-degraded) → UiServer → owner
 marker → voice pipeline → inventory → sessions publish → `DaemonHandle`
 (`:905-922`). `think` is the inline closure in `buildVoicePipeline`
@@ -446,7 +446,7 @@ Persona surface (three items, not four — earcon pitch was deleted with
 | `reasoning:{effort:'none'}` | intake (`coordinator.ts:215`), narrator (`daemon.ts:347-350`), optimizer (`daemon.ts:724`) | **required** — without it Inkling burns the budget reasoning and returns `finish=length`, `content:null` (measured 0/5 → 5/5) |
 | `response_format` strict `json_schema` | narrator (`narrator.ts:55-67`), plan (`coordinator.ts:99-127`) | **load-bearing** — prompt-only Inkling emits raw tool-call syntax (`<\|message_model\|>shell…`), 0/5 → 5/5 |
 | `NARRATOR_SYSTEM` | `narrator.ts:84-94` | 9-line AR peer-engineer prompt; `({max} كلمة)` placeholder; canned-ban (`تم تنفيذ الأمر بنجاح` forbidden); never-repeat; JSON-only `{"reply_ar":"…"}` |
-| Caps | `narrator.ts:108,127`; `daemon.ts:327,341-346` | `MAX_CHARS=240` (`…` truncation), `maxWords=20`, 120 maxTokens, temp 0.8, 12 s timeout (raised from 8 s on 3×5010 ms measurements) |
+| Caps | `narrator.ts:108,127`; `daemon.ts:350,366` | `MAX_CHARS=240` (`…` truncation), `maxWords=20`, 120 maxTokens, temp 0.8, 12 s timeout (raised from 8 s on 3×5010 ms measurements) |
 | Persona ref counts (lines) | docs:verify-derived | `narrator.ts` **11**, `coordinator.ts` **0**, `prompt-optimizer.ts` **0**, `brain.ts` **0**; sole interpolation `'{max}'` |
 | Dialect lock | `brain.ts:105-109`, `personas.ts:8-11` | Ammani/White-Jordanian, EN tech terms preserved; MSA-newsreader + Beiruti banned |
 
@@ -515,7 +515,7 @@ claimed "fail-closed, no unbounded buffering". Now cumulative, pre-store.
 |---|---|
 | STT | `GroqWhisperClient.transcribe` (`stt.ts:93`); `whisper-large-v3-turbo`, `language:'ar'`, `verbose_json` (`:98-100`); `STT_TIMEOUT_MS=15000` (`:135`, `SttTimeoutError :142`); `transcribeStream` (`:164`) |
 | Brain/intake/plan | `openRouterChat(apiKey,model,system,user,fetchImpl,{reasoning,maxTokens,temperature,timeoutMs,responseFormat})` (`brain.ts:187`); intake opts (effort none, 200 tok, temp 0.2, 10 s, `coordinator.ts:215`); plan (strict schema, 25 s, `:257`); `BRAIN_GOLDEN/CEILING` 2000/5000 ms (`brain.ts:8-9`) |
-| Narrator | `narrate(ctx,chat,model,maxWords,persona?)` (`narrator.ts:123`); `NarratorChat` (`:35`); daemon wrapper 12 s, temp 0.8 (`daemon.ts:327,341-350`) |
+| Narrator | `narrate(ctx,chat,model,maxWords,persona?)` (`narrator.ts:123`); `NarratorChat` (`:35`); daemon wrapper 12 s, temp 0.8 (`daemon.ts:350,366`) |
 | TTS | `FishTransport.synthesize(text,fishVoiceId)` (`tts.ts:237`); `synthesizeStream` (`:239`); `FISH_TIMEOUT_MS=20000` (`:441`, raced abort `:501`); headers `model:` (`:287-293`); `stripSpeechText` (`:64`), `splitSentences` (`:157`), `SpeechGate.capture/isCurrent` (`:189-203`, barge-in abort) |
 | Keys | `Keyring.release(key,ok,status)` (`keyring.ts:89`) advances **only** on 429/401/403; `ROTATION_LIMIT` 10 reqs/key (`keyring.ts:9`); `httpStatusOf` (`errors.ts:51`) maps BRAIN_AUTH→401, RATE_LIMITED→429 |
 

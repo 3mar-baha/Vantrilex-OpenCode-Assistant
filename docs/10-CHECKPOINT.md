@@ -894,7 +894,7 @@ bundled, `layaReady:false` honest) · TEST-ONLY scaffolding **1**
 `onnxruntime-node` fatal; pinned by `sidecar-safety.test.ts`). Barrel bypass:
 `daemon.ts:22` deep `personas.js` (daemon never drags BM25 + 43-chunk corpus);
 `cli.ts:17` sole barrel importer. No ONNX ships at all — installed builds use
-the RMS fallback (`daemon.ts:532`, `ingest.ts:40`).
+the RMS fallback (`daemon.ts:555`, `ingest.ts:40`).
 
 ### What `6be0363` changed (vault secrets → Rust supervisor)
 
