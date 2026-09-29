@@ -851,3 +851,87 @@ a fifth as open. Now covers L1–L24 with no gaps; **L18 is the only non-CLOSED
 row.** That is the third documentation-versus-reality gap this project has
 produced, which is the strongest argument yet for adding CI.
 
+---
+
+## v0.7.2 / `6be0363` — canonical measured gates (2026-09-29, dossier baseline)
+
+Append-only entry. History above stands (each row was true at its own moment);
+**this section is the current truth.** Baseline commit `6be0363`
+(`fix(security): create the vault secrets in the Rust supervisor, not in
+Node`) on `origin/main`. Method: code-first — every figure re-derived from
+the tree at this commit (`docs/PROJECT_MASTER_DOSSIER.md`, 1050 lines).
+Version strings at v0.7.2 everywhere; no bump in this entry.
+
+### Measured gate numbers
+
+| Gate | Value | Command / derivation |
+|---|---|---|
+| Root vitest | **705 passed + 0 skipped, 60 files** | `npx vitest run` (node) — **executed** |
+| Desktop vitest | **142, 24 files** | `npm --prefix apps/desktop run test` (happy-dom) — **executed** |
+| `cargo test` | **52** | MSVC env + `cargo test` — **executed** (`#[test]` count agrees) |
+| E2E | **18 across 14 specs** | Playwright chromium workers:1 retries:0 — rebuilds root `dist/` first; needs 4096/4097/4197 free |
+| `test:vantrilex` | **exit 0** (7 stages) | typecheck → typecheck:tests → eslint (`--max-warnings 0`) → oxlint (pins **8**) → root → desktop → e2e |
+| `docs:verify` | green at baseline (31 claims, no expected values; UNVERIFIED is an error) | `npm run docs:verify` + `--self-test` + `docs-verify-coverage.test.ts` pins the claim set |
+| `test:blindspots` | 58 of 61 modules reached (95.1%, ALL-production basis; informational, exit 0) | unreached: `cli.ts` (247 L, process entry — reported separately, matters most), `common/index.ts` (8), `knowledge/index.ts` (37); + `laya/index.ts` dead-by-decision |
+
+Count history (never down except by deletion-with-tests, which is legitimate):
+491 → 498 (70 tests deleted!) → 525 → 568 (`src/knowledge/` landed) → 572 →
+573 (62 latent test type errors cleared) → 655 → 657 (M0) → 657 → 670 (persona
+wiring) → 670 → 682 (`docs:verify` narrative claims + self-guard) → 682 →
+690 (WS reassembly cap) → 690 → **705** (TTS credit interceptor +
+`machine.key` ACL investigation + extensible claim matcher). Desktop fell
+153 → 141 once when 3 dead components were deleted *with their tests* — the
+only acceptable kind of fall. A falling count is not automatically a
+regression — check `git log` before "fixing" it.
+
+### Reachability at this baseline
+
+LIVE **53** · DEAD **7** (all `src/runtime/laya/*`, 294 MB model never
+bundled, `layaReady:false` honest) · TEST-ONLY scaffolding **1**
+(`claim-matcher.ts`). Quarantine (not deletion): 28 ex-live modules + tests in
+`.opencode/_archive/dead-code-phase1/` (~45 files). Dynamic seam load-bearing:
+`daemon.ts:523` `import('./runtime/vad.js')` (static import would make missing
+`onnxruntime-node` fatal; pinned by `sidecar-safety.test.ts`). Barrel bypass:
+`daemon.ts:22` deep `personas.js` (daemon never drags BM25 + 43-chunk corpus);
+`cli.ts:17` sole barrel importer. No ONNX ships at all — installed builds use
+the RMS fallback (`daemon.ts:532`, `ingest.ts:40`).
+
+### What `6be0363` changed (vault secrets → Rust supervisor)
+
+`machine.key` (32 raw bytes) created + adopted under `restrict_to_owner`
+(`main.rs:864-866,881-884`); `keyring.dat` DACL at `resolve_vault_dir`
+(`:1373-1376`) + `restrict_vault_file` (`:907-922`); wrong-length → delete +
+Err; DACL fail → delete + Err; `getrandom` (`:587`) no fallback. Verified
+live: env-key round-trip 3/3. **Half still inert (Triad A.1/A.2):**
+`shutdown_all_services` and `restrict_vault_file` are registered with zero
+shell call sites — teardown is exit-driven; the first save undoes the startup
+DACL until something re-invokes the command. Node-side `icacls` was
+implemented, measured (success message then EPERM for the named account), and
+removed — `ownerOnlyAclAvailable()` reports `false` with reason
+(`win-acl.ts:56-65`); the file's "until (1) is done" comment is stale as of
+this commit for `machine.key` creation (now supervisor-owned) but still
+accurate for the post-save re-lock path.
+
+### Persona + live probe at this baseline
+
+Styling ships and was heard once: `narrate()` prepends
+(`narrator.ts:136-139`), directive string never `PersonaId`
+(`narrator.ts:28-32`), `PERSONA_DIRECTIVES satisfies Record` (`personas.ts:79-82`),
+ref counts narrator **11** / coordinator **0** / optimizer **0** / brain **0**,
+earcon files **0** + pitch constants **0**, knowledge importers **2** / barrel
+**1**. Wave-3 probe 2026-09-29: 6/6 audio-ready Arabic, markers 3/3 per arm,
+p50 3,932/4,294 ms; within-persona divergence 3/3 at temp 0.8 →
+non-interchangeable, not causal. Session history (no tree artifact); retrieval
+half still undone — see `personas/WIRING.md` §6 (re-resolved).
+
+### Carried forward from this checkpoint
+
+- Triad A.3–A.7 (429 rotation, 402 retry, credit-clock reset, key lifetime,
+  monitor states) · B.1–B.3 (pre-header buffer, replay buffer, queue watermarks)
+  · C.2/C.3/C.5 (shutdown control, credit banner, turn receipts).
+- Fish publishes no API-tier renewal date — credit banner triggers on observed
+  402/429 only, never a countdown (the old "expires 2026-11-30" row above was a
+  site-quota figure, not an API-tier date; do not plan against it).
+- Laya 7 dead by decision; earcon pitch gone not fixed; `Crest.tsx` 0
+  importers; `mute`/`createSession`-family type+stub only.
+

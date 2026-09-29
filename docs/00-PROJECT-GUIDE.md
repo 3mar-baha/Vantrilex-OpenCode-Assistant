@@ -35,10 +35,10 @@ through official APIs. This keeps us immune to upstream updates.
 │ (display +   │  hello/ack/   │  (orchestrator,  │  Basic auth   │ (29 sessions,  │
 │  buttons)    │  inventory)   │  queue, ledger)  │  port 4096    │  shared DB)    │
 └──────────────┘               └────────┬─────────┘               └────────────────┘
-                                        │ skills · vault · RAG · voice
+                                        │ skills · vault · knowledge · voice
                                ┌────────▼─────────┐
-                               │ Dots3 → Nemotron │  AI role chain
-                               │     → Inkling    │  (intake → boss → worker)
+                               │ Dots3 → Inkling  │  AI role chain
+                               │ (intake → plan + narrate) │  (planner = narrator + brain)
                                └──────────────────┘
 ```
 
@@ -53,9 +53,14 @@ through official APIs. This keeps us immune to upstream updates.
 
 1. **You speak.** The mic captures audio; Groq Whisper transcribes it
    (`whisper-large-v3-turbo`, Arabic-aware).
-2. **The brain understands.** Nemotron (via OpenRouter) reads the transcript
-   and returns strict JSON: `{intent, control, reply}` — what you want, any
-   control action, and what to say back.
+2. **The brain understands.** Inkling (via OpenRouter) reads the transcript —
+   Dots3 takes the fast intake pass, Inkling plans *and* narrates — and returns
+   strict JSON: `{intent, control, reply}` — what you want, any
+   control action, and what to say back. Three non-obvious requirements, all
+   found by live calls: mandatory `User-Agent: opencode/1.0 (Voxaura)`
+   (`brain.ts:23`; Inkling 403s without an agentic UA),
+   `reasoning:{effort:'none'}` (else `finish=length`, `content:null`), and a
+   strict `json_schema` (else raw tool-call syntax in the audio).
 3. **Danger check (FR-12).** Words like *delete / destroy / deploy / rm -rf*
    always trigger an explicit confirmation first. No exceptions.
 4. **Dispatch.** The orchestrator queues the task, sends it to the right
@@ -73,18 +78,19 @@ Measured live: serve answers in ~125 ms, voice reply first-chunk in
 - **Session** (`ses_…`): one conversation with the AI. 29 live on the shared DB.
 - **Agent** (`build`, `architect`, `code-reviewer`, …): a role preset — 17 are
   auto-discovered per project, including all 12 repo-defined specialists.
-- **Model** (`provider/model`, e.g. `openrouter/nvidia/nemotron-…:free`): the
+- **Model** (`provider/model`, e.g. `thinkingmachines/inkling:free`): the
   LLM answering. Switchable per session with one POST; the desktop shows a
-  live dropdown fed by the daemon.
+  live dropdown fed by the daemon. ("Nemotron" survives only as the
+  coordinator *role name* in the handoff envelope, not as a model slug.)
 
 ## 5. Every AI model in the system
 
 | Job | Provider | Exact model | Status |
 |---|---|---|---|
 | Conversational intake | OpenRouter | `dots-studio/dots-3-note-preview:free` | **Live** |
-| Master coordinator & brain | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
-| Sub-agent execution driver | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
-| Session default | OpenRouter | Nemotron (same slug) | **Live** |
+| Coordinator / planner | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
+| Narrator (spoken confirmations) | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
+| Brain / `cli live` | OpenRouter | `thinkingmachines/inkling:free` | **Live** |
 | Speech-to-text | Groq | `whisper-large-v3-turbo` | **Live** |
 | Text-to-speech | Fish Audio | `s2.1-pro-free` | **Live** |
 | Voices | Fish Audio refs | Kareem `5b90451e…`, Nour `88c0375e…` | **Live** |
@@ -98,6 +104,12 @@ key is missing instead of guessing.
 - **Encrypted vault** (`vault/keyring.dat`): AES-256-GCM, per-pool nonces,
   checksums verified before decrypting, machine-bound key file, memory wiped
   after each use. Corruption refuses loudly instead of half-opening.
+  Since `6be0363` the vault secrets are **created in the Rust supervisor, not
+  in Node**: `machine.key` (32 raw bytes) under `restrict_to_owner` on create
+  AND adopt, `keyring.dat` DACL at vault-dir resolve + `restrict_vault_file`
+  command (fail-closed deletes). Node `{mode: 0o600}` is a silent no-op on
+  Windows and `icacls /grant` cannot name the owner SID (measured EPERM) —
+  see `12-SECURITY.md` §§12.2–12.3.
 - **Zero-secret discipline:** keys are never printed, logged, tested, or
   committed. The `doctor` command reports "1 key present", never the key.
   Verified by forensic scan: 350 files, zero leaks.
@@ -131,11 +143,11 @@ are never overwritten. Secrets are banned from notes by rule.
 
 ## 8. How quality is proven
 
-| Gate | Command | Current score (measured 2026-09-28) |
+| Gate | Command | Current score (measured 2026-09-29, baseline `6be0363`) |
 |---|---|---|
-| Unit + type + lint | `npm run test:vantrilex` | **726 pass** (573 root + 153 desktop), 0 eslint warnings, oxlint ratchet 8 |
-| Shell E2E | `npm run test:e2e` (Playwright) | **18 across 14 specs** — counted from the spec files, not re-run for this row |
-| Rust unit | `cargo test` (needs MSVC `VsDevCmd.bat`) | **27** `#[test]` |
+| Unit + type + lint | `npm run test:vantrilex` | **847 pass** (705 root / 60 files + 142 desktop / 24 files), 0 eslint warnings, oxlint ratchet 8 |
+| Shell E2E | `npm run test:e2e` (Playwright) | **18 across 14 specs** — stub-driven (real `UiServer` + router, fake `:4197` control, no providers/vault) |
+| Rust unit | `cargo test` (needs MSVC `VsDevCmd.bat`) | **52** tests |
 | Pre-flight | `node dist/cli.js doctor` | environment + serve health |
 | Live console | `node scripts/live_console_test.ts` | real serve, TTS, STT, VAD |
 | Packaging | `node scripts/packaging-preflight.mjs` | 14/15 (only MSVC linker missing) |
@@ -166,7 +178,7 @@ Environment: `OPENCODE_SERVER_PASSWORD`, `GROQ_API_KEYS`, `FISH_AUDIO_KEYS`,
 `OPENROUTER_API_KEY`, `VOXAURA_VAULT_DIR` (optional vault location).
 
 **Platform scope (locked):** Windows is the only supported target. The NSIS
-installer (`Voxaura_0.5.0_x64-setup.exe`) bundles node.exe plus the pruned
+installer (`Voxaura_0.7.2_x64-setup.exe`) bundles node.exe plus the pruned
 runtime sidecar; the Job Object teardown, tray/hotkey supervisor, and all E2E
 proof run on Windows. macOS and Linux builds are **officially deferred** until
 the Windows target reaches complete long-term stability — no bundle-ID rename,
@@ -176,12 +188,16 @@ no AppImage work until then.
 
 | Path | What lives there |
 |---|---|
-| `src/ipc/protocol.ts` | Frozen WS-4097 frames (never break these) |
-| `src/runtime/client.ts` | Typed serve client (auth, sessions, prompts, controls) |
-| `src/orchestrator/` | Queue, backpressure, inventory, command router |
-| `src/voice/` | STT, brain, TTS, vault, keyring |
+| `src/ipc/protocol.ts` | Frozen WS-4097 frames + caps (1 MiB msg cumulative pre-store, 64 KiB audio, 8 conns; never break these) |
+| `src/ipc/ui-server.ts` | WS bridge server + redaction sink (`notice()` redacts; bearer pre-upgrade) |
+| `src/runtime/client.ts` | Typed serve client (HTTP Basic — Bearer is rejected; sessions, prompts, controls) |
+| `src/orchestrator/` | FR-12 command router, Dots3→Inkling coordinator, persona-prepended narrator, inventory, slash, mentions, prompt-optimizer |
+| `src/voice/` | STT (Whisper `ar`), brain (Inkling), TTS (Fish-only) + credit interceptor, vault, keyring, `win-acl` reporter |
+| `src/knowledge/` | Tier-1 ground truth + styling, BM25, persona registry (RAG half unwired — see `personas/WIRING.md` §6) |
 | `src/memory/vault.ts` | Obsidian self-bootstrap logic |
-| `apps/desktop/src/` | Shell UI, WS bridge, E2E suite |
+| `apps/desktop/src/` | Shell UI, WS bridge (resume floor, ack ledger), audio capture/VAD/playback |
+| `apps/desktop/e2e/` | Stub daemon (fake `:4197` control) + 14 specs / 18 tests — not the real daemon |
+| `apps/desktop/src-tauri/src/main.rs` | Rust supervisor: Job Object, secrets + DACLs, C2 identity, spawns serve + sidecar |
 | `opencode.json` | Model default, provider slugs, MCP servers |
 | `.opencode/agents/` + `skills/` | 12 agents, 16 skills (incl. Inkling + bridges) |
 | `docs/10-CHECKPOINT.md` | Gate ledger — the project's lab notebook |
@@ -196,7 +212,13 @@ OpenCode engine. **Session** — one AI conversation. **Agent** — a role prese
 **WS-4097** — our WebSocket dialect. **FR-12** — ask-before-destroy rule.
 **Ledger** — append-only audit log. **Harness** — the live test script.
 **TTS/STT** — text-to-speech / speech-to-text. **TTFB** — time to first audio
-byte (budget 800 ms).
+byte (budget 800 ms). **Supervisor** — the Rust `voxaura.exe` owning ports,
+secrets, and child processes. **C2** — the who-holds-4097 identity check
+(`daemon.owner` marker: cold→spawn, ours→adopt, foreign→refuse). **Persona**
+— Kareem/Nour styling: narration directive + TTS voice id + wave colour
+(three items, not four — the earcon pitch was deleted and never reimplemented).
+**RAG half** — the unwired retrieval plan (`personas/WIRING.md` §6): the
+corpus exists, no chunk reaches any prompt.
 
 ## 12. A note on the older spec docs
 

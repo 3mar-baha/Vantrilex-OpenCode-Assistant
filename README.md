@@ -6,509 +6,151 @@
 </p>
 
 <p align="center">
-  <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-726%20unit%20%2B%2027%20rust-brightgreen" alt="Tests" /></a>
+  <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-847%20unit%20%2B%2052%20rust-brightgreen" alt="Tests" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.7.2-blueviolet" alt="Version" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/tauri-v2%20%7C%20rust-stable-orange" alt="Tauri" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22-339933" alt="Node" /></a>
-  <a href="docs/RAG-ORCHESTRATOR-INTEGRATION.md"><img src="https://img.shields.io/badge/opencode-v2%20native-7c3aed" alt="OpenCode" /></a>
+  <a href="docs/PROJECT_MASTER_DOSSIER.md"><img src="https://img.shields.io/badge/audit-code--first%20dossier-7c3aed" alt="Dossier" /></a>
   <a href="README.ar.md"><img src="https://img.shields.io/badge/العربية-README.ar.md-red" alt="Arabic" /></a>
 </p>
 
+**Trust code, not prose.** The audit of record is `docs/PROJECT_MASTER_DOSSIER.md`
+(baseline `6be0363`, code-first, zero-trust). Every number below is re-derived by
+`npm run docs:verify` (31 claims, exits 1 on any mismatch) or labelled as session
+history where no tree artifact exists. `docs/01–28` are a frozen, partly-wrong spec set.
+
 ## Table of contents
 
-- [1. Executive whiteboard & core philosophy](#1-executive-whiteboard--core-philosophy)
-- [2. Architecture deep-dive](#2-architecture-deep-dive)
-- [3. Orchestrator & concurrency engine](#3-orchestrator--concurrency-engine)
-- [4. Desktop shell & Tauri runtime](#4-desktop-shell--tauri-runtime)
-- [5. Security, key vault & zero-secret architecture](#5-security-key-vault--zero-secret-architecture)
-- [6. Empirical model accuracy & benchmarks](#6-empirical-model-accuracy--benchmarks)
-- [7. Memory & context pruning subsystem](#7-memory--context-pruning-subsystem)
-- [8. CLI reference & runbook](#8-cli-reference--runbook)
-- [9. Footer & governance](#9-footer--governance)
+- [1. What Voxaura is](#1-what-voxaura-is)
+- [2. Quickstart & CLI reference](#2-quickstart--cli-reference)
+- [3. Architecture deep-dive](#3-architecture-deep-dive)
+- [4. Voice loop: geometry & providers](#4-voice-loop-geometry--providers)
+- [5. Models: all free tier, three silent breakers](#5-models-all-free-tier-three-silent-breakers)
+- [6. Personas, dialect & knowledge](#6-personas-dialect--knowledge)
+- [7. Security, vault & redaction](#7-security-vault--redaction)
+- [8. Verification: gates, guards & blind spots](#8-verification-gates-guards--blind-spots)
+- [9. Known defects (documented, not fixed)](#9-known-defects-documented-not-fixed)
+- [10. Diagnostics & introspection readiness](#10-diagnostics--introspection-readiness)
+- [11. Release, conventions & footer](#11-release-conventions--footer)
 
 ---
 
-## 1. Executive whiteboard & core philosophy
+## 1. What Voxaura is
 
-**Problem statement.** Developers working with AI coding agents juggle three
-separate surfaces: a chat transcript, a terminal running commands, and the
-IDE holding the code. Context evaporates between turns, credentials leak into
-logs, and every new session starts from zero. Voice interfaces add a fourth
-failure mode: spoken intent is ambiguous, and acting on misheard destructive
-commands is unacceptable.
+Voxaura is a Windows-first **Tauri v2 desktop companion + Node daemon** that drives
+**OpenCode v2** (`opencode serve`) by voice. The user speaks Arabic (Ammani / White
+Jordanian dialect); the system transcribes (Groq Whisper), plans via free-tier
+OpenRouter models (Dots3 intake, Inkling planner + narrator), speaks back via
+**Fish Audio TTS only**, and renders state in a 440×600 Arabic RTL HUD.
 
-**The ambient companion paradigm.** Voxaura inverts the relationship: instead
-of the developer driving the agent through chat, an ambient desktop companion
-owns the runtime loop. The Tauri shell is deliberately thin (window, tray,
-hotkey, webview). A Node daemon owns exactly one `opencode serve` process
-(the single-supervisor rule enforced by a sibling sweeper), governs every
-session through a versioned WebSocket bridge, and funnels all mutations
-through a typed HTTP control plane with fail-closed error codes. Voice is an
-intake modality with Arabic personas, never a privileged control path:
-Kareem (كريم) and Nour (نور) converse naturally, while all machine
-coordination happens in structured English handoffs.
+```
+                  +-------------------+      voice      +-------------------+
+                  |  Tauri shell      |<---------------->  human (Arabic)  |
+                  |  (HUD, 440x600)   |      mic/spk      |  Ammani dialect |
+                  +--------+----------+                 +-------------------+
+                           | Tauri invoke (4 commands) + WS-4097 subprotocol bearer
+              +------------+------------+
+              | Rust supervisor         |  main.rs — process owner, Job Object,
+              | (voxaura.exe)           |  secrets, ports, C2 identity
+              +------------+------------+
+                           | spawn: opencode serve (:4096) + node sidecar dist/cli.js serve (:4097)
+              +------------+------------+
+              | Node daemon             |  daemon.ts — UI bridge, voice pipeline,
+              | (sidecar)               |  OpenCode bridge, vault, telemetry
+              +------------+------------+
+                           | HTTP 127.0.0.1:4096 (OPENCODE_SERVER_PASSWORD)
+              +------------+------------+
+              | opencode serve          |  sessions, agents, ACP tools (external binary)
+              +-------------------------+
+```
 
-**Value proposition.** One shared session database, one supervisor, one audit
-ledger. Every prompt carries a receipt (`msg_…`), every control returns an
-explicit ack, every keystroke of secret material stays inside an encrypted
-vault whose contents are never printed. New sessions inherit project agents,
-provider models, and memory notes instead of starting cold.
+Four fixed ports, all loopback-only: **4096** OpenCode serve, **4097** WS-4097 UI
+bridge, **1420** Vite dev, **4197** E2E stub control. Upstream cloud dependencies
+(all outbound, loopback otherwise): Groq Whisper `whisper-large-v3-turbo`
+(`language: 'ar'`), OpenRouter `dots-studio/dots-3-note-preview:free` (intake) and
+`thinkingmachines/inkling:free` (plan + narrate + brain), Fish Audio
+`s2.1-pro-free` (TTS). **No ONNX ships at all** — `models/*.onnx` is gitignored and
+the bundle carries only the sidecar, so installed builds always use the RMS energy
+fallback; Silero has never run in a shipped build. Laya heads
+(`src/runtime/laya/*`, 7 modules) are dead by decision: the 294 MB model never loads.
 
-**Agent hierarchy.** Dots3 (`dots-studio/dots-3-note-preview:free`) takes
-Arabic intake and emits English missions — with reasoning suppressed
-(`effort: none`, 200 tokens) it answers in ~1.5 s as the fast primary, with a
-one-shot inkling intake failover if it ever returns unparseable output.
-Inkling
-(`thinkingmachines/inkling:free`, the coordinator default) decomposes
-missions into dependency-ordered task DAGs under strict JSON-schema
-enforcement (plus one bounded retry) and dispatches them. Inkling
-(`thinkingmachines/inkling:free`, `mode: subagent`) also drives work strictly
-inside OpenCode session boundaries and reports concise English summaries with
-receipts. A.R.E.E.B. (أَرِيب) is the Type-1 foundation model behind the
-persona layer.
-
-### Role contract matrix
-
-| Role | Model | MCP surface | Forbidden |
-|---|---|---|---|
-| Dots3 intake | `dots-studio/dots-3-note-preview:free` | conversation only | tool dispatch |
-| Inkling coordinator | `thinkingmachines/inkling:free` | sequential-thinking, memory, filesystem, github, context7 | direct OS execution |
-| Inkling driver | `thinkingmachines/inkling:free` | filesystem, memory, sequential-thinking, obsidian-vault, github | out-of-session acts, model/agent switches, credentials |
+Core mandates (product decisions, not accidents): **100%-free models** (every slug
+is `:free`); **Fish-only TTS** (credit banner triggers on observed 402/429, never on
+an invented countdown); **Arabic-first Ammani dialect** (newsreader MSA and Beiruti
+banned); **fail-closed credentials** (missing/weak secret ⇒ file deleted + error, or
+keyless degraded mode — never silent adoption); **no canned speech** (only the
+daemon's `assistant-said` narration speaks; the shell announces nothing); **additive
+WS contract** (old shells ignore unknown frame types); **fix the document, not the
+script** (`docs:verify` re-derives; prose is corrected to match code).
 
 ---
 
-## 2. Architecture deep-dive
+## 2. Quickstart & CLI reference
+
+```bash
+npm install && npm run build            # tsc → dist/ (daemon)
+npm run test:vantrilex                  # full gate (ports 4096/4097/4197 free)
+node dist/cli.js live                   # REAL providers (vault keys; quota)
+node dist/cli.js doctor                 # env presence + serve health
+node dist/cli.js knowledge ["<query>"]  # corpus parity + optional search
+cd apps/desktop
+npm run dev                             # tauri dev      npm run dev:web  # vite :1420
+npm run test:e2e                        # rebuilds root dist + Playwright
+npm run build:tauri                     # NSIS + AppImage (needs MSVC env + makensis)
+```
+
+The operator CLI (`src/cli.ts`) is a five-branch argv ladder:
+
+| Command | Function | Contract |
+|---|---|---|
+| `doctor` | env presence (values hidden) + vault counts + serve probe | 0 healthy, 1 otherwise |
+| `vault bootstrap` | migrate comma key pools into the encrypted vault | 0 on success, 1 if pools missing |
+| `live` | full STT → brain → TTS round-trip with latency JSON | 0 on success, 1 with partial report (burns quota, never in gate) |
+| `serve` | adopt serve, host the WS-4097 plane; fail-closed on empty password; SIGINT/SIGTERM → stop | long-running; only production importer of `startDaemon` |
+| `knowledge ["<q>"]` | corpus parity + optional search | 0 / usage exit 2 |
+
+Environment: `OPENCODE_SERVER_PASSWORD` (serve auth), `GROQ_API_KEYS` /
+`FISH_AUDIO_KEYS` / `OPENROUTER_API_KEY` (comma pools, unset after bootstrap),
+`VOXAURA_VAULT_DIR` (vault override), `VOICE_RUNTIME_DIR` (runtime-dir override).
+A `.env.local` file is honored only for unset variables. Keys enter the encrypted
+vault **only** via the API-keys window → `saveApiKeys` (or `vault bootstrap` from
+env pools); a keyless daemon keeps the control plane up, drops audio, and emits
+`voice-disabled-no-keys` until keys are saved (which rebuilds the pipeline live).
+
+---
+
+## 3. Architecture deep-dive
 
 <p align="center">
   <img src="assets/architecture-flow.svg" alt="CLI to WS-4097 gateway to orchestrator to client pipeline" width="100%" />
 </p>
 
-Packets travel **CLI Engine** → **WS-4097 Gateway** over IPC → **Orchestrator**
-over JSON-RPC → **Client Interface** over SSE stream into `opencode serve`
-2.0.12 on the shared database.
-
-### Frame catalog (frozen contracts)
-
-| Direction | Frame | Key fields |
-|---|---|---|
-| Daemon → shell | `hello` | `contractVersion`, `nodePid`, `servePort`, `layaReady`, `seq` |
-| Daemon → shell | `inventory` | level-triggered session snapshot (latest replays on resume) |
-| Daemon → shell | `agents` | discovered-agent snapshot `[{id, name}]` |
-| Shell → daemon | command | `id` + `kind` (10 kinds, schema-validated) |
-| Daemon → shell | `ack` | `id`, `ok`, optional `detail` (never throws the socket) |
-| Daemon → shell | `event` | `seq`, `eventId`, `state` (shared seq with ledger) |
-
-### Command catalog (renderer intents)
-
-| Kind | Effect | Transport |
-|---|---|---|
-| `switchSession` | set active session context | in-daemon |
-| `setSessionAgent` | POST `/api/session/{id}/agent` | 204 |
-| `setSessionModel` | POST `/api/session/{id}/model` with `ModelRef` | 204 |
-| `toggleSessionSkill` | attach/detach skill | 204 |
-| `execSessionShell` | POST `/api/session/{id}/shell` (async output over events) | 204 |
-| `abort` / `mute` / `deafen` / `arm` / `setPersona` | local daemon intents (voice + persona layer) | ack |
-
-### Failure-code map (total, fail-closed)
-
-| Signal | Code | Handling |
-|---|---|---|
-| Session missing | 404 `SESSION_NOT_FOUND` | halt lane, report |
-| Session occupied | 409 `SESSION_BUSY` | bounded backoff requeue |
-| Bad credentials | 401 | halt everything, rotate, never blind-retry |
-| Other non-2xx | transient | bounded retries under idempotency keys |
-
-<p align="center">
-  <img src="assets/system-state-machine.svg" alt="Session lifecycle finite-state machine" width="100%" />
-</p>
-
-Every session moves through the lifecycle above. The states are enforced by
-the `SessionState` contract: `creating`, `running`, `awaiting-approval`,
-`idle`, `complete`, `error`, `aborted`. Transitions are event-driven, never
-assumed: a prompt moves `idle → running`; a completed run lands in `idle` or
-`complete`; destructive-intent detection parks the session in
-`awaiting-approval` until FR-12 confirmation arrives; transport and contract
-failures land in `error`; operator abort lands in `aborted`. The fail-closed
-map is total: 404 (`SESSION_NOT_FOUND`) halts the lane, 409 (`SESSION_BUSY`)
-requeues with backoff, 401 (credential rejection) halts everything.
-
-### WS-4097 protocol and IPC handshake
-
-<p align="center">
-  <img src="assets/ipc-protocol-handshake.svg" alt="WS-4097 frame sequence: token, hello, command, ack, events" width="100%" />
-</p>
-
-The bridge lives at `/v1/ui` under the `voice-ui.v1` subprotocol
-(`src/ipc/protocol.ts`). The handshake is:
-
-1. The shell connects with a bearer token passed via the subprotocol and an
-   optional `?lastSeq=` resume cursor.
-2. The daemon answers `hello {contractVersion, nodePid, servePort, layaReady,
-   seq}` — the shell learns the exact contract (currently 3.1.0), the daemon
-   PID, the serve port (4096), and the current sequence number.
-3. Level-triggered `inventory` snapshots stream the session list; only the
-   latest snapshot replays on resume, so reconnects converge immediately.
-4. Renderer intents arrive as versioned commands (`abort`, `mute`, `deafen`,
-   `arm`, `setPersona`, `switchSession`, `setSessionAgent`, `setSessionModel`,
-   `toggleSessionSkill`, `execSessionShell`), each validated by
-   `UiCommandSchema` and answered with `ack {id, ok, detail?}`.
-5. Session activity streams back as `event {seq, id, state}` frames sharing one
-   sequence space with the ledger.
-
-Client contracts are frozen: no breaking changes to frame shapes, ever. The
-HTTP side uses Basic auth (`opencode:<password>`; Bearer is rejected),
-sessions at `/api/session` wrapped in `{data}` envelopes, server-sent events
-at `/api/event`, and 204 No Content for controls. Model switches are POSTs
-carrying `ModelRef {id, providerID, variant?}`. Session creation omits the
-client id (server-generated `ses_…`). The prompt envelope is
-version-specific: flat `{text}` for the canonical 2.0.x CLI, nested
-`{prompt:{text}}` for 1.18.x, selected by `ServeClient.promptEnvelope`.
-
----
-
-### Runtime version matrix (verified)
-
-<p align="center">
-  <img src="assets/runtime-version-matrix.svg" alt="Runtime compatibility: Node, Rust, Tauri, TypeScript, OS targets" width="100%" />
-</p>
-
-<details>
-<summary>📊 Raw tabular data</summary>
-
-| Generation | Source | Prompt envelope |
-|---|---|---|
-| 2.0.x (canonical) | desktop-bundled 2.0.12 CLI | flat `{text}` (default) |
-| 1.18.x | npm `latest` (no 2.x published) | nested `{prompt:{text}}` |
-
-`ServeClient.promptEnvelope` selects the shape; the wrong envelope is a
-400-class failure, so version is detected, never assumed.
-
-</details>
-
-## 3. Orchestrator & concurrency engine
-
-<p align="center">
-  <img src="assets/orchestrator-queue-lifecycle.svg" alt="Inbox to FIFO queue to workers to ledger lifecycle" width="100%" />
-</p>
-
-The orchestrator (`src/orchestrator/`) is a pipeline, not a thread pool.
-Server-sent events land in an inbox, enter a FIFO queue with identity
-prefixes, and are dispatched to session workers. Three mechanisms keep it
-honest under load:
-
-- **Dedupe by event id.** Already-seen ids are dropped on enqueue, so retries
-  and SSE replays never double-apply a prompt. Prompt keys are stable per
-  (session, text, task), giving serve-side idempotency real teeth.
-- **Backpressure, not blocking.** A 409 from serve surfaces as retryable
-  `SESSION_BUSY`; the item requeues with backoff while the worker count stays
-  bounded (`n ≤ workers`). Queue depth is observable, so the coordinator sees
-  load instead of guessing it.
-- **Sibling sweeper.** Exactly one process may own `opencode serve`
-  (`src/launcher/siblings.ts`). Strays are swept, never fought — two writers
-  to one session database is a corruption vector, and the architecture refuses
-  to allow it.
-
-Dispatch provenance records which session and task originated each prompt, so
-cross-session work stays auditable end to end. Every completed unit of work
-lands in the ledger with its receipt: `msg_…` ids, ack ids, commit SHAs.
-
----
-
-## 4. Desktop shell & Tauri runtime
-
-<p align="center">
-  <img src="assets/desktop-tauri-bridge.svg" alt="Rust backend and React webview bridge" width="100%" />
-</p>
-
-The shell (`apps/desktop/`, Tauri v2 + React 18 + Vite + Tailwind) owns
-exactly three native responsibilities: window, tray, and global hotkeys
-(`apps/desktop/src-tauri/src/main.rs`). It owns no serve process, no session
-state, no credentials. The React webview renders the matrix, portals, session
-chips, and the agent/model badge; it communicates with the daemon only
-through the WS-4097 bridge (`apps/desktop/src/bridge/ws.ts`) with whole-shape
-frame validation — malformed frames surface an error and never touch state.
-
-Sandbox boundaries are structural: there is no Node runtime in the webview,
-no direct database access from the renderer, and no secret material crossing
-the bridge. The shell is a display and intent surface; the daemon is the only
-writer. OS integration (tray icon, global hotkey, window controls) stays in
-Rust; everything else is web technology behind the sandbox.
-
-**Full-duplex voice loop.** The mic path is `AudioCapture` (AudioWorklet, 16
-kHz mono Int16, 100 ms frames, muted by default) → binary PCM uplink →
-Whisper → 3-agent chain. The speech path is Fish TTS → per-sentence MP3
-broadcast → strict-FIFO `AudioPlayer` with a speaking indicator. **Barge-in:**
-while TTS plays, quiet frames are ducked locally (RMS energy gate) and a
-voice burst stops playback, sends a silent `abort`, and trips a daemon speech
-gate — the user can always interrupt. **Sentence streaming:** the first clause
-synthesizes and broadcasts immediately; live cold-synthesis TTFB measures
-977–4029 ms across runs (Fish server variance) against the 800 ms budget,
-0 ms on cache hits. The HUD visualizer renders the 5-bar emblem voiceprint
-(`assets/icon.svg`) breathing with live playback energy.
-
-**Process supervisor.** The Tauri backend owns window/tray/hotkey plus a
-three-tier bring-up (serve → daemon adoption, never double-spawn) and a
-Win32 Job Object with `KILL_ON_JOB_CLOSE`: force-killing the app reaps every
-child, zero orphaned processes.
-
-**Self-contained installer.** The NSIS setup
-([v0.7.2 download](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.2))
-bundles `node.exe` plus the pruned runtime sidecar — end users need no
-Node, npm, or repo checkout. Windows is the only supported target;
-macOS/Linux are deferred until Windows is long-term stable.
-
----
-
-## 5. Security, key vault & zero-secret architecture
-
-<p align="center">
-  <img src="assets/vault-crypto-flow.svg" alt="Environment pools to scrypt to AES-256-GCM to ephemeral keyring" width="100%" />
-</p>
-
-Secrets enter once, through comma-separated environment pools, and are
-migrated into the encrypted file vault (`node dist/cli.js vault bootstrap`),
-after which the environment pools are unset. The cryptography
-(`src/voice/vault.ts`) is explicit and boring on purpose:
-
-- Key derivation: scrypt over a machine-scoped 0600 key file at
-  `~/.opencode-voice-runtime/machine.key` (Electron `safeStorage` is
-  preferred wherever present).
-- Storage: AES-256-GCM with a fresh 12-byte nonce per pool; each blob carries
-  `{nonce, ciphertext, checksum}` and decryption is checksum-then-decrypt —
-  corruption refuses loudly (`VAULT_CORRUPT`) instead of half-opening.
-- Lifetime: the in-memory keyring hands out key material per call and zeroes
-  buffers on release; rotation advances deterministically with forced rollover
-  on 429/401/403.
-
-Zero-secret policy is enforced, not aspirational: key material never reaches
-stdout (the doctor command prints presence and counts only), never enters
-logs, tests, or console output, and `vault/keyring.dat` plus machine keys are
-git-ignored while the Obsidian memory notes remain committable. A forensic
-audit across 350 tracked files confirmed zero plaintext keys and zero tracked
-backup/journal artifacts, and `.gitignore` additionally covers `*.bak`,
-`*-wal`, and `*-shm`.
-
-Closed audit items: per-install IPC token (`0600`, fetched at runtime via the
-`ipc_token` command — nothing baked into the bundle), 1 MiB inbound WS frame
-cap, hardened Tauri CSP, least-privilege capabilities (no blanket
-`core:default`), truthful persona state with a 45 s bridge staleness
-watchdog, and FR-12 park-until-confirm for destructive shell acts (proven
-end to end in `fr12.spec.ts`). Full ledger in `docs/10-CHECKPOINT.md`.
-
-### Vault file layout
-
-| Path | Contents | Tracked? |
-|---|---|---|
-| `vault/keyring.dat` | AES-256-GCM pool blobs | never (ignored) |
-| `~/.opencode-voice-runtime/machine.key` | 0600 scrypt root | never (outside repo) |
-| `vault/projects/<project>/01–06` | atomic memory notes | yes |
-| `vault/indexes/MOC-master.md` | retrieval index | yes |
-
----
-
-## 6. Measured behaviour
-
-> **Withdrawn: `assets/benchmark-matrix.svg`.** The image is deliberately *not*
-> rendered below. The file still exists and still contains the same ten
-> fabricated figures that were removed from this file on 2026-09-28 — Pass@1
-> 94.8 %, tool-calling precision 99.1 %, zero-hallucination 98.6 %, TTFT
-> 180 ms, E2E resolution 91.4 % — but withdrawing the prose while continuing to
-> display the artefact is a half-measure that still shows a reader the numbers.
-> Do not re-add the `<img>` tag until the file is regenerated from a real
-> harness, or deleted. See also the note in `docs/10-CHECKPOINT.md`.
-
-What this repository *does* measure, and what was measured when:
-
-| Quantity | Value | How it was obtained |
-|---|---|---|
-| Root unit tests | **573 passing / 46 files** | `npx vitest run` |
-| Desktop unit tests | **153 passing / 24 files** | `cd apps/desktop && npx vitest run` |
-| End-to-end specs | **18 passing / 14 specs** | `npx playwright test` (fake control plane) |
-| Rust unit tests | **27** | `#[test]` in `src-tauri/src/main.rs` |
-| Oxlint warnings | **8** (ratchet baseline) | `scripts/lint-baseline.mjs` |
-| Line coverage | **NOT MEASURED — no floor exists** | `vitest.config.ts` declares no `coverage` block at all |
-| Dead code in `src/` | **0 of 51 live modules** | transitive import walk from `daemon.ts` + `cli.ts` |
-| TTS first-chunk latency | **426–556 ms** | live Fish Audio, `latency: balanced` |
-| STT latency | **421–688 ms** | live Groq `whisper-large-v3-turbo` |
-| Planning latency | **~4.8–5.1 s** | live Inkling via OpenRouter |
-
-Every figure in the right-hand column is reproducible. The test rows run in
-`npm run test:vantrilex`; the latency rows require vault keys and burn free-tier
-quota, so they are not in any gate.
-
-**There is no coverage floor, deliberately.** `vitest.config.ts` used to declare
-`coverage.thresholds: { lines: 80 }` while nothing set `coverage.enabled`, so the
-threshold had never been evaluated and `coverage.enabled` still defaults to
-`false` in Vitest 4. It read like a guarantee and enforced nothing. It was
-deleted rather than enabled, because `@vitest/coverage-v8` is not installed, no
-gate stage passes `--coverage`, and the true number has never been measured —
-so any floor written today would be a guess. The config carries a comment with
-the exact three commands to reinstate one honestly.
-
-**Dependencies removed as dead** (zero importers, verified by import search, not
-assumed): `@opencode/client` and `eventsource` from the root manifest. Neither is
-required by any other installed package — `groq-sdk@0.9.1` depends on
-`node-fetch`, `formdata-node` and friends, and no lockfile entry requires
-`eventsource` — so both were pure dead weight. See
-`docs/10-CHECKPOINT.md` for the sidecar-payload consequence, which is **not yet
-reclaimed** and needs a `scripts/provision-sidecar.mjs` edit.
-
-<details>
-<summary>🔬 Evaluation methodology & harness</summary>
-
-- **Live control plane** (`scripts/live_console_test.ts`): boots the canonical
-  2.0.12 CLI against the shared DB, then measures session CRUD, agent/model
-  controls, prompt receipts (`msg_…`), Fish TTS first-chunk TTFB against the
-  800 ms budget, VAD energy, and a real Whisper STT call.
-- **Observed single-run figures** (checkpoint-ledgered with commit SHAs):
-  serve boot 447 ms, bridge hello 16 ms, 29 sessions enumerated, 17 project
-  agents discovered, Nemotron smoke at HTTP 200 with identity reply.
-- **Fish TTS first-chunk TTFB** (sentence-streamed, cold synthesis): 977 /
-  1038 / 4029 ms across three v0.4.1 live runs (Fish server variance) against
-  the 800 ms budget; 0 ms on cache hits. Client-side paragraph buffering is
-  eliminated — first-chunk time is one short clause's synthesis, never the
-  full reply.
-- **Latency percentiles** (p50/p90/p99) are produced by repeating the live
-  harness and aggregating its timing lines; the table above reports the
-  head-to-head TTFT comparison, and contributors should paste fresh percentile
-  runs into `docs/10-CHECKPOINT.md` before citing them.
-- **Quality gates** (`npm run test:vantrilex` + `test:e2e`): tsc, eslint,
-  oxlint, 726 unit tests (573 root + 153 desktop), 18 Playwright E2E — all green, exit 0.
-- Engine-vs-baseline deltas are project-reported from these harnesses;
-  reproduce with the quick-start commands and compare against the checkpoint
-  ledger before citing.
-
-</details>
-
----
-
-## 7. Memory & context pruning subsystem
-
-<p align="center">
-  <img src="assets/context-memory-manager.svg" alt="Session events to vault notes to MOC index pipeline" width="100%" />
-</p>
-
-Memory is a filesystem discipline, not a vector database. Session events flow
-through a working window into atomic Obsidian notes under
-`vault/projects/<project>/`: overview, architecture, active state,
-decisions log (append-only), sessions history (append-only), skills used.
-The master map of content (`vault/indexes/MOC-master.md`) gives scoped
-retrieval: agents read one linked note per task area, never the whole vault.
-
-Growth rule: notes split by adding granular files, never by growing old ones;
-one fact per section, link instead of duplicating. Long-running sessions shed
-transcript weight through the server-side `/compact` endpoint while decisions
-persist in the log. On fresh installs the engine self-bootstraps:
-`ensureVault(project)` (`src/memory/vault.ts`, TDD-covered) scaffolds the six
-notes plus the MOC from `VOXAURA_VAULT_DIR` or `<cwd>/vault`, never
-overwrites existing files, rejects path-escaping project names, and never
-throws on a missing directory. Secrets are banned from notes by rule.
-
----
-
-## 8. CLI reference & runbook
-
-<p align="center">
-  <img src="assets/cli-command-tree.svg" alt="opencode-voice command tree: doctor, vault, live" width="100%" />
-</p>
-
-The operator CLI exposes exactly three commands (`src/cli.ts`):
-
-<p align="center">
-  <img src="assets/command-catalog.svg" alt="CLI cheatsheet: doctor, vault bootstrap, live, serve I/O contracts" width="100%" />
-</p>
-
-<details>
-<summary>📊 Raw tabular data</summary>
-
-| Command | Purpose | Exit contract |
-|---|---|---|
-| `doctor` | Pre-flight: env presence (values hidden) + serve health probe | 0 healthy, 1 otherwise |
-| `vault bootstrap` | Migrate comma key pools into the encrypted vault | 0 on success, 1 if pools missing |
-| `live` | Full TTS → STT → brain → TTS round-trip with latency JSON | 0 on success, 1 with partial report |
-
-</details>
-
-Environment variables: `OPENCODE_SERVER_PASSWORD` (serve auth),
-`GROQ_API_KEYS` / `FISH_AUDIO_KEYS` (comma pools, unset after bootstrap),
-`OPENROUTER_API_KEY` (coordinator/smoke models), `VOXAURA_VAULT_DIR`
-(vault override). A `.env.local` file is honored only for unset variables.
-
-<p align="center">
-  <img src="assets/e2e-test-harness.svg" alt="doctor to test suites to checkpoint ledger pipeline" width="100%" />
-</p>
-
-Verification pipeline: `doctor` → `test:vantrilex` (726 green) → `test:e2e`
-(18/18 green) → checkpoint ledger row. Any red refuses the commit. Error
-recovery: `VAULT_CORRUPT` or empty vault → re-run `vault bootstrap`; serve
-unreachable → check password + `probeHealth`; 409 storms → backoff requeue is
-automatic; 401 → halt and rotate credentials, never retry blind.
-
-### Gate inventory
-
-| Gate | Command | What it proves |
-|---|---|---|
-| Types | `tsc --noEmit` (via `test:vantrilex`) | strict contracts hold |
-| Lint | eslint + oxlint, zero warnings | style + Alicia rules |
-| Unit | vitest root (573) + desktop (153) | behavior at seams |
-| E2E | Playwright 18/18 | shell boots, bridge live, commands round-trip, barge-in aborts |
-| Live | `live_console_test.ts` | real serve, real APIs, measured budgets |
-| Packaging | `packaging-preflight.mjs` | 14/15 (MSVC linker pending) |
-
----
-
-### Provider & model catalog
-
-Every registered OpenRouter slug is `:free` — a product decision, not an
-accident. There are exactly **two** slugs serving **four** roles:
-
-| Role | Constant | Slug |
-|---|---|---|
-| Conversational intake | `INTAKE_MODEL` (`src/orchestrator/coordinator.ts:22`) | `dots-studio/dots-3-note-preview:free` |
-| Coordinator / planner | `COORDINATOR_MODEL` (`coordinator.ts:23`) | `thinkingmachines/inkling:free` |
-| Narrator (spoken confirmations) | `NARRATOR_MODEL` (`src/orchestrator/narrator.ts:36`) | `thinkingmachines/inkling:free` |
-| Brain / `cli live` | `BRAIN_OPENROUTER_MODEL` (`src/voice/brain.ts:177`) | `thinkingmachines/inkling:free` |
-
-TTS is Fish, not OpenRouter: `TTS_MODEL = 's2.1-pro-free'` (`src/voice/tts.ts:31`).
-
-Two Inkling requirements were found by live calls, not by reading docs, and both
-fail silently if dropped: the requests **must** send an agentic
-`User-Agent: opencode/1.0 (Voxaura)` (without it Inkling answers HTTP 403
-"only available on agentic harnesses") and **must** set
-`reasoning: { effort: 'none' }` (without it the model spends the budget
-reasoning and returns `finish=length` with `content: null`).
-
-There is no Nemotron slug. `nemotron` survives only as a *session model name*
-string inside test fixtures (`coordinator.test.ts:97`, `narrator.test.ts:57`),
-which is user-set state, not a routing default.
-
-`.mcp.json` wires six MCP servers — `context7`, `memory`, `filesystem`
-(project-relative), `sequential-thinking`, `typescript-lsp`, and `openrouter` —
-with per-role surfaces declared in `.opencode/agents/inkling-driver.md`.
-
-### Packaging & release
-
-`scripts/packaging-preflight.mjs` scores 14/15 (MSVC linker supplied via the
-VsDevCmd environment for the bundle build). `scripts/provision-sidecar.mjs`
-assembles `node.exe` + compiled `dist/` + pruned runtime deps (~100 MB) as
-Tauri bundle resources, and the NSIS installer ships it all. Current:
-`Voxaura_0.7.2_x64-setup.exe`, 26,186,272 B, sha256
-`2AA5CA20A3232B3D32EB0FF1BBC48E94F93696EDBDA51057F9476A615E0E3878` —
-verify with `Get-FileHash -Algorithm SHA256`. All setups are published with
-SHA-256 checksums on the
-[releases page](https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases).
-
-## 9. Footer & governance
-
-Contributing rules (`CONTRIBUTING.md`): strict TDD (failing test first),
-measure-never-assume, frozen WS-4097 contracts, zero secrets in output, FR-12
-confirmation for destructive acts, shared-DB backup before mutation, no
-hardcoded absolute paths, checkpoint update per behavior change. Commits are
-atomic Conventional Commits authored by `3mar-baha <omarbaha224@gmail.com>`
-on `main`. License: MIT © 2026 Omar Baha.
-
-<p align="center">
-  <img src="assets/footer-sketch.svg" alt="Voxaura MIT 2026 Omar Baha" width="100%" />
-</p>
+### Process topology (cold launch)
+
+`voxaura.exe` writes `~/.opencode-voice-runtime/ipc.token` in `setup()` **before the
+webview loads**, spawns `opencode serve --port 4096 --hostname 127.0.0.1` (if 4096
+cold — adopt-if-answering, never double-spawn), then `node sidecar/dist/cli.js
+serve`. Both children go into a `KILL_ON_JOB_CLOSE` Job Object. A daemon that never
+opens 4097 is killed, not left running. Child logs (`daemon.log`,
+`opencode.log` + stdout twins) are **append-only** — a restart never truncates the
+previous failure. Teardown today is exit-driven (`Supervisor::reap()`); the
+`shutdown_all_services` Tauri command is registered but uninvoked from the shell
+(known defect A.1).
+
+### Daemon identity — who holds 4097
+
+The `daemon.owner` marker file (`{v, pid, owner_key}`, version 1, 1500 ms settle)
+decides: cold → spawn, ours → adopt, foreign → refuse-to-adopt-or-double-spawn.
+Identity outranks liveness (owner key checked before pid); pid 0 is explicitly
+foreign. The shell pre-creates the marker EMPTY only if absent; **the daemon must
+overwrite it in place — a rename would reset the security descriptor.** The old
+port-open-alone shortcut once declared "daemon already on 4097" for any squatter
+(leftover stub, dead daemon); the marker + identity check is the fix.
+
+### Two IPC planes (do not confuse)
+
+**Plane A — Tauri invoke** (shell → supervisor, 4 commands): `ipc_token` (reads the
+token file, trim
+...[truncated 15865 chars]

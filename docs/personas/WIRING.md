@@ -5,10 +5,20 @@
 > deliberately keeps the original proposal text so the reasoning behind the
 > shipped shape is auditable against the reasoning behind the alternative.
 >
-> **Status of the observable claim:** the two system prompts now provably
-> differ. That the *model responds* differently is **unverified** — that needs a
-> live Inkling call, which was not made because it burns free-tier quota. Treat
-> "Nour and Kareem now sound different" as an open experiment, not a fact.
+> **Status of the observable claim (re-resolved 2026-09-29, baseline `6be0363`):**
+> the two system prompts provably differ (5 break-tested guards, §4), **and** a
+> live Inkling probe over the real `narrate() → openRouterChat` path has now
+> been made — 6/6 calls produced audio-ready Arabic with per-persona tone
+> markers 3/3 each (Kareem `يا غالي`/`هسا بنرتبها`, Nour `تمام بس للتأكيد`),
+> p50 3,932 ms / 4,294 ms. Recorded in `docs/SPRINT_3_PLAN.md` §2.7 (Wave 3)
+> and `docs/PROJECT_MASTER_DOSSIER.md` §5.3. The honest limit stands:
+> within-persona pairs also differed 3/3 at temperature 0.8, so this proves
+> **non-interchangeable output, not statistical causation** — a stronger claim
+> needs ≥10 samples per arm on owner-approved quota. The probe is **session
+> history** (no tree artifact; `docs:verify` cannot re-derive it), while the
+> **retrieval half is still undone** — no chunk is retrieved, ranked or
+> interpolated into any prompt (§6). Read the two halves separately: styling
+> ships and has been heard once; RAG does not ship.
 
 ---
 
@@ -234,25 +244,135 @@ letters, so the choice cannot drift back into an English prompt by accident.
 
 ---
 
-## 6. What is still NOT done
+## 6. What is still NOT done (re-resolved 2026-09-29, baseline `6be0363`)
 
-Recorded so this file is not read as "personas fully wired":
+Recorded so this file is not read as "personas fully wired". Each bullet states
+what was measured, where the evidence lives, and what would close it.
 
-- **The RAG half of the plan is untouched.** No chunk is retrieved, ranked or
-  interpolated into any prompt. `src/knowledge/` is now a production importer of
-  `daemon.ts` for the **persona registry only**; the retriever, the BM25 index
-  and the 43-chunk corpus still reach production solely through the `knowledge`
-  CLI subcommand. Retrieval is fast enough not to be the problem (p99 0.0128 ms
-  against a 10 ms budget) — **corpus coverage is**, and that is a content task.
-- **Nobody has heard the two personas side by side.** The system strings provably
-  differ; that Inkling produces audibly different replies for the same event is
-  an unmeasured hypothesis. It is one live call and it burns free-tier quota, so
-  it needs an explicit decision rather than a silent one. **Do not record it as
-  done.**
-- **The earcon pitch is gone, not fixed.** `earcons.ts` was deleted in the Wave 1
-  dead-code sweep; per-persona audio differentiation does not exist in the
-  shipped product.
+- **The RAG half of the plan is untouched — the retrieval seam does not exist
+  in production.** No chunk is retrieved, ranked or interpolated into any
+  prompt. Verified by import search at baseline: `src/knowledge/` has exactly
+  **2** production importers — the `knowledge` CLI subcommand (via the barrel
+  `knowledge/index.js`, `cli.ts:17`) and `daemon.ts` for the **persona registry
+  only** (`PERSONA_DIRECTIVES` deep from `./knowledge/personas.js`,
+  `daemon.ts:22`); exactly **1** barrel importer (the CLI). The daemon never
+  pulls the BM25 retriever (`retriever.ts:30-31`, K1=1.2 B=0.75) or the
+  43-chunk corpus (`build.ts:23-29`: 8 arch + 11 caps + 8 cmd + 8 fail + 8 lex,
+  plus 16 stylistic selected by `when`, never retrieved) into its import graph
+  to obtain one style string — pinned by `daemon-persona-wiring.test.ts`. The
+  `docs/personas/WIRING.md` plan for the *retrieval* half (Tier-1 injection at
+  narration time) remains the reviewed but unwired design. Retrieval speed is a
+  solved non-problem (hand-rolled zero-dep BM25; `normalizeArabic`
+  `normalize.ts:23-45` with the digit-preserving class
+  `[\u064B-\u065F\u066A\u066D-\u0672]`, guarded by `normalize.test.ts:72-80`
+  after the old `U+064B-U+0672` class swallowed Arabic-Indic digits
+  `U+0660-U+0669`). **The real gap is corpus coverage**: queries like
+  `إيش سويت` return nothing because the fact is absent from
+  `capabilities.ts`, not because scoring failed. Closing this means: (a) corpus
+  content work (facts the assistant actually needs), (b) a retrieval call on
+  the narration path with a measured latency budget, (c) a guard that the
+  injected chunk cannot delete the 20-word cap / JSON-only contract /
+  no-canned-confirmation ban — the same prepend-never-substitute shape as §2.1.
+- **The two personas have been heard side by side exactly once — treat it as
+  session history, not as a re-derivable fact.** The Wave 3 live Inkling probe
+  (2026-09-29, `docs/SPRINT_3_PLAN.md` §2.7) ran 6 calls over the real
+  `narrate()` path: 6/6 audio-ready Arabic, persona tone markers 6/6 (Kareem
+  3/3, Nour 3/3), p50 3,932 ms (Kareem) / 4,294 ms (Nour). Within-persona pairs
+  also differed 3/3 at temperature 0.8 — so the measurement proves the two
+  prompts produce **non-interchangeable** output, not statistical causation. No
+  bench artifact exists in the tree (`docs:verify` re-derives nothing here;
+  `docs/PROJECT_MASTER_DOSSIER.md` §5.3 labels it PROSE-ONLY honestly). Do not
+  record "Nour and Kareem sound different" as done; record "one 6-call probe
+  on 2026-09-29 heard non-interchangeable output; a ≥10/arm probe on
+  owner-approved quota is still open". The corpus must be updated from a future
+  measurement, not from this document — no Tier-1 chunk asserts the personas
+  differ, and none should until the larger sample exists.
+- **The earcon pitch is gone, not fixed.** `earcons.ts` was deleted in the Wave
+  1 dead-code sweep; per-persona audio differentiation does not exist in the
+  shipped product. Tree holds **0** files matching `earcon*` and **0**
+  occurrences of the old pitch constants `659.25` / `987.77` / `1318.5`
+  (`docs:verify` re-derives both, so re-adding an earcon under a new name
+  cannot pass unnoticed). The persona-dependent surface is **three** items, not
+  four: narration directive (`personas.ts:38-54` Kareem, `:56-72` Nour),
+  TTS voice id (`male-default` / `female-toggle`, `brands.ts:22-24`, via
+  `PERSONA_VOICE` `brands.ts:12-15`, snapshotted per utterance
+  `daemon.ts:794-796`), wave colour (`#16A34A/#EAB308` vs `#9333EA/#EC4899`,
+  `SiriWaveCanvas.tsx:20-24`; `user` `#2563EB/#EAB308`). §1's struck-through
+  earcon row stays struck through as evidence, not pruned.
 - **No Tier-1 chunk asserts that the personas differ.** The corpus is the source
-  of truth and a chunk once claimed they speak differently. If the live
-  measurement in the second bullet above is made, the corpus should be updated
+  of truth and a chunk once claimed they speak differently without evidence.
+  If the larger live measurement above is made, the corpus should be updated
   from the measurement — not from this document.
+
+---
+
+## 7. Exact current wiring (re-verified at baseline `6be0363`)
+
+Every anchor below was read from the tree at the baseline commit, not carried
+from prose. If a line number drifts, re-derive it — do not arithmetically
+adjust it (the TTS interceptor shifted six `daemon.ts` anchors once, and only
+the behavioural self-test caught it).
+
+| # | Fact | Anchor |
+|---|---|---|
+| 1 | `PersonaId = 'kareem' \| 'nour'` | `src/common/brands.ts:10` |
+| 2 | `PERSONA_VOICE` maps kareem to `male-default`, nour to `female-toggle` | `brands.ts:12-15` |
+| 3 | Fish voice id prefixes `5b90451e` (male) / `88c0375e` (female) | `brands.ts:22-24` (prefixes only; never full key material) |
+| 4 | `PersonaProfile` with `id,nameAr,label,role,toneMarkers,shieldLexicon,directive` | `src/knowledge/personas.ts:12-36` |
+| 5 | Kareem directive (Arabic-only, 5 sentences) | `personas.ts:47-53`; markers `personas.ts:45` |
+| 6 | Nour directive (Arabic-only, 5 sentences) | `personas.ts:65-71`; markers `personas.ts:63` |
+| 7 | `PERSONA_DIRECTIVES satisfies Record<PersonaId,string>` — a missing persona is a compile error | `personas.ts:79-82` |
+| 8 | Shield: first-person reply must contain persona lexicon, vacuously true without `أنا` | `personas.ts:91-94` |
+| 9 | `narrate(ctx, chat, model, maxWords=20, persona?)` — persona optional, additive | `src/orchestrator/narrator.ts:123-129` |
+| 10 | Prepend, never substitute; `undefined` gives base only | `narrator.ts:136-139` (+ intent comment `:130-135`) |
+| 11 | `NarratorPersona{id, directive}` — narrator takes the string, never the `PersonaId` lookup | `narrator.ts:28-32` |
+| 12 | `NARRATOR_MODEL = thinkingmachines/inkling:free` | `narrator.ts:52` |
+| 13 | `NARRATOR_SYSTEM` 9-line AR peer-engineer prompt, `{max}` placeholder, canned-ban, never-repeat, JSON-only reply | `narrator.ts:84-94` |
+| 14 | `MAX_CHARS=240`, `maxWords=20`, 120 maxTokens, temp 0.8, 12 s daemon wrapper timeout | `narrator.ts:108,127`; `daemon.ts:327,341-350` (12 s raised from 8 s on 3x5010 ms measurements) |
+| 15 | Daemon imports directives deep, never the barrel | `daemon.ts:22` (`./knowledge/personas.js`); barrel `knowledge/index.js` imported only by `cli.ts:17` |
+| 16 | Daemon call site passes id plus directive | `daemon.ts:376-392` |
+| 17 | TTS voice snapshotted per utterance from `activePersona` | `daemon.ts:794-796` |
+| 18 | Wave colour per speaker | `SiriWaveCanvas.tsx:20-24`; consumed `App.tsx:611` |
+| 19 | Persona ref counts (lines mentioning a persona, `docs:verify`-derived) | `narrator.ts` **11**, `coordinator.ts` **0**, `prompt-optimizer.ts` **0**, `brain.ts` **0**; sole interpolation `'{max}'` |
+| 20 | Dialect lock: Ammani / White Jordanian, EN tech terms preserved; newsreader MSA + Beiruti banned | `brain.ts:105-109`, `personas.ts:8-11` |
+
+Deliberately *not* wired (design, not omission — §2.4): no per-persona
+`COORDINATOR_SYSTEM` (planning quality must not vary with mood preference), no
+per-persona optimizer prompt (mechanical rewrite; a directive there degrades
+output for no benefit), no MessagePack / voice-cloning.
+
+## 8. How to re-measure (so the next probe is evidence, not anecdote)
+
+1. **Burn quota deliberately.** The probe needs owner approval: 6 calls cost
+   p50 ~4 s each of free-tier Inkling; a 10/arm causal probe costs ~20 calls.
+   Record the date, model slug, temperature (0.8 last time), and the exact
+   `narrate()` wrapper args alongside the outputs.
+2. **Use the real path.** Call `narrate()` with `openRouterChat` behind it —
+   never a parallel harness that bypasses the prepend logic. The control is
+   explicit: same event, both directives, plus a no-persona arm (`undefined`
+   gives base only, byte-identical to pre-wiring output per §4 item 4).
+3. **Score tone markers, not vibes.** Kareem must carry `يا غالي`/`هسا بنرتبها`
+   family; Nour must carry `تمام بس للتأكيد` family. The 2026-09-29 probe hit
+   3/3 per arm. Also score the safety invariants per output: max 20 words,
+   max 240 chars, valid JSON reply, no canned success line.
+4. **Do not claim causation from non-interchangeability.** Within-persona
+   divergence at temp 0.8 is expected; the probe proves the prompts are not
+   interchangeable, not that the directive *caused* a specific phrase. A causal
+   claim needs the larger sample with a pre-registered marker list.
+5. **File the corpus update from the measurement.** If the 10/arm probe
+   lands, add or amend a Tier-1 chunk citing the probe date + sample size —
+   never cite this WIRING doc as the source.
+
+## 9. What "retrieval half done" would actually mean
+
+Not "the retriever is fast" (it is) and not "the corpus exists" (it does: 43
+shared + 16 stylistic, one index, no per-persona index, `SharedChunk` with no
+`persona` member by type `types.ts:57` + runtime `assertSharedChunks`
+`types.ts:76-80`). Done means all three simultaneously: (a) a daemon-side
+retrieval call on the narration path (`normalizeArabic` at index AND query
+time, or Arabic recall silently goes to zero — minisearch-class libs ship no
+Arabic handling); (b) a measured latency row showing narration p50 still
+within budget with retrieval inline; (c) a prepend-shaped guard proving the
+injected chunk is context, never a replacement for `NARRATOR_SYSTEM`. Until
+all three land with tests, §6 bullet 1 stays open no matter how many chunks
+are added.
