@@ -90,19 +90,22 @@ rotation is manual via `writeKeyPools` verified by SHA-256 fingerprint, never
 echo. Never print/log/commit key material; file:line references to
 secret-handling code are fine.
 
-Coincidence-coverage (currently safe, NOT guaranteed — Triad B.5): `voice()`
-(`:233-237`, user's own transcript), `ack` (`:505-511`, router literals),
-`event`/`inventory`/`agents` (`:161,177,189`, local OpenCode state) are
-unredacted. `ack.detail` is an open `string` (`command-router.ts:12-15`), NOT
-a closed union as older prose claimed — the invariant "locally generated,
-never provider text" holds by inspection of `dispatch` (`:151-234`) plus the
-catch mapping (`:273-275`), but it is convention, not type-enforced. The
-`dispatchCommand` catch (`ui-server.ts:503`) forwards raw `err.message` into
-`ack.detail`; reachable only if `onCommand` throws, which the router never
-does today (`:237-276`). Fix direction: redact `ack.detail` + `voice.transcript`
-at the sink; route `console.error` (`coordinator.ts:243-250`, `daemon.ts:271`)
-through the redacting logger. Stale comment: `ui-server.ts:213-222` cites
-`daemon.ts:584/738/789`; true lines are `611/765/836`.
+Sinks (`ui.notice()` `:229`, `voice()` `:241`, `ack` `:514`) each redact
+their free-text field at the write point, so a *future* caller cannot skip
+the scrub. The `dispatchCommand` catch (`ui-server.ts:510`) still forwards a
+raw `err.message` into `ack.detail` — the sink covers it now. `voice.transcript`
+is the user's own speech, so a dictated key is masked on the user's own HUD:
+fail-closed by choice, because that frame also reaches client-side
+log/bug-report paths. `ack.detail` remains an open `string`
+(`command-router.ts:12-15`), NOT a closed union as older prose claimed; the
+type never enforced the invariant, the sink now does.
+
+Still coincidence-coverage (safe today, NOT guaranteed): `event`/`inventory`/
+`agents` (`:161,177,189`) and `context` (`:254`) are unredacted. They carry
+no free text — serialised local OpenCode state and numbers — so there is no
+live leak, but the property rests on that, not on a guard. `encodeTextFrame`
+is imported only inside `ui-server.ts`, so the frame surface is fully
+enumerable, which is what keeps this auditable.
 
 ## 12.5 — Zero-Plaintext Invariants (normative, all must hold)
 
