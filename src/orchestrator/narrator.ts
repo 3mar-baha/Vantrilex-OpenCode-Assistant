@@ -14,6 +14,22 @@
 // pinned test asserts none exists.
 
 import { extractJson } from '../voice/brain.js';
+import type { PersonaId } from '../common/brands.js';
+
+/**
+ * The persona styling seam (docs/personas/WIRING.md).
+ *
+ * Deliberately a structural type carrying the directive as a STRING rather than
+ * a `PersonaId` for the narrator to look up. That keeps this module free of any
+ * dependency on the persona registry: the narrator generates text, the registry
+ * holds data, and the caller joins them. It also means the registry can be
+ * reworded for humans without the narrator's behaviour silently changing.
+ */
+export interface NarratorPersona {
+  readonly id: PersonaId;
+  /** Arabic only. Style, never safety. See `PersonaProfile.directive`. */
+  readonly directive: string;
+}
 
 /** The only chat surface the narrator needs — keeps it testable and provider-free. */
 export type NarratorChat = (
@@ -109,8 +125,18 @@ export async function narrate(
   chat: NarratorChat,
   model: string,
   maxWords = 20,
+  persona?: NarratorPersona,
 ): Promise<string | null> {
-  const system = NARRATOR_SYSTEM.replace('{max}', String(maxWords));
+  // PREPEND, never substitute. NARRATOR_SYSTEM owns the safety contract — the
+  // word cap, JSON-only output, the no-canned-confirmation ban and the
+  // never-repeat rule — and a persona directive is style on top of it. Building
+  // the string as `directive + NARRATOR_SYSTEM` (rather than interpolating the
+  // directive into the prompt) means a future directive cannot delete a
+  // constraint; the worst it can do is be ignored.
+  const system =
+    persona === undefined
+      ? NARRATOR_SYSTEM.replace('{max}', String(maxWords))
+      : `${persona.directive}\n${NARRATOR_SYSTEM.replace('{max}', String(maxWords))}`;
   let raw: string;
   try {
     raw = await chat(model, system, narrationContextLine(ctx), {

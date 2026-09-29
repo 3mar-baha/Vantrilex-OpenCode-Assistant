@@ -14,6 +14,10 @@ import { Coordinator, INTAKE_MODEL, type ChatFn } from './orchestrator/coordinat
 import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { openRouterChat } from './voice/brain.js';
 import { narrate, NARRATOR_MODEL, type NarratorChat } from './orchestrator/narrator.js';
+// Imported from the persona module directly, NOT the knowledge barrel: the
+// barrel re-exports the retriever and the 43-chunk corpus, and the daemon should
+// not pull a search index into its import graph to obtain one style string.
+import { PERSONA_DIRECTIVES } from './knowledge/personas.js';
 import { OpenCodeBridge } from './runtime/opencode-bridge.js';
 import { createCommandHandler } from './orchestrator/command-router.js';
 import { describeSlashCommands, parseSlashCommand, slashCommandError } from './orchestrator/slash.js';
@@ -62,6 +66,14 @@ export interface DaemonOptions {
    * tests, which would otherwise write into the real install's directory.
    */
   readonly runtimeDir?: string;
+  /**
+   * Overrides the narrator's chat surface. Every other network client here is
+   * injected; this was the one hardcoded external call, which made the most
+   * important integration — that the active persona actually reaches the system
+   * prompt — untestable. With this seam a test can assert the system string
+   * differs per persona instead of trusting the source.
+   */
+  readonly narratorChat?: NarratorChat;
 }
 
 export interface DaemonHandle {
@@ -340,6 +352,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     );
   };
 
+  // The seam: production builds the real OpenRouter-backed chat above; a test
+  // injects a spy and asserts the persona actually changes the system prompt.
+  const activeNarratorChat: NarratorChat = options.narratorChat ?? narratorChat;
+
   const narrateOutcome = (action: string, outcomeOk: boolean, errorDetail?: string, target?: string): void => {
     void (async () => {
       let sessionTitle: string | undefined;
@@ -365,8 +381,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           ...(contextPercent !== undefined ? { contextPercent } : {}),
           ...(errorDetail !== undefined ? { errorDetail } : {}),
         },
-        narratorChat,
+        activeNarratorChat,
         NARRATOR_MODEL,
+        20,
+        // The persona seam. `activePersona` already drove the TTS voice id; now
+        // it also reaches the system prompt, so Nour and Kareem finally differ
+        // in what they SAY and not only in what they sound like.
+        { id: activePersona, directive: PERSONA_DIRECTIVES[activePersona] },
       );
       if (line === null) return;
       setVoicePhase('speaking', line);

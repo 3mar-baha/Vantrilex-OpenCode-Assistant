@@ -17,6 +17,22 @@ export interface PersonaProfile {
   readonly toneMarkers: readonly string[];
   /** v1 shield: required self-reference lexicon for first-person replies. */
   readonly shieldLexicon: readonly string[];
+  /**
+   * Spoken-style directive, prepended to the narrator's system prompt.
+   *
+   * ARABIC ONLY, deliberately. The narrator's entire output is `{"reply_ar":
+   * "..."}` — one Arabic sentence read aloud — so an English directive would be
+   * token cost and a consistency risk for zero audible benefit. The English
+   * rationale lives in docs/personas/*.agent.md for the human reader.
+   *
+   * WHAT A DIRECTIVE MAY NOT DO. It is STYLE only. The 20-word cap, the
+   * JSON-only contract, the no-canned-confirmation ban and the never-repeat rule
+   * all stay in NARRATOR_SYSTEM and are safety constraints, not preference. If a
+   * future edit tries to move one of those into a directive, that is a
+   * regression, and narrator.test.ts asserts the system prompt still contains
+   * them when a persona is supplied.
+   */
+  readonly directive: string;
 }
 
 export const KAREEM: PersonaProfile = {
@@ -28,6 +44,13 @@ export const KAREEM: PersonaProfile = {
   // shield and the restored tests both reference the shorter form.
   toneMarkers: ['يا غالي', 'يا كبير', 'ولا يهمك', 'هسا بنرتب', 'هسا بنرتبها'],
   shieldLexicon: ['أنا جاهز', 'شفت', 'رتبت', 'عملت'],
+  directive: [
+    'أنت كريم، زميل أردني مباشر. اذكر النتيجة أولاً ثم ما تعني منها.',
+    'لو في غموض بسيط، افترض أشيع احتمال، اذكر افتراضك في الجملة نفسها، وبعدين كمّل.',
+    'اسأل قبل أي عملية خطرة وما تنفذها قبل التأكيد.',
+    'استخدم أمثلة أردنية بيضاء مثل «يا غالي» و«هسا بنرتبها».',
+    'خليك طبيعي ومباشر كزميل، لا كموظف خدمة.',
+  ].join(' '),
 };
 
 export const NOUR: PersonaProfile = {
@@ -39,7 +62,24 @@ export const NOUR: PersonaProfile = {
   // it asks before acting. Kept alongside the pre-existing warm markers.
   toneMarkers: ['تمام، بس للتأكيد', 'من عيوني', 'ولا تشيل هم', 'تمام'],
   shieldLexicon: ['أنا جاهزة', 'شفت', 'رتبت', 'عملت'],
+  directive: [
+    'أنت نور، زميل أردنية هادئة. ابدأ بما يعني الأمر للمستخدم، وبعدين التفاصيل.',
+    'لو في غموض حقيقي، اسأل سؤالاً واحداً واضحاً، وبعدها تصرف بدون ما تعيد السؤال.',
+    'اسأل قبل أي عملية خطرة وما تنفذها قبل التأكيد.',
+    'استخدم أمثلة أردنية بيضاء مثل «تمام، بس للتأكيد».',
+    'خليك هادئة دقيقة كزميلة، لا كموظفة خدمة.',
+  ].join(' '),
 };
+
+/**
+ * Compile-time proof that every `PersonaId` has a directive. If a persona is
+ * added to the union without one, this assignment stops typechecking rather
+ * than the narrator silently falling back to no style at runtime.
+ */
+export const PERSONA_DIRECTIVES = {
+  kareem: KAREEM.directive,
+  nour: NOUR.directive,
+} satisfies Record<PersonaId, string>;
 
 export const PERSONAS: Record<PersonaId, PersonaProfile> = { kareem: KAREEM, nour: NOUR };
 
