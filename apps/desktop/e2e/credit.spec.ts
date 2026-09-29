@@ -45,8 +45,16 @@ test('an exhausted-credit notice renders the warn banner with the daemon wording
   await expect(banner).toHaveAttribute('data-arm', 'warn');
   await expect(banner).toHaveAttribute('data-dismissible', 'true');
   await expect(banner).toHaveAttribute('aria-live', 'assertive');
-  // The generic strip must NOT also carry it — one sentence, one surface.
-  await expect(page.getByTestId('notice-banner')).toHaveCount(0);
+  // The generic strip must NOT ALSO carry this sentence — one sentence, one
+  // surface. Assert the SENTENCE, not the strip's emptiness: the stub is one
+  // process for the whole run, and an earlier spec (`abort`) fires a lifecycle
+  // event that the real UiServer retains, so this page legitimately receives
+  // the B.2c `resume-gap` notice in the generic strip. A `toHaveCount(0)` there
+  // failed for a correct, unrelated notice — the same shared-state trap
+  // `delivery.spec` hit, and the fix is the same shape.
+  const generic = page.getByTestId('notice-banner');
+  await expect(generic).not.toContainText(EXHAUSTED);
+  await expect(page.getByText(EXHAUSTED)).toHaveCount(1);
 
   await page.getByTestId('credit-banner-dismiss').click();
   await expect(page.getByTestId('credit-banner')).toHaveCount(0);
