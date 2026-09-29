@@ -162,6 +162,31 @@ export interface MissionResult {
   readonly needsConfirmation?: boolean;
   readonly flagged?: string[];
   readonly detail?: string;
+  /**
+   * M2 Pattern 1: the intake half returns before a plan exists. `intakeModel`
+   * travels with it because a task queue has to record which model answered —
+   * a failover to Inkling on the intake leg is exactly the kind of thing an
+   * operator asks about after the fact.
+   */
+  readonly cancelled?: boolean;
+}
+
+/**
+ * M2 Pattern 1 — the acknowledgement intake produced, handed to `plan()`.
+ *
+ * The split exists because the two halves have opposite latency profiles and
+ * the same caller: intake p50 901 ms (the user is waiting), plan p50 1950 ms /
+ * max 3987 (the user is not). Before the split `run()` did both, so the ack
+ * could not be spoken until a plan had already been built — the wait the
+ * roadmap measures as ~1.4 s.
+ */
+export interface IntakeAck {
+  readonly ok: boolean;
+  readonly replyAr?: string;
+  readonly taskEn?: string;
+  readonly receipt: string | null;
+  readonly intakeModel?: string;
+  readonly detail?: string;
 }
 
 /** mission-handoff envelope — the exact payload Inkling executes in-session. */
@@ -188,13 +213,22 @@ function parseSchema<T>(schema: z.ZodType<T>, raw: string): T | null {
 export class Coordinator {
   constructor(private readonly deps: CoordinatorDeps) {}
 
-  async run(
-    transcript: string,
-    opts: { approve?: boolean; taskId?: string; context?: IntakeContext } = {},
-  ): Promise<MissionResult> {
+  /**
+   * M2 Pattern 1 — the FIRST half of `run()`, moved verbatim.
+   *
+   * Everything between here and the old `:232` is byte-identical to what
+   * `run()` did, including the A.8 failover flags (`intakeTransportFailed` set
+   * on a throw, reset on an unparseable body). Those flags are load-bearing:
+   * primary 500 + fallback 200-garbage must report `intake-failed`, not
+   * `intake-invalid`. Moving the loop is not the moment to "tidy" them.
+   *
+   * What is deliberately NOT here: the detached `speak()` and the plan. The
+   * ack is spoken by the daemon the moment this returns — that is the whole
+   * point — so firing it from inside intake would double-speak it.
+   */
+  async intake(transcript: string, opts: { context?: IntakeContext } = {}): Promise<IntakeAck> {
     const intakeModel = this.deps.intakeModel ?? INTAKE_MODEL;
     const fallbackModel = this.deps.fallbackModel ?? COORDINATOR_MODEL;
-    const coordinatorModel = this.deps.coordinatorModel ?? COORDINATOR_MODEL;
 
     // Intake with failover: a dead or garbled primary falls back once.
     // Dots3 runs with reasoning suppressed (effort:none) so it answers
@@ -230,6 +264,118 @@ export class Coordinator {
     if (intake === null) {
       return { ok: false, receipt: null, detail: intakeTransportFailed ? 'intake-failed' : 'intake-invalid' };
     }
+    return { ok: true, replyAr: intake.reply_ar, taskEn: intake.task_en, receipt: null, intakeModel: servedBy };
+  }
+
+  /**
+   * M2 Pattern 1 — the SECOND half, entered with an ack this class produced.
+   *
+   * `signal` is checked after every await rather than once at the top. A single
+   * check at entry would let a cancel that lands DURING a 25 s plan call be
+   * answered by a dispatch: the call is already in flight, so what has to be
+   * refused is its effect. Checking per-await means the check immediately
+   * before the dispatch is the one that decides.
+   */
+  async plan(
+    ack: IntakeAck,
+    opts: { signal?: AbortSignal; approve?: boolean; taskId?: string } = {},
+  ): Promise<MissionResult> {
+    if (!ack.ok || ack.replyAr === undefined || ack.taskEn === undefined) {
+      // An intake that never produced an acknowledgement has no task to plan.
+      // Asking the coordinator model to plan nothing spends a 25 s budget on
+      // a turn that is already over.
+      return { ok: false, receipt: null, detail: ack.detail ?? 'intake-failed' };
+    }
+    const { replyAr, taskEn } = ack;
+    // Read once, into a widened local: the `exactOptionalPropertyTypes`
+    // returns below assign `servedBy` into optional fields, and re-reading
+    // `ack.intakeModel` at each site kept losing the narrowing.
+    const servedBy: string | undefined = ack.intakeModel;
+    const coordinatorModel = this.deps.coordinatorModel ?? COORDINATOR_MODEL;
+    const cancelled = (): MissionResult =>
+      ({ ok: false, replyAr, taskEn, receipt: null, cancelled: true, detail: 'cancelled' });
+    // A FUNCTION, not a repeated property read. TypeScript narrows an optional
+    // chain across statements — after `if (signal?.aborted === true) return`,
+    // every later `signal?.aborted === true` reads as unreachable and is
+    // flagged TS2367. The abort can arrive BETWEEN awaits, which is precisely
+    // the case this exists for, so the read must not be cacheable.
+    const aborted = (): boolean => opts.signal?.aborted === true;
+    if (aborted()) return cancelled();
+
+    let planRaw: string | null = null;
+    try {
+      // Planning is background work: generous ceiling so a slow model still
+      // delivers (intake keeps the tight budget for fast failover instead).
+      // Strict schema mode — plain json_object lets the model drift into prose.
+      planRaw = await this.deps.chat(coordinatorModel, COORDINATOR_SYSTEM, taskEn, {
+        timeoutMs: 25_000,
+        temperature: 0.2,
+        maxTokens: 300,
+        responseFormat: PLAN_RESPONSE_FORMAT,
+      });
+    } catch {
+      planRaw = null;
+    }
+    if (aborted()) return cancelled();
+    let plan = planRaw === null ? null : parseSchema(PlanSchema, planRaw);
+    if (plan === null) {
+      // One bounded retry with a sterner format reminder. No unbounded loops.
+      if (aborted()) return cancelled();
+      try {
+        const retry = await this.deps.chat(
+          coordinatorModel,
+          `${COORDINATOR_SYSTEM}\nCRITICAL: output ONLY the JSON object. Any prose invalidates the entire response.`,
+          taskEn,
+          { timeoutMs: 25_000, temperature: 0.2, maxTokens: 300, responseFormat: PLAN_RESPONSE_FORMAT },
+        );
+        plan = parseSchema(PlanSchema, retry);
+      } catch {
+        plan = null;
+      }
+    }
+    if (aborted()) return cancelled();
+    if (plan === null) {
+      return { ok: false, replyAr, taskEn, receipt: null, detail: 'plan-invalid' };
+    }
+
+    const flagged = plan.steps.filter((s) => requiresConfirmation(`${s.kind} ${s.detail}`)).map((s) => s.id);
+    if (flagged.length > 0 && opts.approve !== true) {
+      return {
+        ok: false,
+        replyAr,
+        taskEn,
+        plan,
+        receipt: null,
+        ...(servedBy !== undefined ? { intakeModel: servedBy } : {}),
+        needsConfirmation: true,
+        flagged,
+        detail: `destructive steps held: ${flagged.join(', ')}`,
+      };
+    }
+
+    const session = this.deps.activeSessionId();
+    if (session === undefined) {
+      return { ok: true, replyAr, taskEn, plan, receipt: null, ...(servedBy !== undefined ? { intakeModel: servedBy } : {}) };
+    }
+    const taskId = opts.taskId ?? `mission-${Date.now().toString(36)}`;
+    // The last await before a live session is touched, so this check is the one
+    // that decides whether the turn was still wanted.
+    if (aborted()) return { ...cancelled(), plan };
+    const { receipt } = await this.deps.dispatch(buildHandoff(taskId, taskEn, session, plan.steps));
+    return { ok: true, replyAr, taskEn, plan, receipt, ...(servedBy !== undefined ? { intakeModel: servedBy } : {}) };
+  }
+
+  /**
+   * Retained with unchanged behaviour: intake, then plan. Twenty-plus tests
+   * call this directly and they describe the CHAIN, not the split — the split
+   * is something the DAEMON opts into by calling the halves itself.
+   */
+  async run(
+    transcript: string,
+    opts: { approve?: boolean; taskId?: string; context?: IntakeContext } = {},
+  ): Promise<MissionResult> {
+    const ack = await this.intake(transcript, { ...(opts.context !== undefined ? { context: opts.context } : {}) });
+    if (!ack.ok || ack.replyAr === undefined) return ack;
 
     // Fast verbal response, kicked off but NOT awaited.
     //
@@ -240,7 +386,7 @@ export class Coordinator {
     // The catch is mandatory: an unhandled rejection in a detached promise
     // takes down the daemon process, not one turn. No transcript or key
     // material is logged — only the failure class and message.
-    void this.deps.speak?.(intake.reply_ar)?.catch((err: unknown) => {
+    void this.deps.speak?.(ack.replyAr)?.catch((err: unknown) => {
       console.error(
         JSON.stringify({
           evt: 'coordinator-speak-failed',
@@ -249,60 +395,9 @@ export class Coordinator {
       );
     });
 
-    let planRaw: string | null = null;
-    try {
-      // Planning is background work: generous ceiling so a slow model still
-      // delivers (intake keeps the tight budget for fast failover instead).
-      // Strict schema mode — plain json_object lets the model drift into prose.
-      planRaw = await this.deps.chat(coordinatorModel, COORDINATOR_SYSTEM, intake.task_en, {
-        timeoutMs: 25_000,
-        temperature: 0.2,
-        maxTokens: 300,
-        responseFormat: PLAN_RESPONSE_FORMAT,
-      });
-    } catch {
-      planRaw = null;
-    }
-    let plan = planRaw === null ? null : parseSchema(PlanSchema, planRaw);
-    if (plan === null) {
-      // One bounded retry with a sterner format reminder. No unbounded loops.
-      try {
-        const retry = await this.deps.chat(
-          coordinatorModel,
-          `${COORDINATOR_SYSTEM}\nCRITICAL: output ONLY the JSON object. Any prose invalidates the entire response.`,
-          intake.task_en,
-          { timeoutMs: 25_000, temperature: 0.2, maxTokens: 300, responseFormat: PLAN_RESPONSE_FORMAT },
-        );
-        plan = parseSchema(PlanSchema, retry);
-      } catch {
-        plan = null;
-      }
-    }
-    if (plan === null) {
-      return { ok: false, replyAr: intake.reply_ar, taskEn: intake.task_en, receipt: null, detail: 'plan-invalid' };
-    }
-
-    const flagged = plan.steps.filter((s) => requiresConfirmation(`${s.kind} ${s.detail}`)).map((s) => s.id);
-    if (flagged.length > 0 && opts.approve !== true) {
-      return {
-        ok: false,
-        replyAr: intake.reply_ar,
-        taskEn: intake.task_en,
-        plan,
-        receipt: null,
-        intakeModel: servedBy,
-        needsConfirmation: true,
-        flagged,
-        detail: `destructive steps held: ${flagged.join(', ')}`,
-      };
-    }
-
-    const session = this.deps.activeSessionId();
-    if (session === undefined) {
-      return { ok: true, replyAr: intake.reply_ar, taskEn: intake.task_en, plan, receipt: null, intakeModel: servedBy };
-    }
-    const taskId = opts.taskId ?? `mission-${Date.now().toString(36)}`;
-    const { receipt } = await this.deps.dispatch(buildHandoff(taskId, intake.task_en, session, plan.steps));
-    return { ok: true, replyAr: intake.reply_ar, taskEn: intake.task_en, plan, receipt, intakeModel: servedBy };
+    return await this.plan(ack, {
+      ...(opts.approve !== undefined ? { approve: opts.approve } : {}),
+      ...(opts.taskId !== undefined ? { taskId: opts.taskId } : {}),
+    });
   }
 }

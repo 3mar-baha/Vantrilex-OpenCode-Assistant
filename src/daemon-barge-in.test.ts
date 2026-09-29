@@ -302,8 +302,7 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
     expect(wiring, 'stopSpeech must never reach the pipeline').not.toMatch(/audio/);
   });
 
-  test('M2-P2: an executed stopSpeech is never narrated back to the user', () => {
-    // STRUCTURAL, same rationale: `onExecuted` is an inline closure in
+  test('M2-P2: an executed stopSpeech is never narrated back to the user', () => {    // STRUCTURAL, same rationale: `onExecuted` is an inline closure in
     // `startDaemon`, so the skip itself is pinned here while the rig tests pin
     // the behaviour around it. Without the early return, every barge would
     // pull session details, spend an Inkling call, and speak over the
@@ -318,6 +317,18 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
       body,
       'a barge is not an outcome to speak: stopSpeech must return before narrateOutcome',
     ).toMatch(/if\s*\(\s*executed\.kind\s*===\s*['"]stopSpeech['"]\s*\)\s*return;/);
+  });
+
+  test('M2-P1 review: the plan-held notice promises no spoken approval path', () => {
+    // Peer review: the notice once told the user to say «أكّد», but no call
+    // site passes approve:true to plan() — a spoken instruction with no
+    // handler (A.14 class). It now names the hold for shell approval only.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const at = src.indexOf("'plan-held'");
+    expect(at, 'the plan-held notice must exist').toBeGreaterThan(-1);
+    const window = src.slice(at, at + 300);
+    expect(window, 'no spoken approval instruction without a handler').not.toMatch(/أكّد/);
+    expect(window, 'the hold names shell approval').toMatch(/الواجهة/);
   });
 
   test('M2-P2: the utterance loop hands the barge to the PROVIDER, and does not bill it as a failure', () => {

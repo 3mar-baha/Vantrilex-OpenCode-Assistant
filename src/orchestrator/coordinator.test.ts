@@ -310,6 +310,159 @@ describe('coordinator chain', () => {
   });
 });
 
+// M2 Pattern 1 — the split itself. `run()` is retained and unchanged for the
+// chain tests above; what is new here is that intake and plan can be driven
+// SEPARATELY, which is what lets the daemon speak the ack while Inkling plans.
+describe('M2 Pattern 1 — coordinator split', () => {
+  /** Records which model answered, so "did it reach the planner" is provable. */
+  function modelsFor(responses: Record<string, string>) {
+    const seen: string[] = [];
+    const chat = async (model: string): Promise<string> => {
+      seen.push(model);
+      const out = responses[model];
+      if (out === undefined) throw new Error(`unexpected model call: ${model}`);
+      return out;
+    };
+    return { seen, chat };
+  }
+
+  test('intake returns an ack WITHOUT the coordinator model ever being called', async () => {
+    // This is the latency claim in test form. Measured intake p50 is 901 ms and
+    // plan p50 1950 ms; if intake touched the planner there would be nothing
+    // to gain by splitting the method at all.
+    const { seen, chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK });
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async () => ({ receipt: 'never' }),
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const ack = await coordinator.intake('show me sessions');
+
+    expect(ack.ok).toBe(true);
+    expect(ack.replyAr).toBe('تمام، أبحث الآن');
+    expect(ack.taskEn).toBe('List all sessions and report their states');
+    expect(ack.intakeModel).toBe(INTAKE_MODEL);
+    expect(ack.receipt).toBeNull();
+    // The planner was never asked for anything.
+    expect(seen).toEqual([INTAKE_MODEL]);
+  });
+
+  test('plan never re-runs intake: it consumes the ack it is handed', async () => {
+    const { seen, chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK });
+    const dispatched: string[] = [];
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'msg_split' };
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const ack = await coordinator.intake('show me sessions');
+    const mission = await coordinator.plan(ack, { taskId: 'task-x' });
+
+    // Exactly two model calls total: one intake (above), one plan. A `plan()`
+    // that called intake again would show a SECOND INTAKE_MODEL call here, and
+    // would double the 901 ms the split was built to hide.
+    expect(seen).toEqual([INTAKE_MODEL, COORDINATOR_MODEL]);
+    expect(mission.ok).toBe(true);
+    expect(mission.receipt).toBe('msg_split');
+    expect(dispatched).toHaveLength(1);
+  });
+
+  test('plan() on a failed intake returns intake-failed without calling any model', async () => {
+    // The daemon enqueues only successful acks, but the type allows this and a
+    // caller must not be able to spend a 25 s planning budget on a turn that
+    // already failed.
+    const { seen, chat } = modelsFor({});
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async () => ({ receipt: 'x' }),
+      activeSessionId: () => undefined,
+    });
+
+    const mission = await coordinator.plan({ ok: false, receipt: null, detail: 'intake-invalid' });
+
+    expect(mission.ok).toBe(false);
+    expect(mission.detail).toBe('intake-invalid');
+    expect(seen).toEqual([]);
+  });
+
+  test('an abort landing mid-plan cancels before the dispatch', async () => {
+    // The planner is called AFTER the signal fires — the exact ordering a
+    // post-await check exists for. A check only at method entry would pass
+    // this test's setup and still dispatch.
+    const controller = new AbortController();
+    const dispatched: string[] = [];
+    const coordinator = new Coordinator({
+      chat: async (model) => {
+        if (model === INTAKE_MODEL) return INTAKE_OK;
+        // The barge arrives while the 25 s planning call is in flight.
+        controller.abort();
+        return PLAN_OK;
+      },
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'must_not_happen' };
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const ack = await coordinator.intake('احذف الملفات');
+    const mission = await coordinator.plan(ack, { signal: controller.signal });
+
+    // BREAK: delete the post-await `aborted()` checks in `plan()` and this
+    // dispatches a destructive-adjacent plan the user already interrupted.
+    expect(dispatched).toEqual([]);
+    expect(mission.cancelled).toBe(true);
+    expect(mission.detail).toBe('cancelled');
+    expect(mission.receipt).toBeNull();
+  });
+
+  test('a signal already aborted on entry cancels without calling the planner', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { seen, chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK });
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async () => ({ receipt: 'x' }),
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const ack = await coordinator.intake('hi');
+    seen.length = 0;
+    const mission = await coordinator.plan(ack, { signal: controller.signal });
+
+    expect(seen).toEqual([]);
+    expect(mission.cancelled).toBe(true);
+  });
+
+  test('FR-12 survives the split: plan() alone still holds a destructive plan', async () => {
+    const destructive = JSON.stringify({
+      steps: [{ id: 's1', kind: 'shell', detail: 'rm -rf /tmp/build' }],
+    });
+    const { chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: destructive });
+    const dispatched: string[] = [];
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'held' };
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const ack = await coordinator.intake('clean it');
+    const held = await coordinator.plan(ack, { taskId: 'task-fr12' });
+
+    expect(held.needsConfirmation).toBe(true);
+    expect(held.flagged).toContain('s1');
+    expect(dispatched).toEqual([]);
+  });
+});
+
 describe('buildHandoff', () => {
   test('envelope carries task, session, steps, and constraints', () => {
     const text = buildHandoff('m7', 'Do the thing', 'ses_q', [

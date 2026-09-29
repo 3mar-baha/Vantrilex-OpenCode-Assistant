@@ -10,7 +10,8 @@ import { UiServer } from './ipc/index.js';
 import { ServeClient } from './runtime/index.js';
 import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
-import { Coordinator, INTAKE_MODEL, type ChatFn } from './orchestrator/coordinator.js';
+import { Coordinator, INTAKE_MODEL, type ChatFn, type IntakeAck } from './orchestrator/coordinator.js';
+import { TaskQueue } from './orchestrator/task-queue.js';
 import { FishHttpTransport, isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { FishCreditError } from './voice/tts.js';
 import { TtsCreditMonitor } from './voice/tts-credit.js';
@@ -316,6 +317,88 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // arrive for a user who keeps their keys tidy. It is daemon-scoped state like
   // `speechGate`, so it lives beside it; the pipeline closes over the binding.
   const ttsCredit = new TtsCreditMonitor(options.ttsCreditNow ?? (() => Date.now()));
+
+  // M2 Pattern 1 — the `spawn_thinking` split, daemon half.
+  //
+  // Daemon scope, beside `speechGate`, for the same reason A.5 moved the credit
+  // monitor here: this state must OUTLIVE `rebuildVoice`. A queue constructed
+  // inside `buildVoicePipeline` would drop every in-flight task on each key
+  // save, and the user saves keys exactly when something is misbehaving.
+  //
+  // `coordinator` is a late binding rather than a constructor argument because
+  // the coordinator itself is built per-pipeline (it closes over `ring` and
+  // `client`). Rebuilding the pipeline therefore re-points this queue at the
+  // new coordinator without discarding the queue.
+  let coordinatorRef: Coordinator | null = null;
+  let voiceEpoch = 0;
+  const tasks = new TaskQueue({
+    plan: async (task, signal) => {
+      const coordinator = coordinatorRef;
+      if (coordinator === null) {
+        // No pipeline, no keys, no planner. A queued task cannot be planned and
+        // must not be reported as planned.
+        return { ok: false, receipt: null, detail: 'voice-disabled' };
+      }
+      const ack: IntakeAck = {
+        ok: true,
+        replyAr: task.replyAr,
+        taskEn: task.taskEn,
+        receipt: null,
+        ...(task.intakeModel !== undefined ? { intakeModel: task.intakeModel } : {}),
+      };
+      const mission = await coordinator.plan(ack, { signal, taskId: task.id });
+      // `ErrorCode` is a CLOSED union and the coordinator's `detail` is free
+      // text by design (`plan-invalid`, `cancelled`, a flagged-step list). It
+      // is a diagnostic detail, not an error taxonomy, so it is NOT widened
+      // into the union — the branch maps it and the raw detail rides the task
+      // record for anyone who needs the specifics.
+      //
+      // `ALREADY_RUNNING` for a cancellation is deliberate and load-bearing: a
+      // cancelled task lost its slot to a newer turn, which is exactly what
+      // that code means. Filing it as a provider fault would make a user
+      // barge-in look like a broken model.
+      record({
+        subsystem: 'BRAIN',
+        status: mission.ok && mission.cancelled !== true ? 'OK' : 'DEGRADED',
+        latencyMs: Date.now() - task.enqueuedAt,
+        ...(mission.ok
+          ? {}
+          : {
+              errorCode:
+                mission.cancelled === true ? ('ALREADY_RUNNING' as const) : ('BRAIN_FAILED' as const),
+            }),
+      });
+      if (mission.needsConfirmation === true) {
+        // A.15: from VOICE there is no shell `confirm` command and no pending
+        // map to park in — the park only ever existed on the WS path, so a
+        // destructive plan could not be confirmed at all. It is now a COMPLETED
+        // task holding its plan, and the notice names the task so approval can
+        // re-enter through `tasks.get(id)` without re-planning.
+        const held = mission.flagged ?? [];
+        ui.notice(
+          'plan-held',
+          `خطوات مدمّرة محفوظة للملفات ${held.join('، ')} — بانتظار التأكيد من الواجهة (المهمة ${task.id}).`,
+          'warn',
+        );
+      }
+      return {
+        ok: mission.ok,
+        receipt: mission.receipt,
+        ...(mission.detail !== undefined ? { detail: mission.detail } : {}),
+        ...(mission.needsConfirmation === true
+          ? { needsConfirmation: true, flagged: mission.flagged ?? [] }
+          : {}),
+      };
+    },
+    dispatch: () => {
+      // The receipt is already on the task record. Nothing is spoken here: the
+      // audible path for a plan is the plan's own narration, and speaking from
+      // the drain would talk over the NEXT utterance's ack.
+    },
+    // Peer review: the kill-switch must be operable, not just readable. An
+    // affordance nothing can flip is A.14-class (reads as live, is not).
+    enabled: process.env['VOXAURA_TASK_QUEUE'] !== 'off',
+  });
 
   // A.6 — key material must not outlive the ring that holds it.
   //
@@ -645,6 +728,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         },
         activeSessionId: () => activeSession,
       });
+      // M2 Pattern 1: re-point the daemon-scoped queue at the coordinator that
+      // closes over THIS ring. A key save rebuilds the pipeline and therefore the
+      // coordinator; without this the queue would keep planning through a
+      // destroyed ring's key material. The queue itself is not rebuilt, so
+      // in-flight tasks survive the save.
+      coordinatorRef = coordinator;
       return new AudioPipeline({
         speechGate: vadGate,
         transcribe: async (pcm) => {
@@ -812,15 +901,76 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
             }
           }
           try {
-            const mission = await coordinator.run(task);
+            // M2 Pattern 1 — the kill-switch. `tasks.enabled === false` restores
+            // the pre-split behaviour exactly (`await coordinator.run(task)`),
+            // so a regression in the queue can be turned off without a rebuild.
+            // The default is ON: the split is the shipped path.
+            if (!tasks.enabled) {
+              const mission = await coordinator.run(task);
+              record({
+                subsystem: 'BRAIN',
+                status: 'OK',
+                latencyMs: Date.now() - t0,
+                ...(resolvedMentions.length > 0 ? { remediationAttempted: 'None' as const } : {}),
+              });
+              const reply = mission.replyAr ?? '';
+              return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
+            }
+
+            // Intake ONLY, then return. This is the whole latency change: the
+            // measured intake p50 is 901 ms and the plan p50 is 1950 ms, so
+            // speaking the ack here rather than after `run()` removes the plan
+            // from the audible path entirely.
+            //
+            // Peer review: the epoch advances on every ACCEPTED utterance,
+            // pre-intake — even one intake then fails to understand. The user
+            // spoke, so the previous turn is superseded whether or not the new
+            // words parse; otherwise a barge followed by a misheard turn would
+            // leave the stale plan dispatching.
+            voiceEpoch += 1;
+            const ack = await coordinator.intake(task);
             record({
               subsystem: 'BRAIN',
-              status: 'OK',
+              status: ack.ok ? 'OK' : 'DEGRADED',
               latencyMs: Date.now() - t0,
               ...(resolvedMentions.length > 0 ? { remediationAttempted: 'None' as const } : {}),
             });
-            const reply = mission.replyAr ?? '';
-            return mission.receipt === null ? { reply } : { reply, receipt: mission.receipt };
+            if (!ack.ok || ack.replyAr === undefined || ack.taskEn === undefined) {
+              ui.notice('intake-failed', 'ما قدرت أفهم الطلب — جرّب مرة ثانية بصيغة أوضح.', 'warn');
+              return { reply: '' };
+            }
+
+            // A new utterance supersedes the previous turn's work — bumped
+            // pre-intake above, so this enqueue only records the epoch.
+            tasks.enqueue({
+              // The USER's words, not the optimizer's rewrite: `task` is the
+              // dispatchable brief and `transcript` is what was actually said.
+              transcript,
+              taskEn: ack.taskEn,
+              replyAr: ack.replyAr,
+              epoch: voiceEpoch,
+              ...(ack.intakeModel !== undefined ? { intakeModel: ack.intakeModel } : {}),
+            });
+
+            // Drain in the background. NOT awaited: awaiting here is exactly
+            // the serialization the split exists to remove. `drain()` never
+            // rejects (it absorbs planner faults into a failed task), but the
+            // catch keeps a future change from becoming an unhandled rejection
+            // that takes down the process rather than one turn.
+            void tasks.drain().catch(() => undefined);
+
+            // Returning the ack here hands it to the pipeline's own
+            // `onUtterance({ transcript, reply, receipt })` — the single
+            // audible path, unchanged — so the acknowledgement is synthesised
+            // and broadcast while the plan is still being built.
+            //
+            // `receipt: null` is honest, not a placeholder: nothing has been
+            // dispatched yet, and the receipt rides the task record instead.
+            // It is also load-bearing for correctness — the pipeline falls back
+            // to dispatching the RAW transcript when `receipt === null` AND a
+            // `dispatch` dep exists. The daemon's pipeline has no such dep, so
+            // nothing is dispatched here; that is asserted in the tests.
+            return { reply: ack.replyAr, receipt: null };
           } catch (err) {
             record({
               subsystem: 'BRAIN',
