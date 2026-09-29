@@ -339,7 +339,7 @@ P5 runtime agent orchestration remains deferred.
 |---|---|---|
 | **Credential hygiene** | stale revoked OpenRouter entry purged from `auth.json` (backup kept) | `auth.json` holds zero keys; vault is the sole credential source |
 | **Dots3 fast primary** | intake runs with `reasoning: {effort: none}`, `maxTokens: 200`, `temperature: 0.2`, 10 s budget; Nemotron stays downstream planner with strict `json_schema` enforcement + one bounded retry | live intake 1.2–1.9 s over 3 runs; mission dry-run ok=true served by Dots3 |
-| **Barge-in & echo prevention** | renderer ducks quiet mic frames while TTS plays (`vad.ts` energy gate), stops the player and sends silent `abort` on voice bursts; daemon `abort` trips a `SpeechGate` so stale sentences never synthesize/broadcast | `vad` + `stop()` + `onAbort` unit tests; WS-4097 contract unchanged |
+| **Barge-in & echo prevention** | renderer ducks quiet mic frames while TTS plays (`vad.ts` energy gate), stops the player and sends `stopSpeech` on voice bursts (speech-only: the parked plan survives); explicit abort button still sends `abort` → full `abortTurn`; daemon `stopSpeech` trips only `speechGate`, executed barges are never narrated | barge-in rig + router + App tests; `stopSpeech` additive command |
 | **Sentence-level TTS** | `splitSentences` + `TtsEngine.speakSentences` dispatch the first clause to Fish Audio immediately; daemon downlink broadcasts per sentence | serves the documented 800 ms TTFB budget (§11) |
 | **Platform scope lock** | Windows-only; macOS/Linux officially deferred until Windows is long-term stable | `00-PROJECT-GUIDE.md` §9 |
 
