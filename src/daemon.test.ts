@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ipcTokenFromEnv, startDaemon, vaultPathFromEnv, type DaemonHandle, type DaemonOptions } from './daemon.js';
 import {
   DAEMON_OWNER_FILE,
@@ -14,8 +14,23 @@ import {
 } from './daemon.js';
 import { decodeFrames, maskFrame, Opcode } from './ipc/protocol.js';
 import { FishCreditError } from './voice/tts.js';
-import { readKeyPools } from './voice/key-store.js';
+import { readKeyPools, writeKeyPools } from './voice/key-store.js';
 import { FileVault } from './voice/vault.js';
+import { Keyring } from './voice/keyring.js';
+
+// The STT provider is stubbed for the whole file: a real turn must never reach
+// Groq (hermetic, and no quota). It rejects instantly, so a test can wait for
+// the daemon's `stt-failed` notice as the deterministic signal that the pipeline
+// ring has already ACQUIRED a key — which is the state A.6 is about.
+vi.mock('groq-sdk', () => ({
+  default: class StubGroq {
+    readonly audio = {
+      transcriptions: {
+        create: (): Promise<never> => Promise.reject(new Error('stubbed STT provider')),
+      },
+    };
+  },
+}));
 
 // A fake `opencode serve`: only the routes the daemon touches.
 function fakeServe(): Promise<{ server: Server; port: number }> {
@@ -54,7 +69,7 @@ afterEach(async () => {
   }
 });
 
-async function boot(vaultPath: string, over: Partial<DaemonOptions> = {}): Promise<DaemonHandle> {
+async function boot(vaultPath: string, over: Partial<DaemonOptions> = {}, realNarrator = false): Promise<DaemonHandle> {
   const { server, port } = await fakeServe();
   servers.push(server);
   const handle = await startDaemon({
@@ -66,8 +81,10 @@ async function boot(vaultPath: string, over: Partial<DaemonOptions> = {}): Promi
     directory: process.cwd(),
     inventoryIntervalMs: 3_600_000,
     // Never the real provider: a command that narrates would otherwise spend a
-    // network call (and quota) inside a hermetic test.
-    narratorChat: async () => '{"line":"تم"}',
+    // network call (and quota) inside a hermetic test. `realNarrator` opts a
+    // test back into the production closure, because the ring THAT builds is
+    // only reachable from inside the daemon.
+    ...(realNarrator ? {} : { narratorChat: async () => '{"line":"تم"}' }),
     ...over,
   });
   handles.push(handle);
@@ -147,6 +164,120 @@ function sendCommand(port: number, token: string, cmd: Record<string, unknown>):
       const rest = head.subarray(idx + 4);
       sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify(cmd)), Buffer.from([1, 2, 3, 4])));
       onFrames(rest);
+    });
+  });
+}
+
+/** Poll until `ready()` or the deadline. For fire-and-forget daemon work. */
+async function until(ready: () => boolean, ms = 3_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error('condition not met within budget');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+interface DestroyProbe {
+  /** The ring that was destroyed — read its cache again after the zeroing. */
+  readonly ring: Keyring;
+  /** Key material the cache held at the moment destroy() was called. */
+  readonly snapshot: string[];
+  /** The live Buffer objects, so they can be inspected AFTER zeroing. */
+  readonly held: Buffer[];
+}
+
+/** The ring's per-pool cache. Private, so this reads it the way a debugger would. */
+const cachedBuffers = (ring: Keyring): Map<string, Buffer> =>
+  (ring as unknown as { cached: Map<string, Buffer> }).cached;
+
+/**
+ * Spy on the real `Keyring.destroy`, recording what each ring was holding.
+ *
+ * A spy on the prototype — not an injected seam — because the point is that the
+ * PRODUCTION rings are the ones destroyed. `mockRestore` puts the method back.
+ */
+function watchKeyringDestroys(): { readonly probes: DestroyProbe[]; restore: () => void } {
+  const probes: DestroyProbe[] = [];
+  const real = Keyring.prototype.destroy;
+  const spy = vi.spyOn(Keyring.prototype, 'destroy');
+  spy.mockImplementation(function (this: Keyring) {
+    const cache = cachedBuffers(this);
+    probes.push({ ring: this, snapshot: [...cache.values()].map((b) => b.toString('utf8')), held: [...cache.values()] });
+    real.call(this);
+  });
+  return { probes, restore: () => spy.mockRestore() };
+}
+
+/** The bytes the daemon is supposed to have erased. */
+const allZero = (b: Buffer): boolean => [...b].every((x) => x === 0);
+
+/**
+ * Push one real 5 s uplink window through WS-4097 and resolve on the daemon's
+ * `stt-failed` notice.
+ *
+ * This exists because a ring that has never acquired anything holds nothing, so
+ * "stop() zeroed the cache" would pass on a daemon whose cache was always empty.
+ * Driving a real window is the only way to make the PIPELINE ring hold key
+ * bytes; the notice is the deterministic proof the acquire already happened.
+ */
+function driveSttTurn(port: number, token: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const sock = createConnection({ host: '127.0.0.1', port }, () => {
+      sock.write(
+        Buffer.from(
+          [
+            'GET /v1/ui HTTP/1.1',
+            'Host: 127.0.0.1',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+            'Sec-WebSocket-Version: 13',
+            `Sec-WebSocket-Protocol: voice-ui.v1, ${token}`,
+            '',
+            '',
+          ].join('\r\n'),
+          'utf8',
+        ),
+      );
+    });
+    let acc = Buffer.alloc(0);
+    let head = Buffer.alloc(0);
+    let upgraded = false;
+    const seen: string[] = [];
+    const timer = setTimeout(() => {
+      sock.destroy();
+      reject(new Error(`no stt-failed notice within 12s; saw [${seen.join(', ')}]`));
+    }, 12_000);
+    sock.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    sock.on('data', (chunk: Buffer) => {
+      let rest = chunk;
+      if (!upgraded) {
+        head = Buffer.concat([head, chunk]);
+        const idx = head.indexOf('\r\n\r\n');
+        if (idx === -1) return;
+        upgraded = true;
+        // 50 × 100 ms of full-scale PCM = one 160 000-byte window, loud enough
+        // to clear the −30 dBFS energy gate.
+        const loud = Buffer.alloc(3200, 0x7f);
+        for (let i = 0; i < 50; i += 1) sock.write(maskFrame(Opcode.Binary, loud, Buffer.from([1, 2, 3, 4])));
+        rest = head.subarray(idx + 4);
+      }
+      acc = Buffer.concat([acc, rest]);
+      const { frames, remaining } = decodeFrames(acc);
+      acc = Buffer.from(remaining);
+      for (const f of frames) {
+        if (f.opcode !== Opcode.Text) continue;
+        const frame = JSON.parse(Buffer.from(f.payload).toString('utf8')) as { type?: string; code?: string };
+        seen.push(frame.code ?? frame.type ?? '?');
+        if (frame.type !== 'notice' || frame.code !== 'stt-failed') continue;
+        clearTimeout(timer);
+        sock.end();
+        resolve();
+        return;
+      }
     });
   });
 }
@@ -244,6 +375,128 @@ describe('A5: the TTS credit clock belongs to the daemon, not to the pipeline', 
     expect(rows.length, 'the save-time rebuild must have succeeded, not failed again').toBe(1);
   });
 });
+
+describe('A.6: key material is zeroed when the ring that holds it goes away', () => {
+  // `Keyring` caches ONE Buffer per pool for the ring's whole life, so a ring
+  // that is merely "still referenced" is a ring still holding three API keys in
+  // the heap. Two owners exist — the pipeline ring (rebuilt on every key save)
+  // and the per-narration ring — and each is destroyed by its OWN owner. The
+  // assertion is on the bytes, not on a call count, so a ring that never held
+  // material cannot make these pass.
+  //
+  // HONEST GAP (peer review): the `buildVoicePipeline` catch path that zeroes a
+  // ring orphaned by a throwing constructor is NOT covered here — driving it
+  // needs a post-load constructor throw that is not injectable today. It is
+  // defense-in-depth, not a verified guard; do not cite it as tested.
+
+  const keyedVault = (prefix: string): string => {
+    const path = join(mkdtempSync(join(tmpdir(), prefix)), 'keyring.dat');
+    writeKeyPools(new FileVault(path), { groq: ['g1'], fish: ['f1'], openrouter: ['o1'] });
+    return path;
+  };
+
+  // Force the ENERGY gate. `models/silero-vad.onnx` is gitignored and ships in
+  // no build (the daemon's own decision is the RMS fallback when the model is
+  // absent), but a developer checkout can have one, and Silero correctly judges
+  // a full-scale DC tone to be non-speech — which would gate the window and make
+  // this suite silently test nothing.
+  const PREV_VAD = process.env['VAD_MODEL_PATH'];
+  beforeEach(() => {
+    process.env['VAD_MODEL_PATH'] = 'models/a6-absent-vad.onnx';
+  });
+  afterEach(() => {
+    if (PREV_VAD === undefined) delete process.env['VAD_MODEL_PATH'];
+    else process.env['VAD_MODEL_PATH'] = PREV_VAD;
+  });
+
+  test('stop() zeroes the pipeline ring, including bytes a live turn cached', async () => {
+    const watch = watchKeyringDestroys();
+    try {
+      const handle = await boot(keyedVault('a6-stop-'));
+      await driveSttTurn(handle.ipcPort, 'test-ipc-token');
+      await handle.stop();
+      handles.pop();
+
+      expect(watch.probes.length, 'stop() must destroy the one live ring').toBe(1);
+      const probe = watch.probes[0] as DestroyProbe;
+      expect(probe.snapshot, 'the destroyed ring really held the Groq key the turn acquired').toContain('g1');
+      for (const buf of probe.held) expect(allZero(buf), 'cached key bytes must be erased in place').toBe(true);
+      expect(cachedSize(probe), 'and the ring must forget them').toBe(0);
+    } finally {
+      watch.restore();
+    }
+  }, 20_000);
+
+  test('saving keys destroys the ring the previous pipeline was holding', async () => {
+    // The half most likely to be missed: the replaced ring is the one holding
+    // the bytes the user just replaced, and nothing else in the process knows
+    // it exists.
+    const watch = watchKeyringDestroys();
+    try {
+      const handle = await boot(keyedVault('a6-save-'));
+      await driveSttTurn(handle.ipcPort, 'test-ipc-token');
+      const ack = await sendCommand(handle.ipcPort, 'test-ipc-token', {
+        id: 'cmd-a6-save',
+        kind: 'saveApiKeys',
+        groqKey: 'g2',
+        fishKey: 'f2',
+        openrouterKey: 'o2',
+      });
+      expect(ack).toMatchObject({ ok: true });
+
+      expect(watch.probes.length, 'the save must destroy exactly the ring it replaced').toBe(1);
+      const replaced = watch.probes[0] as DestroyProbe;
+      expect(replaced.snapshot, 'the replaced ring was holding the old key').toContain('g1');
+      for (const buf of replaced.held) expect(allZero(buf), 'the replaced ring must be zeroed, not just dropped').toBe(true);
+
+      // The survivor is a different ring, and stop() still owns it.
+      await handle.stop();
+      handles.pop();
+      expect(watch.probes.length).toBe(2);
+      expect(watch.probes[1]?.snapshot, 'the rebuilt ring is the one stop() finishes off').not.toContain('g1');
+    } finally {
+      watch.restore();
+    }
+  });
+
+  test('a narration ring is zeroed even when the provider call throws', async () => {
+    // `narratorChat` builds a ring PER CALL, so a `try` without `finally` (or a
+    // bare `return await`) leaks one ring per narration for the daemon's whole
+    // life. An error is the common case — the narrator swallows it and returns
+    // null — so the throw path is the one that matters.
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith('https://openrouter.ai')) return Promise.reject(new Error('stubbed provider outage'));
+      return realFetch(input, init);
+    });
+    const watch = watchKeyringDestroys();
+    try {
+      const handle = await boot(keyedVault('a6-narrate-'), {}, true);
+      // `setPersona` fires `onExecuted`, which is what makes the daemon narrate.
+      const ack = await sendCommand(handle.ipcPort, 'test-ipc-token', {
+        id: 'cmd-a6-persona',
+        kind: 'setPersona',
+        persona: 'nour',
+      });
+      expect(ack).toMatchObject({ ok: true });
+      await until(() => watch.probes.length > 0);
+
+      expect(watch.probes.length, 'exactly the one per-call ring, and no pipeline ring').toBe(1);
+      const probe = watch.probes[0] as DestroyProbe;
+      expect(probe.snapshot, 'the narration ring acquired the OpenRouter key').toEqual(['o1']);
+      for (const buf of probe.held) expect(allZero(buf), 'a failed narration must still erase the key').toBe(true);
+      await handle.stop();
+      handles.pop();
+    } finally {
+      watch.restore();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+/** Buffers the destroyed ring still referenced (0 once it forgot them). */
+const cachedSize = (probe: DestroyProbe): number => cachedBuffers(probe.ring).size;
 
 describe('C2: the daemon publishes who owns the IPC port', () => {
   const KEY = '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0';

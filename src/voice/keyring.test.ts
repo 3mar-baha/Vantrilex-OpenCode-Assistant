@@ -63,6 +63,31 @@ describe('lock-free rotation distribution (ADR-005 proof)', () => {
     }
   });
 
+  test('A.6 primitive: destroy zeroes the live cache buffer and the ring recovers', () => {
+    // The mechanism every A.6 assertion rests on. `cached` is private, so this
+    // reads the ring the way a debugger would — and it is the only place in the
+    // suite that can see whether a destroy had anything to zero. The daemon-side
+    // tests then assert on the same object.
+    const ring = Keyring.fromKeys(pools);
+    const first = ring.acquire('groq');
+    expect(first.keyId).toBe('K1');
+    ring.release(first, true);
+    const cache = (ring as unknown as { cached: Map<string, Buffer> }).cached;
+    const held = cache.get('groq') as Buffer;
+    expect(held.toString('utf8'), 'the ring caches one Buffer per pool, not per call').toBe(pools.groq[0]);
+    expect(cache.size).toBe(1);
+
+    ring.destroy();
+
+    // Zeroed IN PLACE, not swapped out: a replaced buffer would leave the old
+    // one alive in the heap, which is the residency A.6 exists to remove.
+    expect([...held].every((b) => b === 0), 'the very buffer that held the key must be zeroed').toBe(true);
+    expect(cache.size, 'and the ring must forget it').toBe(0);
+    // Zeroing must not corrupt the ring into handing out empty credentials.
+    const after = ring.acquire('groq');
+    expect(after.material.toString('utf8'), 'a post-destroy acquire rebuilds real material').toBe(pools.groq[0]);
+  });
+
   test('fromKeys refuses an empty third pool (fail-closed activation)', () => {
     expect(() => Keyring.fromKeys({ groq: ['a'], fish: ['b'], openrouter: [] })).toThrowError(/no keys/);
     const ring = Keyring.fromKeys({ groq: ['a'], fish: ['b'], openrouter: ['c'] });

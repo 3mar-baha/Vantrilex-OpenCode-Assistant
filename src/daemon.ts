@@ -317,6 +317,25 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // `speechGate`, so it lives beside it; the pipeline closes over the binding.
   const ttsCredit = new TtsCreditMonitor(options.ttsCreditNow ?? (() => Date.now()));
 
+  // A.6 — key material must not outlive the ring that holds it.
+  //
+  // A `Keyring` caches one Buffer per pool for its whole life, so a ring that
+  // is merely "still referenced" is a ring still holding three API keys in the
+  // process heap. Two rings exist and each has a different owner: the pipeline
+  // ring (rebuilt on every key save) and the per-narration ring. This single
+  // reference tracks the PIPELINE ring only; the narration ring is owned by its
+  // own call and destroyed in a `finally`. Deliberately NOT a daemon-lifetime
+  // registry: registering a per-call ring would grow one entry per narration for
+  // the life of the process, which is the very leak this closes.
+  //
+  // HONEST LIMIT: `destroy()` erases the cached Buffers. `Keyring.keys` is a
+  // `Map<KeyPool, string[]>` — JS strings are immutable, so the vault-decrypted
+  // key text itself cannot be zeroed from here. This removes Buffer residency
+  // and the per-call copies; it does not make the process's memory provably free
+  // of key bytes until it exits. Claiming otherwise would be the kind of
+  // reassuring-but-false comment this file keeps hunting.
+  let liveRing: Keyring | null = null;
+
   // Phase 5 — ZERO CANNED REPLIES.
   //
   // Previously each command site passed a literal like 'تم تبديل النموذج' as its
@@ -353,28 +372,40 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     const ring = Keyring.load(vault);
     // L17: released with the real outcome, so a 401/403 from OpenRouter rotates
     // the pool instead of silently reusing the rejected key.
-    return withKey(ring, 'openrouter', (key) =>
-      openRouterChat(
-        keyMaterial(key),
-        model,
-        system,
-        user,
-        fetch,
-        {
-          temperature: 0.8,
-          // 90 was sized for a bare prose line. The strict JSON wrapper plus a
-          // ~20-word Arabic reply needs headroom: a truncation mid-JSON is an
-          // unparseable reply, i.e. silence, so margin here is audibility.
-          maxTokens: 120,
-          timeoutMs: NARRATOR_TIMEOUT_MS,
-          // Inkling is a reasoning model: without effort:none it spends the
-          // token budget thinking and returns finish=length with content=null
-          // (measured live). Same suppression the Dots3 intake uses.
-          reasoning: { effort: 'none' },
-          ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
-        },
-      ),
-    );
+    //
+    // A.6: this ring exists for ONE call, so it is destroyed in a `finally` —
+    // not after the await, which a provider error would skip, and not in a
+    // `try` that the throw path walks straight past. The narrator swallows
+    // every provider failure and returns null, so the error path is the COMMON
+    // path: without this line the daemon leaks one keyring per confirmation for
+    // its whole life. `await` (not a bare `return`) is what makes the `finally`
+    // cover the in-flight call rather than the promise.
+    try {
+      return await withKey(ring, 'openrouter', (key) =>
+        openRouterChat(
+          keyMaterial(key),
+          model,
+          system,
+          user,
+          fetch,
+          {
+            temperature: 0.8,
+            // 90 was sized for a bare prose line. The strict JSON wrapper plus a
+            // ~20-word Arabic reply needs headroom: a truncation mid-JSON is an
+            // unparseable reply, i.e. silence, so margin here is audibility.
+            maxTokens: 120,
+            timeoutMs: NARRATOR_TIMEOUT_MS,
+            // Inkling is a reasoning model: without effort:none it spends the
+            // token budget thinking and returns finish=length with content=null
+            // (measured live). Same suppression the Dots3 intake uses.
+            reasoning: { effort: 'none' },
+            ...(options?.responseFormat !== undefined ? { responseFormat: options.responseFormat } : {}),
+          },
+        ),
+      );
+    } finally {
+      ring.destroy();
+    }
   };
 
   // The seam: production builds the real OpenRouter-backed chat above; a test
@@ -569,8 +600,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   };
 
   const buildVoicePipeline = (): AudioPipeline | null => {
+    // Hoisted so the catch can zero a ring that was loaded and then orphaned by
+    // a constructor throwing.
+    let built: Keyring | null = null;
     try {
       const ring = Keyring.load(vault);
+      built = ring;
+      // A.6: the daemon is now the owner of this ring, so the daemon destroys it
+      // — on the next rebuild and at stop. Closure-scoped single reference, not
+      // a collection: there is only ever one pipeline ring.
+      liveRing = ring;
       const fish = new FishHttpTransport(ring);
         const chat: ChatFn = async (model, system, user, options) => {
           return withKey(ring, 'openrouter', (key) =>
@@ -860,11 +899,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         },
       });
     } catch {
+      // A.6: a build that failed after the vault was read still loaded a ring.
+      // Leaving it to the GC is the leak, so it is zeroed here and dropped.
+      if (built !== null) {
+        if (liveRing === built) liveRing = null;
+        built.destroy();
+      }
       return null;
     }
   };
 
   const rebuildVoice = (): void => {
+    // A.6: the ring being replaced is holding the keys the user is in the middle
+    // of replacing. Destroy it BEFORE the new pipeline is built, so the daemon
+    // never holds two rings' worth of key bytes — and so a failed rebuild cannot
+    // leave the previous ring alive, unreachable and unzeroed.
+    const outgoing = liveRing;
+    liveRing = null;
+    outgoing?.destroy();
     audio = buildVoicePipeline();
     if (audio === null) {
       ui.onAudio = null;
@@ -936,6 +988,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // few rows — usually the ones explaining WHY the user is shutting down —
       // are lost.
       await telemetry.close().catch(() => undefined);
+      // A.6: the pipeline ring's cached key bytes go last, after the rows that
+      // explain the shutdown are on disk and before the socket closes. Idempotent
+      // and nullable, because a keyless daemon never built one and a save may have
+      // replaced it. NOT a closed window: a turn still in flight can re-acquire
+      // (and re-cache) after this line, since the socket is still open.
+      const remaining = liveRing;
+      liveRing = null;
+      remaining?.destroy();
       // C2: drop the claim before the socket goes away, so the next launch sees a
       // cold port rather than a marker naming a process that is shutting down.
       clearOwner();
