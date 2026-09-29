@@ -1060,6 +1060,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               status: ack.ok ? 'OK' : 'DEGRADED',
               latencyMs: Date.now() - t0,
               ...(resolvedMentions.length > 0 ? { remediationAttempted: 'None' as const } : {}),
+              // Peer review (D2): a 6a re-ask silently doubles this row's
+              // latency. The flag says which rows are two calls, not one.
+              ...(ack.reasked === true ? { remediationAttempted: 'Reasked' as const } : {}),
             });
             if (!ack.ok || ack.replyAr === undefined || ack.taskEn === undefined) {
               ui.notice('intake-failed', 'ما قدرت أفهم الطلب — جرّب مرة ثانية بصيغة أوضح.', 'warn');

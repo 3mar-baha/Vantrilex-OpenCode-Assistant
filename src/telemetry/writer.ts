@@ -31,6 +31,9 @@ export const RemediationSchema = z.enum([
   'ServeRestarted',
   'ModelThrottled',
   'CacheBypassed',
+  // M2-6a (D2): the intake re-ask. A ~2 s BRAIN row may be one call or two;
+  // this member says which, so a re-ask never silently doubles a latency.
+  'Reasked',
 ]);
 export type RemediationAttempted = z.infer<typeof RemediationSchema>;
 

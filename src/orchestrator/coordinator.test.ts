@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Coordinator, INTAKE_MODEL, COORDINATOR_MODEL, buildHandoff } from './coordinator.js';
+import type { CoordinatorDeps } from './coordinator.js';
+import { isSpeakable } from '../voice/tts.js';
 
 // P5 TDD — Dots3 intake → Inkling plan → Inkling handoff dispatch.
 // Fast verbal reply first, structured failure never throws out.
@@ -472,5 +474,136 @@ describe('buildHandoff', () => {
     expect(text).toContain('ses_q');
     expect(text).toContain('[s1] prompt :: Ask nicely');
     expect(text).toContain('FR-12');
+  });
+});
+
+// M2 Pattern 6a — the acknowledgement is spoken ~1.4 s after the user stops
+// talking and BEFORE a single step has run. A line that claims a result is
+// therefore a lie with a receipt-free timestamp: the user hears "done" and
+// then waits. The prompt already bans robotic confirmation templates as a
+// STYLE matter; this is the timing half — nothing has executed yet, so no
+// outcome may be reported, whatever the tone.
+describe('M2 Pattern 6a — never assert results', () => {
+  const TASK = 'List all sessions and report their states';
+  const ASSERTING = JSON.stringify({ reply_ar: 'تم تنفيذ الأمر بنجاح', task_en: TASK });
+  const STILL_ASSERTING = JSON.stringify({ reply_ar: 'تم تغيير النموذج، والتحديث تم', task_en: TASK });
+  const CLEAN = JSON.stringify({ reply_ar: 'هسا بتفتّح عليها، ثواني', task_en: TASK });
+
+  /**
+   * One model, a queue of bodies — the re-ask is the SECOND intake call on the
+   * SAME model, so a per-model map cannot express it, and a queue shorter than
+   * the call count would silently pass a body that does not exist.
+   */
+  function intakeQueue(bodies: string[]): { chat: CoordinatorDeps['chat']; systems: string[] } {
+    const systems: string[] = [];
+    let n = 0;
+    const chat: CoordinatorDeps['chat'] = async (model, system) => {
+      systems.push(system);
+      const body = bodies[n];
+      n += 1;
+      if (body === undefined) throw new Error(`unexpected extra call #${n} to ${model}`);
+      return body;
+    };
+    return { chat, systems };
+  }
+
+  test('an outcome-asserting ack is re-asked once and a clean re-ask replaces it', async () => {
+    const { chat, systems } = intakeQueue([ASSERTING, CLEAN]);
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async () => ({ receipt: 'never' }),
+      activeSessionId: () => undefined,
+    });
+
+    const ack = await coordinator.intake('اعرض الجلسات');
+
+    expect(ack.ok).toBe(true);
+    // The re-ask carries the constraint; without it the same answer comes back.
+    expect(systems).toHaveLength(2);
+    expect(systems[1]).toMatch(/nothing has run|never state an outcome/i);
+    expect(ack.replyAr).toBe('هسا بتفتّح عليها، ثواني');
+    expect(ack.taskEn).toBe(TASK);
+    // D2: the row is marked so a ~2 s intake latency reads as two calls.
+    expect(ack.reasked).toBe(true);
+  });
+
+  test('a re-ask that still asserts is DROPPED and the turn continues silently', async () => {
+    // The defect this closes: the user hears "تم تنفيذ الأمر بنجاح" and then
+    // watches nothing happen. Silence is the honest answer; dropping the whole
+    // line is required because a filter that edits Arabic produces a mangled
+    // half-sentence, which is worse than saying nothing.
+    const { chat } = intakeQueue([ASSERTING, STILL_ASSERTING]);
+    const dispatched: string[] = [];
+    const coordinator = new Coordinator({
+      chat: async (model, system, user, options) => {
+        if (model === COORDINATOR_MODEL) return PLAN_OK;
+        return chat(model, system, user, options);
+      },
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'msg_drop' };
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const ack = await coordinator.intake('اعرض الجلسات');
+    expect(ack.ok).toBe(true);
+    // Dropped whole, not filtered: no fragment of the claim survives, and the
+    // line is un-speakable, which is exactly how `onUtterance` stays silent.
+    expect(ack.replyAr).toBe('');
+    expect(isSpeakable(ack.replyAr ?? 'x')).toBe(false);
+    // The WORK is not dropped with the words: the task survives, and it plans.
+    expect(ack.taskEn).toBe(TASK);
+    const mission = await coordinator.plan(ack, { taskId: 'task-6a' });
+    expect(mission.ok).toBe(true);
+    expect(mission.receipt).toBe('msg_drop');
+    expect(dispatched).toHaveLength(1);
+  });
+
+  test('the re-ask is bounded to one and never touches the fallback model', async () => {
+    // Unbounded re-asking turns a model that always lies about the outcome into
+    // an infinite loop on the 901 ms intake path.
+    const { chat, systems } = intakeQueue([ASSERTING, STILL_ASSERTING]);
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async () => ({ receipt: 'x' }),
+      activeSessionId: () => undefined,
+    });
+
+    const ack = await coordinator.intake('اعرض الجلسات');
+
+    expect(systems).toHaveLength(2);
+    expect(ack.replyAr).toBe('');
+  });
+
+  test('an acknowledgement that only ACKNOWLEDGES is never re-asked', async () => {
+    // The trap: 'تمام' contains 'تم'. A naive substring detector silences every
+    // healthy turn, which is a louder failure than the one being fixed.
+    for (const phrase of ['تمام، أبحث الآن', 'تمام بس للتأكيد', 'يا غالي، هسا بنرتبها', 'ماشي، بلّش']) {
+      const { chat, systems } = intakeQueue([JSON.stringify({ reply_ar: phrase, task_en: TASK })]);
+      const coordinator = new Coordinator({
+        chat,
+        dispatch: async () => ({ receipt: 'x' }),
+        activeSessionId: () => undefined,
+      });
+
+      const ack = await coordinator.intake('اعرض الجلسات');
+
+      expect(systems, `re-asked a clean ack: ${phrase}`).toHaveLength(1);
+      expect(ack.replyAr).toBe(phrase);
+    }
+  });
+
+  test('the system prompt states the timing rule, not just a style ban', async () => {
+    const { chat, systems } = intakeQueue([CLEAN]);
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async () => ({ receipt: 'x' }),
+      activeSessionId: () => undefined,
+    });
+
+    await coordinator.intake('اعرض الجلسات');
+
+    expect(systems[0]).toMatch(/nothing has run/i);
   });
 });

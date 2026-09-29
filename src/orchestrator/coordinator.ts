@@ -67,6 +67,57 @@ function intakeContextBlock(ctx?: IntakeContext): string {
   return `SITUATION:\n${rows.join('\n')}\n\n`;
 }
 
+/**
+ * M2 Pattern 6a — the outcome-claim detector.
+ *
+ * `تم` + a completion verb is a claim about work that has NOT happened: the
+ * acknowledgement is spoken ~1.4 s after the user stops talking and before the
+ * planner has been called, so a result reported here is a lie with a timestamp.
+ *
+ * Two deliberate narrownesses. (1) The verb list is spelled out instead of a
+ * character range — a range across Arabic letters is the same defect as the
+ * dash range that ate the port number in `normalizeArabic`. (2) `تم` must be
+ * followed by whitespace, which is the entire difference between a result claim
+ * ("تم تنفيذ") and 'تمام' ("okay"). Under-matching is the right failure here:
+ * it silences one line, where a broad detector silences every healthy turn.
+ *
+ * The text is folded to a throwaway copy (tashkeel and tatweel removed, alef
+ * variants collapsed) purely so ONE spelling matches several. The returned
+ * line is never touched — the guard drops, it never edits: a filter over
+ * Arabic produces a mangled half-sentence, which is worse than silence.
+ */
+const OUTCOME_VERBS = [
+  'تنفيذ', 'تبديل', 'تشغيل', 'تغيير', 'تحديث', 'حذف', 'اضافة', 'انشاء', 'اصلاح', 'فتح',
+  'اغلاق', 'تعديل', 'تطبيق', 'تفعيل', 'تعطيل', 'ايقاف', 'تثبيت', 'اكمال', 'الغاء', 'ادخال',
+  'اعادة', 'ترتيب', 'ترقية', 'رفع', 'انزال', 'نسخ', 'ازالة', 'متابعة', 'انتهى', 'انتهت', 'بنجاح',
+].join('|');
+const OUTCOME_CLAIM_AR = new RegExp(
+  `(?:^|[^\\p{L}\\p{N}])تم[\\u0640\\u064B-\\u0652\\u0670]?\\s+(?:${OUTCOME_VERBS})(?![\\p{L}])`,
+  'u',
+);
+/** The same defect spoken in English, for the mixed technical acknowledgements. */
+const OUTCOME_CLAIM_EN = /\b(?:done|completed|finished|executed|deployed)\b/i;
+
+function foldArabic(text: string): string {
+  return text
+    .replace(/[\u0640\u064B-\u0652\u0670]/g, '')
+    .replace(/[آأإٱ]/g, 'ا');
+}
+
+/** True when the line reports an outcome, i.e. something that has not run yet. */
+function claimsOutcome(replyAr: string): boolean {
+  const folded = foldArabic(replyAr);
+  return OUTCOME_CLAIM_AR.test(folded) || OUTCOME_CLAIM_EN.test(folded);
+}
+
+/** Appended on the single re-ask: the same rule, restated as the reason. */
+const REASK_CONSTRAINT = [
+  '',
+  'The previous reply_ar REPORTED A RESULT. Nothing has run yet — no step has',
+  'been planned, nothing has been dispatched, nothing has changed on disk. Say',
+  'only that you are about to look into it, in the same voice, no outcome.',
+].join('\n');
+
 function intakeSystem(ctx?: IntakeContext): string {
   return [
   'You take Arabic voice transcripts and split them into two fields.',
@@ -83,6 +134,9 @@ function intakeSystem(ctx?: IntakeContext): string {
   '  no "تم تغيير", no robotic confirmation templates — those are forbidden.',
   '- If the user said something that needs no action, acknowledge it briefly and set',
   '  task_en to a no-op marker rather than inventing work.',
+  '- You are the FIRST step of the turn, so nothing has run yet: acknowledge only,',
+  '  never state an outcome — no "تم تنفيذ", no "تم تغيير", no "done"/"completed",',
+  '  whatever the tone. The result is narrated later, by whatever actually ran.',
   '',
   intakeContextBlock(ctx),
   ].join('\n');
@@ -187,6 +241,12 @@ export interface IntakeAck {
   readonly receipt: string | null;
   readonly intakeModel?: string;
   readonly detail?: string;
+  /**
+   * Peer review (D2): true when the 6a re-ask ran, so a ~2 s intake row is
+   * distinguishable from a single call. The daemon logs it; without this a
+   * re-ask silently doubles a recorded latency with nothing saying which.
+   */
+  readonly reasked?: boolean;
 }
 
 /** mission-handoff envelope — the exact payload Inkling executes in-session. */
@@ -264,7 +324,67 @@ export class Coordinator {
     if (intake === null) {
       return { ok: false, receipt: null, detail: intakeTransportFailed ? 'intake-failed' : 'intake-invalid' };
     }
-    return { ok: true, replyAr: intake.reply_ar, taskEn: intake.task_en, receipt: null, intakeModel: servedBy };
+
+    // M2 Pattern 6a — the acknowledgement is written before anything has run,
+    // so a line reporting an outcome is unearned. One bounded re-ask with the
+    // constraint restated; if that still claims a result the line is DROPPED.
+    //
+    // `''` rather than `undefined` is the drop marker, and it is deliberate on
+    // two counts. `undefined` would read as a failed intake to the daemon
+    // (`daemon.ts` checks `ack.replyAr === undefined` before enqueuing) and
+    // throw away work the user asked for; `''` keeps `ok: true` and `task_en`,
+    // so the task still plans and dispatches — only the lie is withheld.
+    // Downstream it is silent by existing contract: `isSpeakable('')` is false,
+    // so `onUtterance` returns before synthesising, the `narrate() → null`
+    // precedent. The FIRST ack's `task_en` is kept even when the re-ask is
+    // clean: the re-ask is about one sentence, not a re-specification.
+    let replyAr = intake.reply_ar;
+    let reasked = false;
+    if (claimsOutcome(replyAr)) {
+      reasked = true;
+      const reask = await this.reaskIntake(transcript, opts.context, servedBy);
+      replyAr = reask !== null && !claimsOutcome(reask.reply_ar) ? reask.reply_ar : '';
+    }
+    return {
+      ok: true,
+      replyAr,
+      taskEn: intake.task_en,
+      receipt: null,
+      intakeModel: servedBy,
+      ...(reasked ? { reasked: true as const } : {}),
+    };
+  }
+
+  /**
+   * M2 Pattern 6a — the single re-ask. Same model that produced the claiming
+   * ack (the failover model is not a second opinion on one sentence), same
+   * decoding controls, so the retry cannot change how the leg is measured.
+   *
+   * Peer review (D1): 3 s, not the 10 s intake budget — only a cosmetic
+   * sentence is at stake, and a 10 s re-ask would regress the §2.3 "ack
+   * ≈1.4 s" budget to ~2.3 s of silence on exactly the turn this guard
+   * exists for.
+   *
+   * A throw or an unparseable body resolves to `null`, which the caller reads
+   * as "drop the ack": spending a third call to rescue a sentence the user is
+   * about to hear over the plan would trade the latency budget for cosmetics.
+   */
+  private async reaskIntake(
+    transcript: string,
+    ctx: IntakeContext | undefined,
+    model: string,
+  ): Promise<Intake | null> {
+    try {
+      const raw = await this.deps.chat(
+        model,
+        `${intakeSystem(ctx)}\n${REASK_CONSTRAINT}`,
+        transcript,
+        { reasoning: { effort: 'none' }, maxTokens: 200, temperature: 0.2, timeoutMs: 3_000 },
+      );
+      return parseSchema(IntakeSchema, raw);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -376,6 +496,19 @@ export class Coordinator {
   ): Promise<MissionResult> {
     const ack = await this.intake(transcript, { ...(opts.context !== undefined ? { context: opts.context } : {}) });
     if (!ack.ok || ack.replyAr === undefined) return ack;
+    // M2 Pattern 6a: a dropped ack is `''`. `run()` is the pre-split path the
+    // daemon only takes with the kill-switch off, and it speaks through its own
+    // `speak` dep rather than `onUtterance`, so the `isSpeakable` skip that
+    // makes the drop silent in the shipped path is not inherited here.
+    if (ack.replyAr.length === 0) {
+      // Peer review: narrow like the normal path below — passing the whole
+      // opts today is inert (`plan` excludes `context`) but would diverge
+      // silently the moment the option shapes change.
+      return this.plan(ack, {
+        ...(opts.approve !== undefined ? { approve: opts.approve } : {}),
+        ...(opts.taskId !== undefined ? { taskId: opts.taskId } : {}),
+      });
+    }
 
     // Fast verbal response, kicked off but NOT awaited.
     //
