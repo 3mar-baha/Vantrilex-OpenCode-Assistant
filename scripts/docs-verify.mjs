@@ -106,8 +106,147 @@ function countE2ETests() {
   return { tests, specs };
 }
 
+/**
+ * Narrative claims: the ones the numeric table above structurally cannot see.
+ *
+ * These exist because the four doc falsities fixed during the persona-wiring
+ * sprint were all PROSE, and `docs:verify` caught none of them. It caught the
+ * test counts and the source-line count automatically; "persona references are
+ * all 0", "earcons.ts is a persona effect", "knowledge/ influences no spoken
+ * word" and a stale `daemon.ts:607` all had to be found by hand. A check that
+ * only covers the numbers is a check with a known blind spot, and this file's
+ * whole argument is that a green gate says nothing about prose.
+ *
+ * The same rule applies: no expected value appears here. Each one is parsed out
+ * of AGENTS.md and compared against the tree.
+ */
+
+/** Persona mentions, counted as LINES (not occurrences) — the unit AGENTS.md states. */
+function personaRefCounts() {
+  const files = {
+    'narrator.ts': 'src/orchestrator/narrator.ts',
+    'coordinator.ts': 'src/orchestrator/coordinator.ts',
+    'prompt-optimizer.ts': 'src/orchestrator/prompt-optimizer.ts',
+    'brain.ts': 'src/voice/brain.ts',
+  };
+  const re = /persona|PersonaId|NOUR|KAREEM/i;
+  const out = {};
+  for (const [label, path] of Object.entries(files)) {
+    if (!existsSync(join(ROOT, path))) return null;
+    out[label] = read(path).split('\n').filter((l) => re.test(l)).length;
+  }
+  return out;
+}
+
+/**
+ * Two independent earcon facts, because "earcons.ts does not exist" alone is
+ * satisfied by renaming it. The pitch-constant scan catches the reintroduction
+ * of the AUDIO under any filename, and the file scan catches a new module that
+ * reintroduces the concept without those literals.
+ */
+function earconFacts() {
+  const roots = [join(ROOT, 'src'), join(ROOT, 'apps/desktop/src')];
+  const files = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|tsx)$/.test(p) && !p.endsWith('.test.ts')) files.push(p);
+    }
+  };
+  for (const r of roots) if (existsSync(r)) walk(r);
+  const byName = files.filter((f) => /earcon/i.test(f.replace(/\\/g, '/')));
+  const byPitch = files.filter((f) => /659\.25|987\.77|1318\.5/.test(readFileSync(f, 'utf8')));
+  return { modules: byName.length, pitchHits: byPitch.length };
+}
+
+/**
+ * Who imports `src/knowledge/` in production, and how many come via the barrel.
+ *
+ * The barrel split matters on its own: `knowledge/index.js` re-exports the BM25
+ * retriever and the whole corpus, so an importer of the barrel drags a search
+ * index into its import graph. Pinning the barrel count is what stops a future
+ * edit from quietly moving the daemon onto that path.
+ */
+function knowledgeImportFacts() {
+  const SRC = join(ROOT, 'src');
+  const mods = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (p.endsWith('.ts') && !p.endsWith('.test.ts')) mods.push(p);
+    }
+  };
+  walk(SRC);
+  const importers = new Set();
+  let barrel = 0;
+  for (const f of mods) {
+    const src = readFileSync(f, 'utf8');
+    for (const m of src.matchAll(/from\s+'([^']*knowledge\/[^']+)'/g)) {
+      importers.add(f);
+      if (/knowledge\/index\.js/.test(m[1])) barrel += 1;
+    }
+  }
+  return { importers: importers.size, barrel };
+}
+
+/**
+ * A cited `file.ts:NNN` line anchor is real if the file exists AND the line
+ * exists. This does not verify the line is still the RIGHT line — only that the
+ * pointer did not decay into a dangling reference, which is how `daemon.ts:607`
+ * survived drifting to `:790` with nothing complaining.
+ */
+function citedAnchors() {
+  // AGENTS.md writes the line reference INSIDE the backticks — `daemon.ts:790` —
+  // not as `daemon.ts`:790. Both spellings appear across the file's history, so
+  // accept either. An earlier version of this function only accepted the second
+  // and reported "no citations found" on a document with five of them, which is
+  // the UNVERIFIED-but-looks-covered failure this file is about.
+  const re = /`([A-Za-z0-9_.-]+\.tsx?):(\d+)`/g;
+  // Resolve by BASENAME, recursively. The docs cite `brain.ts:108` and
+  // `daemon.ts:790` as bare filenames, but the files live at `src/voice/` and
+  // `src/` respectively — a fixed two-root lookup reported a perfectly valid
+  // citation as "file not found", which is a false FAIL and would train a
+  // reader to ignore this check.
+  const index = new Map();
+  const indexRoots = [join(ROOT, 'src'), join(ROOT, 'apps/desktop/src')];
+  const collect = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) collect(p);
+      else if (/\.(ts|tsx)$/.test(p) && !p.endsWith('.test.ts')) {
+        // First match wins, and roots are walked in a fixed order, so a
+        // same-named file in two places resolves deterministically.
+        if (!index.has(e.name)) index.set(e.name, p);
+      }
+    }
+  };
+  for (const r of indexRoots) if (existsSync(r)) collect(r);
+  const out = [];
+  for (const m of agents.matchAll(re)) {
+    const name = m[1];
+    const line = Number(m[2]);
+    const hit = index.get(name);
+    if (!hit) {
+      out.push({ name, line, ok: false, why: 'file not found in src/ or apps/desktop/src/' });
+      continue;
+    }
+    const total = readFileSync(hit, 'utf8').split('\n').length;
+    out.push({
+      name,
+      line,
+      ok: line >= 1 && line <= total,
+      why: `${hit.replace(ROOT, '').replace(/\\/g, '/')} has ${total} lines`,
+    });
+  }
+  return out;
+}
+
 // ── derivation ───────────────────────────────────────────────────────────────
 
+// The anchor scan needs the doc text, and `citedAnchors` closes over `agents`,
+// so AGENTS.md is read before any derivation runs. Everything below only reads.
 console.log('docs:verify — deriving truth from the tree…\n');
 
 const agents = existsSync(join(ROOT, 'AGENTS.md')) ? read('AGENTS.md') : '';
@@ -209,6 +348,73 @@ if (docStageCount !== expectedStageCount) {
   fail('gate stage count', String(docStageCount), String(expectedStageCount));
 } else pass('gate stage count', String(docStageCount), String(expectedStageCount));
 
+// 9. Narrative claims — persona reach into each system prompt.
+const prefs = personaRefCounts();
+if (prefs == null) {
+  unverified('persona refs', '-', 'a system-prompt file is missing');
+} else {
+  for (const [label, der] of Object.entries(prefs)) {
+    // Each figure is read out of its own backticked slot in the same sentence,
+    // so reordering the sentence cannot silently reassign one file's number to
+    // another file's claim.
+    const re = new RegExp('`' + label.replace('.', '\\.') + '`\\s*\\*\\*(\\d+)\\*\\*');
+    const doc = (agents.match(re) ?? [])[1];
+    if (doc == null) unverified(`persona refs: ${label}`, 'not stated', String(der));
+    else if (Number(doc) === der) pass(`persona refs: ${label}`, doc, String(der));
+    else fail(`persona refs: ${label}`, doc, String(der));
+  }
+}
+
+// 10. Narrative claims — the earcon removal, checked two independent ways.
+const ear = earconFacts();
+for (const [label, re, der] of [
+  ['earcon modules', /holds \*\*(\d+)\*\* files matching `earcon\*`/, ear.modules],
+  // The figure PRECEDES its own description ("**0** occurrences of the old pitch
+  // constants `659.25` / ..."), so the pattern must run in that order. Three
+  // earlier shapes assumed the reverse and matched nothing, which surfaced as
+  // UNVERIFIED — a check that reads as covered but extracts no figure is worse
+  // than no check at all, so the direction is now asserted rather than assumed.
+  [
+    'earcon pitch constants',
+    /\*\*(\d+)\*\* occurrences of the old pitch constants `659\.25` \/ `987\.77` \/ `1318\.5`/,
+    ear.pitchHits,
+  ],
+]) {
+  const doc = (agents.match(re) ?? [])[1];
+  if (doc == null) unverified(label, 'not stated', String(der));
+  else if (Number(doc) === der) pass(label, doc, String(der));
+  else fail(label, doc, String(der));
+}
+
+// 11. Narrative claims — knowledge/ production importers, and the barrel split.
+const kf = knowledgeImportFacts();
+for (const [label, re, der] of [
+  ['knowledge importers', /half-connected\.\*\* It now has \*\*(\d+)\*\* production importers/, kf.importers],
+  ['knowledge barrel importers', /exactly \*\*(\d+)\*\* imports the barrel/, kf.barrel],
+]) {
+  const doc = (agents.match(re) ?? [])[1];
+  if (doc == null) unverified(label, 'not stated', String(der));
+  else if (Number(doc) === der) pass(label, doc, String(der));
+  else fail(label, doc, String(der));
+}
+
+// 12. Every `file.ts:NNN` anchor AGENTS.md cites must still resolve to a line
+//     that exists. This does NOT prove the line is still the right one.
+const anchors = citedAnchors();
+const dangling = anchors.filter((a) => !a.ok);
+if (anchors.length === 0) {
+  unverified('cited line anchors', '-', 'no `file.ts:NNN` citations found');
+} else if (dangling.length === 0) {
+  pass('cited line anchors', `${anchors.length} cited`, 'all resolve');
+} else {
+  fail(
+    'cited line anchors',
+    `${anchors.length} cited`,
+    `${dangling.length} dangling: ` +
+      dangling.map((a) => `${a.name}:${a.line} (${a.why})`).join(', '),
+  );
+}
+
 // ── report ───────────────────────────────────────────────────────────────────
 
 const w = Math.max(...results.map((r) => r.name.length));
@@ -231,6 +437,23 @@ if (failed.length) {
 if (skipped.length) {
   console.warn(`docs:verify passed with ${skipped.length} UNVERIFIED item(s) — these are NOT confirmed:`);
   for (const s of skipped) console.warn(`  - ${s.name}: ${s.derived}`);
+  // DELETING a documented figure turns the check into a no-op that still exits
+  // 0. Observed by break-testing: removing the earcon count from AGENTS.md left
+  // every other claim green, so the harness reported success while silently
+  // covering one claim less than before. A check that can be switched off by
+  // editing the document it audits is not a check, so losing a claim is an
+  // error rather than a warning.
+  //
+  // `src:verify/tests/10-CHECKPOINT.md` and the README are exempt: they are
+  // narrative documents, not the audit surface. Only AGENTS.md is held to this.
+  console.error(
+    `\ndocs:verify FAILED — ${skipped.length} claim(s) became UNVERIFIED, which means a\n` +
+      'documented figure was removed or became unreadable. A claim that silently\n' +
+      'stops being checked is worse than one that fails: exit code stays 0 and\n' +
+      'coverage silently shrinks. Restore the figure, or delete the claim from\n' +
+      'this script deliberately if the thing it tracked is genuinely gone.',
+  );
+  process.exit(1);
 }
-console.log(`docs:verify passed — ${results.length - skipped.length} claim(s) match the code.`);
+console.log(`docs:verify passed — ${results.length} claim(s) match the code.`);
 process.exit(0);
