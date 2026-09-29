@@ -522,6 +522,19 @@ fn runtime_dir() -> Option<PathBuf> {
 /// only — never credentials, never transcript content. This file carries no
 /// credential, so it deliberately does NOT get the owner-only DACL that
 /// `restrict_to_owner` applies to `ipc.token` and `serve.pass`.
+///
+/// The production body is compiled out under `cargo test`. The unit tests
+/// deliberately drive the failure paths, including Job-Object creation failure,
+/// and without this gate each run appended fabricated `JOB-CREATE-FAILED` lines
+/// to the operator's real diagnostic file. That is the worst form of test
+/// pollution: a green suite silently corrupting the one artefact you would read
+/// to debug a genuine boot failure. Measured on this machine — a single
+/// `cargo test` run appended 546 bytes here, and the log is append-only, so the
+/// damage accumulated across runs.
+///
+/// Split by `cfg` rather than an early `return`, so the test build neither
+/// compiles dead I/O paths nor warns about unreachable code.
+#[cfg(not(test))]
 fn log_line(message: &str) {
     let Some(dir) = runtime_dir() else { return };
     let _ = fs::create_dir_all(&dir);
@@ -537,6 +550,14 @@ fn log_line(message: &str) {
         let _ = fs::write(&path, format!("[{stamp}] {message}\n"));
     }
 }
+
+/// No-op under test. See the production variant above for why this gate exists.
+///
+/// Takes and drops the message so call sites need no `cfg` of their own:
+/// sprinkling `#[cfg(not(test))]` across two dozen call sites would be far more
+/// error-prone than making the sink inert in exactly one place.
+#[cfg(test)]
+fn log_line(_message: &str) {}
 
 fn token_path() -> Option<PathBuf> {
     Some(runtime_dir()?.join("ipc.token"))
