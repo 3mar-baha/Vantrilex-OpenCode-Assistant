@@ -120,8 +120,9 @@ sequenceDiagram
 
 `\\?\`-prefix stripping: `plain_path()` (`main.rs:1296-1305`) strips
 `\\?\` / `\\?\UNC\` because Node's resolver rejects extended-length paths.
-Child logs append-only; `KILL_ON_JOB_CLOSE` reaps orphans; teardown today is
-process-exit-driven (`shutdown_all_services` registered but 0 callers).
+Child logs append-only; `KILL_ON_JOB_CLOSE` reaps orphans; teardown is
+process-exit-driven (the dead `shutdown_all_services` command was removed
+rather than wired).
 
 ### 4.4.2 Completion briefing flow (model-written narration, zero canned)
 
@@ -253,8 +254,7 @@ Rules:
 
 Two planes, do not confuse: **Plane A** Tauri invoke (shell→supervisor, 4
 commands — `ipc_token` `:1185`, `ensure_all_services` `:1595`,
-`shutdown_all_services` `:1637` with 0 callers, `restrict_vault_file` `:907`
-with 0 callers); **Plane B** WS-4097 (shell↔daemon, subprotocol bearer,
+`restrict_vault_file` `:907` (invoked after every `saveApiKeys` since A.2); **Plane B** WS-4097 (shell↔daemon, subprotocol bearer,
 `contractVersion 3.1.0`, additive frames, `?lastSeq=` floor, 5 s ack ledger,
 ≤32 KiB downlink chunks, 32-deep FIFO player). Data flow per utterance:
 capture 100 ms/3200 B → ingest 5 s windows → vadGate (Silero dynamic |

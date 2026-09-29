@@ -135,9 +135,9 @@ cold — adopt-if-answering, never double-spawn), then `node sidecar/dist/cli.js
 serve`. Both children go into a `KILL_ON_JOB_CLOSE` Job Object. A daemon that never
 opens 4097 is killed, not left running. Child logs (`daemon.log`,
 `opencode.log` + stdout twins) are **append-only** — a restart never truncates the
-previous failure. Teardown today is exit-driven (`Supervisor::reap()`); the
-`shutdown_all_services` Tauri command is registered but uninvoked from the shell
-(known defect A.1).
+previous failure. Teardown is exit-driven (`Supervisor::reap()`); the
+former `shutdown_all_services` Tauri command was **deleted** as unreachable
+from the shell (defect A.1) rather than wired.
 
 ### Daemon identity — who holds 4097
 

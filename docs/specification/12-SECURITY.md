@@ -70,12 +70,12 @@ reports the gap instead of pretending to fix it — a helper that locks the
 owner out of the key file would strand every saved provider key, strictly
 worse than the inherited ACL it claims to remove.
 
-Two shipped-but-inert seams (Triad A.1/A.2 — fix each): `shutdown_all_services`
-(`main.rs:1637`, registered `:3268`) has **zero** shell call sites — teardown
-is exit-driven only; `restrict_vault_file` (`:907`) has **zero** shell call
-sites — the post-save re-lock never fires from the app, so the startup DACL
-is undone by the first save until something invokes it. Both are registered
-Tauri commands with no callers, not missing code.
+One shipped-but-inert seam, now closed (Triad A.1): `shutdown_all_services`
+was registered with **zero** shell call sites — a false affordance, since
+teardown is exit-driven (`Supervisor::reap()` on `ExitRequested`/`Exit`).
+It was **deleted**, not wired; `reap()` itself is unchanged. (Triad A.2 —
+`restrict_vault_file`, `:907` — is now invoked after every successful
+`saveApiKeys`, so the post-save re-lock fires.)
 
 ## 12.4 — Scrubbing (sink, not call sites)
 

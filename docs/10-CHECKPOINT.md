@@ -902,10 +902,10 @@ the RMS fallback (`daemon.ts:555`, `ingest.ts:40`).
 (`main.rs:864-866,881-884`); `keyring.dat` DACL at `resolve_vault_dir`
 (`:1373-1376`) + `restrict_vault_file` (`:907-922`); wrong-length → delete +
 Err; DACL fail → delete + Err; `getrandom` (`:587`) no fallback. Verified
-live: env-key round-trip 3/3. **Half still inert (Triad A.1/A.2):**
-`shutdown_all_services` and `restrict_vault_file` are registered with zero
-shell call sites — teardown is exit-driven; the first save undoes the startup
-DACL until something re-invokes the command. Node-side `icacls` was
+live: env-key round-trip 3/3. **Both halves now wired (ex-A.1/A.2):**
+`shutdown_all_services` was deleted as unreachable rather than wired
+(teardown stays exit-driven); `restrict_vault_file` is invoked after every
+successful `saveApiKeys`. Node-side `icacls` was
 implemented, measured (success message then EPERM for the named account), and
 removed — `ownerOnlyAclAvailable()` reports `false` with reason
 (`win-acl.ts:56-65`); the file's "until (1) is done" comment is stale as of
