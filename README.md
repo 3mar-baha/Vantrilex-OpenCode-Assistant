@@ -9,7 +9,7 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-847%20unit%20%2B%2052%20rust-brightgreen" alt="Tests" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.1-blueviolet" alt="Version" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.2-blueviolet" alt="Version" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/tauri-v2%20%7C%20rust-stable-orange" alt="Tauri" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22-339933" alt="Node" /></a>
   <a href="docs/PROJECT_MASTER_DOSSIER.md"><img src="https://img.shields.io/badge/audit-code--first%20dossier-7c3aed" alt="Dossier" /></a>

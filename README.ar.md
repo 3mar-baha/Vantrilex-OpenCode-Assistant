@@ -10,11 +10,11 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-726%20unit%20%2B%2027%20rust-brightgreen" alt="الاختبارات" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="الرخصة" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.1-blueviolet" alt="الإصدار" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.2-blueviolet" alt="الإصدار" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.8.1"><img src="https://img.shields.io/badge/download-Voxaura_0.8.1_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
+  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.8.2"><img src="https://img.shields.io/badge/download-Voxaura_0.8.2_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
 </p>
 
 ## ما هو Voxaura؟
