@@ -4,6 +4,8 @@
 // Capture is explicit and local: start() throws a clean error when no
 // microphone exists, stop() is idempotent, and no audio leaves the machine
 // except through the caller's onFrame sink.
+import { dbToWaveEnergy, frameEnergyDb } from './vad.js';
+
 export const TARGET_RATE = 16000;
 const FRAME_SAMPLES = (TARGET_RATE * 100) / 1000;
 
@@ -55,7 +57,11 @@ registerProcessor('voxaura-capture', VoxauraCapture);
 export interface CaptureEvents {
   onFrame(bytes: Uint8Array): void;
   onError?(err: Error): void;
-  /** Live input energy (0..1) of the most recent block — drives the visualizer. */
+  /**
+   * Live input energy (0..1) of the most recent 100 ms frame, mapped from its
+   * dBFS by `dbToWaveEnergy` so it is anchored on the shared speech gate.
+   * Fires once per emitted frame — never per audio block.
+   */
   onEnergy?(energy: number): void;
 }
 
@@ -101,21 +107,27 @@ export class AudioCapture {
     const source = context.createMediaStreamSource(stream);
     const emit = (input: Float32Array, inputRate: number): void => {
       try {
-        // Live input energy (RMS, scaled) so the HUD can show the mic is hot.
-        let sum = 0;
-        for (let i = 0; i < input.length; i += 1) {
-          const v = input[i] as number;
-          sum += v * v;
-        }
-        const rms = input.length > 0 ? Math.sqrt(sum / input.length) : 0;
-        events.onEnergy?.(Math.min(1, rms * 4));
         const resampled = downsample(input, inputRate);
         const joined = new Float32Array(this.pending.length + resampled.length);
         joined.set(this.pending, 0);
         joined.set(resampled, this.pending.length);
         let offset = 0;
         while (offset + FRAME_SAMPLES <= joined.length) {
-          events.onFrame(encodeFrame(floatToInt16(joined.subarray(offset, offset + FRAME_SAMPLES))));
+          const pcm = floatToInt16(joined.subarray(offset, offset + FRAME_SAMPLES));
+          // A2 — the energy the HUD draws comes from the SAME 100 ms frame that
+          // is about to be encoded, measured by the SAME function the uplink
+          // gate compares against `SPEECH_GATE_DB`.
+          //
+          // It used to be `min(1, rms * 4)` over the raw 48 kHz input block: a
+          // second opinion, on a second scale, about audio that had not been
+          // quantised yet. A wave showing 0.2 could be a quiet room or a normal
+          // sentence depending on which of the two numbers a reader trusted.
+          //
+          // One loop over 1,600 samples per 100 ms frame — 16k ops/s on the UI
+          // path — and it REPLACES the previous measurement rather than adding
+          // to it, so the frame cost is unchanged.
+          events.onEnergy?.(dbToWaveEnergy(frameEnergyDb(pcm)));
+          events.onFrame(encodeFrame(pcm));
           offset += FRAME_SAMPLES;
         }
         this.pending = joined.subarray(offset);

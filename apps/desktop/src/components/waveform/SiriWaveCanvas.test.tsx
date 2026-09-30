@@ -8,6 +8,7 @@ import {
   speakerPalette,
   type SiriWaveMode,
 } from './SiriWaveCanvas.js';
+import { SPEECH_GATE_DB, dbToWaveEnergy, frameEnergyDb } from '../../audio/vad.js';
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
@@ -182,6 +183,35 @@ describe('SiriWaveCanvas — the thread reacts to live RMS (D7)', () => {
 
   test('idle mode never draws as large as active mode at the same energy', () => {
     expect(measure(1, 'idle')).toBeLessThan(measure(1, 'active'));
+  });
+
+  // A2 — the AMPLITUDE follows a real measurement, not a prop someone guessed.
+  //
+  // The brief asked for the VALUE, not a class name: a synthetic non-silent
+  // frame must measurably change what is drawn, and silence must not. These
+  // drive the same `dbToWaveEnergy(frameEnergyDb(frame))` pair the capture path
+  // emits, so the assertion covers the measurement AND the pixels.
+  test('a synthetic silent frame draws a resting thread, a voice frame a large one', () => {
+    const silence = measure(dbToWaveEnergy(-100));
+    const voice = measure(dbToWaveEnergy(frameEnergyDb(new Int16Array(1600).fill(4000))));
+    expect(silence).toBeGreaterThan(0);
+    expect(voice).toBeGreaterThan(silence * 3);
+  });
+
+  test('room tone and voice are told apart by the DRAWN EXTENT, not by a prop name', () => {
+    // ~-58 dBFS room tone vs ~-18 dBFS voice: two real Int16 frames.
+    const room = measure(dbToWaveEnergy(frameEnergyDb(new Int16Array(1600).fill(40))));
+    const voice = measure(dbToWaveEnergy(frameEnergyDb(new Int16Array(1600).fill(4000))));
+    expect(room).toBeLessThan(voice * 0.5);
+  });
+
+  test('a frame just over the gate is drawn visibly alive, not at the resting thread', () => {
+    const atGate = Math.round(32768 * 10 ** (SPEECH_GATE_DB / 20)) + 1;
+    const db = frameEnergyDb(new Int16Array(1600).fill(atGate));
+    expect(db).toBeGreaterThan(SPEECH_GATE_DB);
+    // The user sees the thread wake at the same moment their audio starts
+    // being transmitted — one measurement, two consumers.
+    expect(measure(dbToWaveEnergy(db))).toBeGreaterThan(measure(dbToWaveEnergy(-100)) * 2);
   });
 });
 

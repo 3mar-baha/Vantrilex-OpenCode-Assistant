@@ -2,6 +2,14 @@ import { z } from 'zod';
 import type { SessionId } from '../common/brands.js';
 import { redactString } from '../common/logger.js';
 import { extractJson, requiresConfirmation } from '../voice/brain.js';
+import {
+  ADDRESSEE_CHAT_OPTIONS,
+  ADDRESSEE_RESPONSE_FORMAT,
+  PermissionSlot,
+  addresseeSystem,
+  parseAddressee,
+  type PendingPermission,
+} from './permission.js';
 
 // P5 runtime orchestration — the 3-agent chain as executable code:
 // Dots3 intake ({reply_ar, task_en}) → Inkling plan (task DAG) → Inkling
@@ -205,6 +213,18 @@ export interface CoordinatorDeps {
   dispatch(text: string): Promise<{ receipt: string }>;
   activeSessionId(): SessionId | undefined;
   speak?(text: string): Promise<unknown>;
+  /**
+   * Phase B — the ask was raised and NOTHING was dispatched. The daemon uses
+   * this to put the assistant's own line in front of the user immediately;
+   * the coordinator never speaks it itself (see the D4 note on `speak`).
+   */
+  readonly onPermissionRequired?: (pending: PendingPermission) => void;
+  /** Clock, for the permission TTL. Injected so expiry is testable. */
+  readonly now?: () => number;
+  /** Permission TTL override. */
+  readonly permissionTtlMs?: number;
+  /** Permission id source. */
+  readonly newPermissionId?: () => string;
 }
 
 export interface MissionResult {
@@ -224,6 +244,16 @@ export interface MissionResult {
    * operator asks about after the fact.
    */
   readonly cancelled?: boolean;
+  /**
+   * Phase B — the turn needed permission to touch OpenCode and did not get it.
+   * `ok` is FALSE: nothing ran, and a result that reads `ok: true` here would
+   * be the `layaReady: false` defect in a new place.
+   */
+  readonly needsPermission?: boolean;
+  /** The assistant's own Arabic ask, so a caller can render it verbatim. */
+  readonly permissionAskAr?: string;
+  /** Correlation id of the open ask. Approving requires naming exactly this. */
+  readonly permissionId?: string;
 }
 
 /**
@@ -242,6 +272,18 @@ export interface IntakeAck {
   readonly receipt: string | null;
   readonly intakeModel?: string;
   readonly detail?: string;
+  /**
+   * Phase B — the user's own words for this turn. The gate needs the UTTERANCE
+   * to judge address, not just the planner's English restatement of it: "أعملها
+   * هاي" and "do it" are the same task and read nothing alike, and a gate that
+   * only ever saw `task_en` would be judging the planner's paraphrase of the
+   * user rather than the user.
+   *
+   * Optional, and additive: `TaskQueue`'s `TaskRecord` has always carried the
+   * verbatim transcript, so a caller that does not pass it simply makes the gate
+   * fall back to the task specification.
+   */
+  readonly transcript?: string;
   /**
    * Peer review (D2): true when the 6a re-ask ran, so a ~2 s intake row is
    * distinguishable from a single call. The daemon logs it; without this a
@@ -272,7 +314,192 @@ function parseSchema<T>(schema: z.ZodType<T>, raw: string): T | null {
 }
 
 export class Coordinator {
-  constructor(private readonly deps: CoordinatorDeps) {}
+  /**
+   * Phase B — the one live permission, owned per Coordinator.
+   *
+   * Per-INSTANCE rather than per-daemon on purpose. `rebuildVoice()` constructs
+   * a new `Coordinator` on every key save, so a rebuild drops the slot: an ask
+   * outstanding across a key save is answered with another ask. That is the
+   * fail-closed direction and it is also the honest one — the user was holding
+   * the keys screen when it happened, and re-asking costs one sentence while a
+   * module-level singleton would let a permission outlive the pipeline that
+   * earned it.
+   */
+  private readonly permission: PermissionSlot;
+
+  constructor(private readonly deps: CoordinatorDeps) {
+    this.permission = new PermissionSlot({
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+      ...(deps.permissionTtlMs !== undefined ? { ttlMs: deps.permissionTtlMs } : {}),
+      ...(deps.newPermissionId !== undefined ? { newId: deps.newPermissionId } : {}),
+    });
+  }
+
+  /** The outstanding ask, if any. Diagnostics and tests. */
+  get pendingPermission(): PendingPermission | null {
+    return this.permission.current();
+  }
+
+  /**
+   * Phase B — the contextual addressee + permission gate.
+   *
+   * IT LIVES HERE, immediately in front of `deps.dispatch`, for four reasons
+   * that are structural rather than stylistic:
+   *
+   *  1. `deps.dispatch` is called from EXACTLY ONE place in the tree — this
+   *     method's last two lines. `client.promptSession` (the 4096 egress) is
+   *     reached from exactly one place too: the daemon's `dispatch` dep. A
+   *     gate anywhere else is a gate with a gap behind it.
+   *  2. It runs BEFORE the planning call, not after. Placing it after `plan()`
+   *     would still be safe for dispatch, but it would spend a 25 s free-tier
+   *     budget ×2 retries deciding something the user never asked for.
+   *  3. It covers every caller. The queue planner calls `plan()` directly and
+   *     the `VOXAURA_TASK_QUEUE=off` kill-switch calls `run()`, which calls
+   *     `plan()`. One interception point, both entry paths.
+   *  4. The daemon already keeps the state that must outlive a rebuild
+   *     (`speechGate`, `ttsCredit`, the task queue); the permission is
+   *     deliberately NOT there, because losing it is the safe failure.
+   *
+   * FAIL CLOSED: every exit below except `proceed` returns without dispatching,
+   * and `proceed` is reachable only through `permission.consume()`, which
+   * deletes the slot before it hands the action back.
+   */
+  private async gate(opts: {
+    readonly taskEn: string;
+    readonly transcript: string;
+    readonly aborted: () => boolean;
+    readonly base: { readonly replyAr: string; readonly intakeModel?: string };
+  }): Promise<{ readonly kind: 'proceed'; readonly taskEn: string } | { readonly kind: 'stop'; readonly result: MissionResult }> {
+    const base = opts.base;
+    const session = this.deps.activeSessionId();
+
+    // NOTE ON THE NO-SESSION CASE. An earlier revision of this gate returned
+    // early when there was no active session, which skipped the planning call
+    // and cost a 25 s free-tier budget that produced nothing. It was removed:
+    // `plan()` already has a no-session guard further down, that guard returns
+    // the PLAN to its caller, and a test pins the shape of that result. Trading
+    // a documented contract for an optimisation nobody measured is the wrong
+    // direction, and the wasted call is the same one the old code already spent.
+    void session;
+
+    const pending = this.permission.current();
+    let raw: string;
+    try {
+      raw = await this.deps.chat(
+        this.deps.coordinatorModel ?? COORDINATOR_MODEL,
+        addresseeSystem(pending !== null ? { pending } : {}),
+        `${opts.transcript}\n\nTASK SPECIFICATION:\n${opts.taskEn}`,
+        { ...ADDRESSEE_CHAT_OPTIONS, responseFormat: ADDRESSEE_RESPONSE_FORMAT },
+      );
+    } catch {
+      // Undecidable. Asking is the safe direction for BOTH misreads: a task we
+      // swallowed silently is work the user asked for and never got, and a
+      // question we dispatched is a prompt sent to a coding agent on a guess.
+      return this.ask(opts, session, 'تحتاج إذنك قبل ما أبعت أي شي لـ OpenCode؟', 'gate-unavailable');
+    }
+    if (opts.aborted()) {
+      return {
+        kind: 'stop',
+        result: { ok: false, replyAr: base.replyAr, taskEn: opts.taskEn, receipt: null, cancelled: true, detail: 'cancelled' },
+      };
+    }
+
+    const verdict = parseAddressee(raw);
+
+    if (verdict.decision === 'deny') {
+      this.permission.clear();
+      return {
+        kind: 'stop',
+        result: {
+          ok: false,
+          replyAr: base.replyAr,
+          taskEn: opts.taskEn,
+          receipt: null,
+          ...(base.intakeModel !== undefined ? { intakeModel: base.intakeModel } : {}),
+          detail: 'permission-denied',
+        },
+      };
+    }
+
+    if (verdict.decision === 'approve') {
+      // The ONLY exit that can dispatch. `consume` requires an exact id match
+      // and deletes the slot before returning, so this is single-use.
+      const consumed = this.permission.consume(verdict.approvesId);
+      if (consumed === null) {
+        // Said yes to nothing. Re-ask rather than guess what "yes" meant.
+        return this.ask(opts, session, verdict.askAr, 'approval-unbound');
+      }
+      if (opts.aborted()) {
+        return {
+          kind: 'stop',
+          result: { ok: false, replyAr: base.replyAr, taskEn: consumed.taskEn, receipt: null, cancelled: true, detail: 'cancelled' },
+        };
+      }
+      return { kind: 'proceed', taskEn: consumed.taskEn };
+    }
+
+    if (verdict.decision === 'answer') {
+      return {
+        kind: 'stop',
+        result: {
+          ok: true,
+          replyAr: base.replyAr,
+          taskEn: opts.taskEn,
+          receipt: null,
+          ...(base.intakeModel !== undefined ? { intakeModel: base.intakeModel } : {}),
+          detail: `answered-verbally (${verdict.reasonEn})`,
+        },
+      };
+    }
+
+    if (verdict.decision === 'not_addressed') {
+      return {
+        kind: 'stop',
+        result: {
+          ok: false,
+          replyAr: base.replyAr,
+          taskEn: opts.taskEn,
+          receipt: null,
+          ...(base.intakeModel !== undefined ? { intakeModel: base.intakeModel } : {}),
+          detail: `not-addressed (${verdict.reasonEn})`,
+        },
+      };
+    }
+
+    // `ask_permission`, `undecided`, and anything `parseAddressee` could not
+    // classify all land here. There is deliberately no fourth branch.
+    return this.ask(opts, session, verdict.askAr, verdict.decision === 'undecided' ? 'gate-undecided' : 'permission-required');
+  }
+
+  /** Open (or re-open) the ask. Never dispatches. The single raise point. */
+  private ask(
+    opts: { readonly taskEn: string; readonly base: { readonly replyAr: string; readonly intakeModel?: string } },
+    session: SessionId | undefined,
+    askAr: string,
+    detail: string,
+  ): { readonly kind: 'stop'; readonly result: MissionResult } {
+    const line = askAr.trim().length > 0 ? askAr.trim() : 'أرسل للـ OpenCode؟';
+    // `session` is diagnostic here, not a precondition: the live-session guard
+    // lives further down in `plan()` and owns that decision. `''` rather than
+    // a throw, so a session that vanished between the two checks degrades into
+    // a slot with no session on it instead of taking the turn down.
+    const pending = this.permission.open(opts.taskEn, session ?? '', line);
+    this.deps.onPermissionRequired?.(pending);
+    return {
+      kind: 'stop',
+      result: {
+        ok: false,
+        replyAr: opts.base.replyAr,
+        taskEn: opts.taskEn,
+        receipt: null,
+        ...(opts.base.intakeModel !== undefined ? { intakeModel: opts.base.intakeModel } : {}),
+        needsPermission: true,
+        permissionAskAr: line,
+        permissionId: pending.id,
+        detail,
+      },
+    };
+  }
 
   /**
    * M2 Pattern 1 — the FIRST half of `run()`, moved verbatim.
@@ -352,6 +579,7 @@ export class Coordinator {
       taskEn: intake.task_en,
       receipt: null,
       intakeModel: servedBy,
+      transcript,
       ...(reasked ? { reasked: true as const } : {}),
     };
   }
@@ -423,6 +651,25 @@ export class Coordinator {
     const aborted = (): boolean => opts.signal?.aborted === true;
     if (aborted()) return cancelled();
 
+    // ── PHASE B GATE ────────────────────────────────────────────────────────
+    // Before ANY planning call, and therefore before anything that could touch
+    // OpenCode. See `gate()` for why this is the one place it belongs.
+    //
+    // `taskEn` is what gets planned and dispatched. On an approval it is
+    // REPLACED by the pending action's own `taskEn`, so the dispatch below can
+    // only ever run something the user was shown and agreed to.
+    const transcript = ack.transcript ?? '';
+    const gateVerdict = await this.gate({
+      taskEn,
+      transcript: transcript.length > 0 ? transcript : taskEn,
+      aborted,
+      base: servedBy !== undefined ? { replyAr, intakeModel: servedBy } : { replyAr },
+    });
+    if (gateVerdict.kind === 'stop') {
+      return gateVerdict.result;
+    }
+    const approvedTaskEn = gateVerdict.taskEn;
+
     let planRaw: string | null = null;
     try {
       // Planning is background work: generous ceiling so a slow model still
@@ -482,8 +729,13 @@ export class Coordinator {
     // The last await before a live session is touched, so this check is the one
     // that decides whether the turn was still wanted.
     if (aborted()) return { ...cancelled(), plan };
-    const { receipt } = await this.deps.dispatch(buildHandoff(taskId, taskEn, session, plan.steps));
-    return { ok: true, replyAr, taskEn, plan, receipt, ...(servedBy !== undefined ? { intakeModel: servedBy } : {}) };
+    // `approvedTaskEn`, NOT `taskEn`. On an approving turn the planner is
+    // building a plan for the action the user was SHOWN and agreed to, not for
+    // whatever the approval utterance happened to be paraphrased into. This is
+    // the last line before OpenCode and it is the only `deps.dispatch` call in
+    // the tree.
+    const { receipt } = await this.deps.dispatch(buildHandoff(taskId, approvedTaskEn, session, plan.steps));
+    return { ok: true, replyAr, taskEn: approvedTaskEn, plan, receipt, ...(servedBy !== undefined ? { intakeModel: servedBy } : {}) };
   }
 
   /**

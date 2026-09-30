@@ -1,15 +1,68 @@
 import { describe, expect, test } from 'vitest';
-import { Coordinator, INTAKE_MODEL, COORDINATOR_MODEL, buildHandoff } from './coordinator.js';
+import {
+  Coordinator,
+  INTAKE_MODEL,
+  COORDINATOR_MODEL,
+  buildHandoff,
+  type MissionResult,
+} from './coordinator.js';
 import type { CoordinatorDeps } from './coordinator.js';
 import { isSpeakable } from '../voice/tts.js';
 
 // P5 TDD — Dots3 intake → Inkling plan → Inkling handoff dispatch.
 // Fast verbal reply first, structured failure never throws out.
-function chatFor(responses: Record<string, string>): (model: string, _s: string, _u: string) => Promise<string> {
-  return async (model: string) => {
+//
+// PHASE B — `plan()` now opens a CONTEXTUAL PERMISSION gate before it plans,
+// so a turn that dispatches takes TWO `plan()` calls: the first raises the ask
+// and dispatches nothing, the second carries the approval and dispatches the
+// PENDING action. `chatFor` answers the gate as the model would (approve, with
+// the id the gate named in its system prompt) so the dispatch-asserting tests
+// below read the way they always did, plus one extra call.
+function gateReplyFor(system: string): string {
+  const pending = /pending id: (\S+)/.exec(system);
+  return pending === null
+    ? JSON.stringify({
+        addressed: true,
+        needs_opencode: true,
+        decision: 'ask_permission',
+        ask_ar: 'أرسل برومبت لـ OpenCode؟',
+        approves_id: '',
+        reason_en: 'task',
+      })
+    : JSON.stringify({
+        addressed: true,
+        needs_opencode: true,
+        decision: 'approve',
+        ask_ar: '',
+        approves_id: pending[1] as string,
+        reason_en: 'approved',
+      });
+}
+
+function chatFor(responses: Record<string, string>): (model: string, system: string, u: string) => Promise<string> {
+  return async (model: string, system: string) => {
+    if (system.includes('addressee gate')) return gateReplyFor(system);
     if (!(model in responses)) throw new Error(`unexpected model call: ${model}`);
     return responses[model] as string;
   };
+}
+
+/**
+ * Two `run()` calls for one dispatch: the first raises the contextual
+ * permission ask and dispatches NOTHING, the second carries the approval.
+ *
+ * Used by every test below that asserts a dispatch happened. The FIRST result
+ * is returned too, because "the ask turn dispatched nothing" is the Phase B
+ * property these tests are now sitting on top of and it costs nothing to keep.
+ */
+async function runApproved(
+  coordinator: Coordinator,
+  transcript: string,
+  opts: Parameters<Coordinator['run']>[1] = {},
+): Promise<{ asked: MissionResult; result: MissionResult }> {
+  const asked = await coordinator.run(transcript, opts);
+  const result = await coordinator.run(transcript, opts);
+  return { asked, result };
 }
 
 const INTAKE_OK = JSON.stringify({ reply_ar: 'تمام، أبحث الآن', task_en: 'List all sessions and report their states' });
@@ -48,8 +101,9 @@ describe('coordinator chain', () => {
       activeSessionId: () => 'ses_a' as never,
     });
     // If speak were awaited this would never settle.
-    const result = await coordinator.run('show me sessions', { taskId: 'm_hang' });
+    const { asked, result } = await runApproved(coordinator, 'show me sessions', { taskId: 'm_hang' });
     expect(speakStarted).toBe(true);
+    expect(asked.needsPermission, 'Phase B: the ask turn dispatched nothing').toBe(true);
     expect(result.ok).toBe(true);
     expect(result.receipt).toBe('msg_hang');
     expect(dispatched).toHaveLength(1);
@@ -68,11 +122,12 @@ describe('coordinator chain', () => {
         dispatch: async () => ({ receipt: 'msg_ok' }),
         activeSessionId: () => 'ses_a' as never,
       });
-      const result = await coordinator.run('show me sessions', { taskId: 'm_reject' });
+      const { result } = await runApproved(coordinator, 'show me sessions', { taskId: 'm_reject' });
       expect(result.ok).toBe(true);
       // Let the detached rejection settle before asserting it was reported.
       await new Promise((r) => setTimeout(r, 0));
-      expect(errors).toHaveLength(1);
+      // Two turns ran (ask, then approve), and `speak` is detached on both.
+      expect(errors).toHaveLength(2);
       expect(String(errors[0])).toContain('coordinator-speak-failed');
       expect(String(errors[0])).not.toContain('api_key');
     } finally {
@@ -99,9 +154,9 @@ describe('coordinator chain', () => {
         dispatch: async () => ({ receipt: 'msg_ok' }),
         activeSessionId: () => 'ses_a' as never,
       });
-      await coordinator.run('show me sessions', { taskId: 'm_redact' });
+      await runApproved(coordinator, 'show me sessions', { taskId: 'm_redact' });
       await new Promise((r) => setTimeout(r, 0));
-      expect(errors).toHaveLength(1);
+      expect(errors).toHaveLength(2);
       const line = String(errors[0]);
       expect(line).toContain('coordinator-speak-failed');
       expect(line).not.toContain('sk-or-v1-AAAAAAAA');
@@ -151,7 +206,7 @@ describe('coordinator chain', () => {
       dispatch: async () => ({ receipt: 'r' }),
       activeSessionId: () => 'ses_a' as never,
     });
-    const result = await coordinator.run('hi');
+    const { result } = await runApproved(coordinator, 'hi');
     expect(systems[0]).not.toContain('SITUATION:');
     expect(result.ok).toBe(true);
   });
@@ -169,13 +224,17 @@ describe('coordinator chain', () => {
       },
       activeSessionId: () => 'ses_a' as never,
     });
-    const result = await coordinator.run('show me sessions', { taskId: 'm1' });
+    const { asked, result } = await runApproved(coordinator, 'show me sessions', { taskId: 'm1' });
+    expect(asked.receipt, 'Phase B: the ask turn reached no session').toBeNull();
     expect(result.ok).toBe(true);
     expect(result.replyAr).toBe('تمام، أبحث الآن');
     expect(result.taskEn).toBe('List all sessions and report their states');
     expect(result.receipt).toBe('msg_9');
-    // Fast verbal response precedes dispatch.
-    expect(order).toEqual(['speak:تمام، أبحث الآن', 'dispatch']);
+    // Fast verbal response precedes dispatch. TWO turns ran, so the ack is
+    // spoken twice and the single dispatch still comes last.
+    expect(order.filter((o) => o === 'dispatch')).toHaveLength(1);
+    expect(order.indexOf('dispatch')).toBe(order.length - 1);
+    expect(order[0]).toBe('speak:تمام، أبحث الآن');
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toContain('[HANDOFF from=Nemotron to=Inkling task=m1]');
     expect(dispatched[0]).toContain('ses_a');
@@ -203,14 +262,15 @@ describe('coordinator chain', () => {
   test('dots3 serves intake directly with reasoning suppression when healthy', async () => {
     const calls: Array<{ model: string; options: unknown }> = [];
     const coordinator = new Coordinator({
-      chat: async (model: string, _s: string, _u: string, options?: unknown) => {
+      chat: async (model: string, system: string, user: string, options?: unknown) => {
+        if (system.includes('addressee gate')) return gateReplyFor(system);
         calls.push({ model, options });
         return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
       },
       dispatch: async () => ({ receipt: 'msg_d' }),
       activeSessionId: () => 'ses_a' as never,
     });
-    const result = await coordinator.run('hi', { taskId: 'm3' });
+    const { result } = await runApproved(coordinator, 'hi', { taskId: 'm3' });
     expect(result.ok).toBe(true);
     expect(result.intakeModel).toBe(INTAKE_MODEL);
     expect(result.receipt).toBe('msg_d');
@@ -219,24 +279,33 @@ describe('coordinator chain', () => {
       options: { reasoning: { effort: 'none' }, maxTokens: 200, temperature: 0.2, timeoutMs: 10_000 },
     });
     // Coordinator stage runs with strict schema enforcement and a planning ceiling.
-    expect(calls[1]).toMatchObject({
+    // The gate's own calls are NOT recorded here (it is a separate stage), so
+    // `calls` is two intake legs and one plan. The plan is the LAST recorded
+    // call, which is the property that matters.
+    const planCall = calls[calls.length - 1] as { model: string; options: unknown };
+    expect(planCall).toMatchObject({
       model: COORDINATOR_MODEL,
       options: { timeoutMs: 25_000, temperature: 0.2, maxTokens: 300 },
     });
-    expect((calls[1] as { options: { responseFormat: { type: string } } }).options.responseFormat.type).toBe(
-      'json_schema',
-    );
+    expect((planCall.options as { responseFormat: { type: string } }).responseFormat.type).toBe('json_schema');
+    expect(calls.filter((c) => c.model === INTAKE_MODEL)).toHaveLength(2);
   });
 
   test('a dead primary fails over to the fallback intake model', async () => {
     const seen: string[] = [];
+    // The gate is not in `script`: it is a separate stage with its own answer,
+    // and folding it in would make this test about the gate rather than about
+    // failover. Two full turns therefore need two intake/gate/plan rounds.
     const script: Array<{ model: string; reply: string } | { model: string; error: string }> = [
+      { model: INTAKE_MODEL, error: 'dots unreachable' },
+      { model: COORDINATOR_MODEL, reply: INTAKE_OK },
       { model: INTAKE_MODEL, error: 'dots unreachable' },
       { model: COORDINATOR_MODEL, reply: INTAKE_OK },
       { model: COORDINATOR_MODEL, reply: PLAN_OK },
     ];
     const coordinator = new Coordinator({
-      chat: async (model: string) => {
+      chat: async (model: string, system: string) => {
+        if (system.includes('addressee gate')) return gateReplyFor(system);
         seen.push(model);
         const next = script.shift();
         if (next === undefined || next.model !== model) throw new Error(`out-of-script call: ${model}`);
@@ -246,11 +315,19 @@ describe('coordinator chain', () => {
       dispatch: async () => ({ receipt: 'msg_f' }),
       activeSessionId: () => 'ses_a' as never,
     });
-    const result = await coordinator.run('hi', { taskId: 'm9' });
+    const { result } = await runApproved(coordinator, 'hi', { taskId: 'm9' });
     expect(result.ok).toBe(true);
     expect(result.intakeModel).toBe(COORDINATOR_MODEL);
     expect(result.receipt).toBe('msg_f');
-    expect(seen).toEqual([INTAKE_MODEL, COORDINATOR_MODEL, COORDINATOR_MODEL]);
+    // Two intake legs, each failing over once, then one plan:
+    // [dots, inkling] x 2 + [inkling planner].
+    expect(seen).toEqual([
+      INTAKE_MODEL,
+      COORDINATOR_MODEL,
+      INTAKE_MODEL,
+      COORDINATOR_MODEL,
+      COORDINATOR_MODEL,
+    ]);
   });
 
   test('prose plan triggers exactly one sterner retry, then succeeds', async () => {
@@ -259,6 +336,7 @@ describe('coordinator chain', () => {
     const coordinator = new Coordinator({
       chat: async (model: string, system: string) => {
         systems.push(system);
+        if (system.includes('addressee gate')) return gateReplyFor(system);
         if (model === INTAKE_MODEL) return INTAKE_OK;
         plans += 1;
         return plans === 1 ? 'just some prose, no json here' : PLAN_OK;
@@ -266,12 +344,12 @@ describe('coordinator chain', () => {
       dispatch: async () => ({ receipt: 'msg_r' }),
       activeSessionId: () => 'ses_a' as never,
     });
-    const result = await coordinator.run('hi');
+    const { result } = await runApproved(coordinator, 'hi');
     expect(result.ok).toBe(true);
     expect(result.receipt).toBe('msg_r');
     expect(result.plan?.steps).toHaveLength(2);
     expect(plans).toBe(2);
-    expect(systems[systems.length - 1]).toContain('CRITICAL');
+    expect(systems.filter((s) => s.includes('CRITICAL'))).toHaveLength(1);
   });
 
   test('invalid plan JSON still speaks, but never dispatches', async () => {
@@ -286,11 +364,13 @@ describe('coordinator chain', () => {
       },
       activeSessionId: () => 'ses_a' as never,
     });
-    const result = await coordinator.run('hi');
+    const { asked, result } = await runApproved(coordinator, 'hi');
     expect(result.ok).toBe(false);
     expect(result.detail).toBe('plan-invalid');
-    expect(spoken).toEqual(['تمام، أبحث الآن']);
+    // Spoken once per turn (two turns ran) and never dispatched.
+    expect(spoken).toEqual(['تمام، أبحث الآن', 'تمام، أبحث الآن']);
     expect(dispatched).toHaveLength(0);
+    expect(asked.receipt).toBeNull();
   });
 
   test('destructive plan is held for confirmation, then executes on approve', async () => {
@@ -304,10 +384,23 @@ describe('coordinator chain', () => {
       },
       activeSessionId: () => 'ses_a' as never,
     });
-    const held = await coordinator.run('clean it');
-    expect(held.ok).toBe(false);
-    expect(held.needsConfirmation).toBe(true);
+    // Phase B first: TWO permission gates now sit in front of FR-12's one, and
+    // each needs its own approval. That composition is the point — the new gate
+    // is strictly BROADER, not a replacement.
+    const t1 = await coordinator.run('clean it');
+    expect(t1.needsPermission, 'turn 1 asks for the contextual permission').toBe(true);
+    expect(t1.needsConfirmation, 'FR-12 has not even planned yet').not.toBe(true);
     expect(dispatched).toHaveLength(0);
+
+    const t2 = await coordinator.run('clean it');
+    expect(t2.needsPermission, 'turn 2 supplies the permission and reaches the planner').not.toBe(true);
+    expect(t2.needsConfirmation, '…and FR-12 then holds the destructive step').toBe(true);
+    expect(dispatched).toHaveLength(0);
+
+    const t3 = await coordinator.run('clean it', { approve: true });
+    expect(t3.needsPermission, 'FR-12 approval still needs the contextual one').toBe(true);
+    expect(dispatched).toHaveLength(0);
+
     const approved = await coordinator.run('clean it', { approve: true });
     expect(approved.ok).toBe(true);
     expect(approved.receipt).toBe('msg_z');
@@ -324,7 +417,7 @@ describe('coordinator chain', () => {
       },
       activeSessionId: () => undefined,
     });
-    const result = await coordinator.run('hi');
+    const { result } = await runApproved(coordinator, 'hi');
     expect(result.ok).toBe(true);
     expect(result.receipt).toBeNull();
     expect(dispatched).toBe(0);
@@ -352,7 +445,11 @@ describe('M2 Pattern 1 — coordinator split', () => {
   /** Records which model answered, so "did it reach the planner" is provable. */
   function modelsFor(responses: Record<string, string>) {
     const seen: string[] = [];
-    const chat = async (model: string): Promise<string> => {
+    const chat = async (model: string, system: string): Promise<string> => {
+      // The Phase B gate is a third stage, not one of the two this test is
+      // about. Answer it from its own system prompt and do NOT record it, so
+      // `seen` keeps meaning "the models intake and planning used".
+      if (system.includes('addressee gate')) return gateReplyFor(system);
       seen.push(model);
       const out = responses[model];
       if (out === undefined) throw new Error(`unexpected model call: ${model}`);
@@ -396,11 +493,17 @@ describe('M2 Pattern 1 — coordinator split', () => {
     });
 
     const ack = await coordinator.intake('show me sessions');
+    const asked = await coordinator.plan(ack, { taskId: 'task-x' });
+    // Phase B: the first `plan()` asks and dispatches nothing.
+    expect(asked.needsPermission).toBe(true);
+    expect(dispatched).toHaveLength(0);
     const mission = await coordinator.plan(ack, { taskId: 'task-x' });
 
-    // Exactly two model calls total: one intake (above), one plan. A `plan()`
-    // that called intake again would show a SECOND INTAKE_MODEL call here, and
-    // would double the 901 ms the split was built to hide.
+    // `seen` holds only INTAKE and PLANNER models — the gate answers itself from
+    // its own system prompt and is deliberately not recorded here. Exactly one
+    // intake (above) and one plan, across BOTH `plan()` calls. A `plan()` that
+    // called intake again would show a SECOND INTAKE_MODEL call, and would
+    // double the 901 ms the split was built to hide.
     expect(seen).toEqual([INTAKE_MODEL, COORDINATOR_MODEL]);
     expect(mission.ok).toBe(true);
     expect(mission.receipt).toBe('msg_split');
@@ -432,7 +535,14 @@ describe('M2 Pattern 1 — coordinator split', () => {
     const controller = new AbortController();
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
-      chat: async (model) => {
+      chat: async (model, system: string) => {
+        if (system.includes('addressee gate')) {
+          // The barge arrives while the GATE call is in flight — one await
+          // earlier than it used to, and the gate has its own post-await check
+          // for exactly this reason.
+          controller.abort();
+          return gateReplyFor(system);
+        }
         if (model === INTAKE_MODEL) return INTAKE_OK;
         // The barge arrives while the 25 s planning call is in flight.
         controller.abort();
@@ -490,6 +600,11 @@ describe('M2 Pattern 1 — coordinator split', () => {
     });
 
     const ack = await coordinator.intake('clean it');
+    // Phase B sits IN FRONT of FR-12, so the destructive hold is only reachable
+    // once the contextual permission has been granted on a previous turn.
+    const asked = await coordinator.plan(ack, { taskId: 'task-fr12' });
+    expect(asked.needsPermission).toBe(true);
+    expect(asked.needsConfirmation, 'FR-12 has not planned yet, so it cannot have held').not.toBe(true);
     const held = await coordinator.plan(ack, { taskId: 'task-fr12' });
 
     expect(held.needsConfirmation).toBe(true);
@@ -531,6 +646,9 @@ describe('M2 Pattern 6a — never assert results', () => {
     const systems: string[] = [];
     let n = 0;
     const chat: CoordinatorDeps['chat'] = async (model, system) => {
+      // The Phase B gate is not an intake call and must not consume a body from
+      // this queue — that would make the queue length a lie about the re-ask.
+      if (system.includes('addressee gate')) return gateReplyFor(system);
       systems.push(system);
       const body = bodies[n];
       n += 1;
@@ -569,6 +687,7 @@ describe('M2 Pattern 6a — never assert results', () => {
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
       chat: async (model, system, user, options) => {
+        if (system.includes('addressee gate')) return gateReplyFor(system);
         if (model === COORDINATOR_MODEL) return PLAN_OK;
         return chat(model, system, user, options);
       },
@@ -587,8 +706,12 @@ describe('M2 Pattern 6a — never assert results', () => {
     expect(isSpeakable(ack.replyAr ?? 'x')).toBe(false);
     // The WORK is not dropped with the words: the task survives, and it plans.
     expect(ack.taskEn).toBe(TASK);
+    // Phase B: ask first, then approve, then the work runs.
+    const asked = await coordinator.plan(ack, { taskId: 'task-6a' });
+    expect(asked.needsPermission).toBe(true);
     const mission = await coordinator.plan(ack, { taskId: 'task-6a' });
     expect(mission.ok).toBe(true);
+    expect(mission.replyAr, 'the dropped ack is still dropped on the approving turn').toBe('');
     expect(mission.receipt).toBe('msg_drop');
     expect(dispatched).toHaveLength(1);
   });

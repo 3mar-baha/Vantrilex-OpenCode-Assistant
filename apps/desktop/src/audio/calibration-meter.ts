@@ -1,4 +1,4 @@
-import { frameEnergyDb } from './vad.js';
+import { SPEECH_GATE_DB, frameEnergyDb } from './vad.js';
 
 // M4 C.6 — the calibration METER. Pure: samples in, verdict out.
 //
@@ -44,8 +44,13 @@ import { frameEnergyDb } from './vad.js';
  * The speech gate, in dBFS. The same number `isSpeechFrame` defaults to; a
  * wizard that drifted from it would compare the room against a gate the gate
  * itself does not use.
+ *
+ * Now an ALIAS of the one constant rather than a third literal. `SPEECH_GATE_DB`
+ * lives in `vad.ts` because that is where the gate and the wave's knee are
+ * derived from it; this name is kept because it is the wizard's vocabulary and
+ * callers read better with it. `uplink-gate.test.ts` pins the equality.
  */
-export const GATE_DB = -30;
+export const GATE_DB = SPEECH_GATE_DB;
 
 /**
  * Headroom below the gate that a room must clear before it is called quiet.

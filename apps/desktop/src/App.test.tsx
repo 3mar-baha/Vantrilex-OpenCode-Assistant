@@ -314,3 +314,89 @@ describe('App: barge-in stops SPEECH, the button stops the TURN (M2-P2)', () => 
     expect(sent.map((c) => c.kind)).toEqual(['abort']);
   });
 });
+
+// A1 — the shell actually applies the silence gate.
+//
+// `vad.test`/`uplink-gate.test` prove the POLICY. This file is the guard that
+// the HUD reaches it, because a correct gate that `App.tsx` never calls is the
+// same green lie as the W6 phantom-mute above, in a new place.
+//
+// Reverting `App.tsx` to send every frame fails "room tone in silence" below.
+describe('App: nothing is transmitted in silence, and the mic is still open', () => {
+  /** Room tone, ~-58 dBFS. */
+  function roomTone(): Uint8Array {
+    return new Uint8Array(new Int16Array(160).fill(40).buffer);
+  }
+  /** A voice burst, ~-18 dBFS. */
+  function voice(): Uint8Array {
+    return new Uint8Array(new Int16Array(160).fill(4000).buffer);
+  }
+
+  async function micOpenIdle(): Promise<void> {
+    await mountApp();
+    await act(async () => {
+      (document.body.querySelector('[data-testid="mic-toggle"]') as HTMLElement).click();
+    });
+    expect(captureEvents, 'precondition: the mic is live').not.toBeNull();
+    sent = [];
+    pcmUp = [];
+  }
+
+  test('room tone in silence puts ZERO bytes on the wire', async () => {
+    await micOpenIdle();
+    await act(async () => {
+      for (let i = 0; i < 300; i += 1) captureEvents?.onFrame?.(roomTone());
+    });
+    // 300 frames == 30 s of ambient audio. Before this gate every one of them
+    // went up. Now none do.
+    expect(pcmUp).toEqual([]);
+  });
+
+  test('the microphone is STILL OPEN — frames keep arriving, they are just not sent', async () => {
+    await micOpenIdle();
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) captureEvents?.onFrame?.(roomTone());
+    });
+    expect(pcmUp).toEqual([]);
+    // The gate drops frames; it never stops the capture. `captureEvents` is the
+    // live handle the device is pumping into, and it is still there.
+    expect(captureEvents).not.toBeNull();
+    expect(sent, 'silence must not also start sending commands').toEqual([]);
+  });
+
+  test('speech still goes up, so the gate is not a mute', async () => {
+    await micOpenIdle();
+    await act(async () => {
+      captureEvents?.onFrame?.(voice());
+    });
+    expect(pcmUp).toHaveLength(1);
+  });
+
+  test('speech, then a bounded tail, then silence again', async () => {
+    await micOpenIdle();
+    await act(async () => {
+      captureEvents?.onFrame?.(voice());
+      for (let i = 0; i < 200; i += 1) captureEvents?.onFrame?.(roomTone());
+    });
+    // The utterance plus enough post-utterance audio for the daemon to close
+    // its 160,000-byte window — and then nothing, which is the whole point.
+    expect(pcmUp.length).toBeGreaterThanOrEqual(50);
+    expect(pcmUp.length).toBeLessThanOrEqual(57);
+  });
+
+  test('muting drops the tail debt, so unmuting does not flush 5.6 s of room tone', async () => {
+    await micOpenIdle();
+    await act(async () => {
+      captureEvents?.onFrame?.(voice());
+      captureEvents?.onFrame?.(roomTone());
+      (document.body.querySelector('[data-testid="mic-toggle"]') as HTMLElement).click();
+    });
+    expect(captureEvents, 'muting released the device').toBeNull();
+    pcmUp = [];
+    await act(async () => {
+      (document.body.querySelector('[data-testid="mic-toggle"]') as HTMLElement).click();
+      captureEvents?.onFrame?.(roomTone());
+    });
+    expect(pcmUp, 'the tail was a debt to the window; a mute cancels the debt').toEqual([]);
+  });
+});

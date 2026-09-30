@@ -19,7 +19,7 @@ import {
 } from './components/status/CreditBanner.js';
 import { AudioCapture } from './audio/capture.js';
 import { AudioPlayer, createDefaultPlayer } from './audio/playback.js';
-import { bargePolicy, micFailureNotice, micPolicy } from './audio/vad.js';
+import { micFailureNotice, micPolicy, UplinkGate } from './audio/vad.js';
 import { matrixForDaemonState, type MatrixState } from './matrix/matrix-state.js';
 import {
   LOCAL_TASK_KEY,
@@ -103,6 +103,20 @@ export function App(): JSX.Element {
   const lastFrameAt = useRef<number>(Date.now());
   const personaRef = useRef(persona);
   const botMutedRef = useRef(botMuted);
+  /**
+   * A1 — the local uplink gate. One per component instance, held in a ref
+   * because it is stateful (the post-utterance tail) and is read from the
+   * microphone's hot path, where a re-created object would reset the tail and
+   * starve the daemon's 5 s window mid-utterance.
+   *
+   * NOT the B.3 backpressure watermark. That is the daemon saying "I am
+   * behind" (`hello.uplinkPaused` / `flow` frames) and it is applied inside
+   * `VoxauraBridge.sendPcm`. This is the client saying "nobody is speaking".
+   * They gate the same wire for entirely different reasons and neither one
+   * knows about the other.
+   */
+  const uplinkGateRef = useRef<UplinkGate | null>(null);
+  if (uplinkGateRef.current === null) uplinkGateRef.current = new UplinkGate();
   const cmdCounter = useRef(0);
   useEffect(() => {
     personaRef.current = persona;
@@ -328,30 +342,40 @@ export function App(): JSX.Element {
           }
         },
         onFrame: (bytes) => {
-          // Echo suppression + barge-in: while the assistant talks, quiet
-          // frames (room tone / speaker echo) are ducked locally and never
-          // reach STT; a voice burst stops playback, stops the daemon's
-          // SPEECH, and goes up immediately. Silent — no announce spam.
+          // A1 + barge-in, decided together by ONE function so the ordering
+          // between them is in a file that can be read top to bottom:
           //
-          // M2 Pattern 2: this sends `stopSpeech`, not `abort`. A barge used to
-          // cancel the whole turn, so the plan the user was already paying for
-          // (free-tier p50 1,950 ms) was thrown away and they heard nothing —
-          // the most natural way to use a voice product was the one that made
-          // it go silent. The button (`abort-button`) is still the full cancel.
-          const decision = bargePolicy(speakingRef.current, bytes);
-          if (decision === 'duck') return;
-          if (decision === 'barge') {
+          //   1. an explicit user action transmits, whatever the energy is;
+          //   2. an energy reading that cannot be taken transmits (fail open);
+          //   3. while the assistant speaks, quiet frames are ducked locally
+          //      and a voice burst stops playback, tells the daemon to stop
+          //      SPEECH, and goes up immediately;
+          //   4. otherwise a below-gate frame is dropped HERE, in the
+          //      renderer, and never reaches the socket at all.
+          //
+          // M2 Pattern 2: the barge sends `stopSpeech`, not `abort`. A barge
+          // used to cancel the whole turn, so the plan the user was already
+          // paying for (free-tier p50 1,950 ms) was thrown away and they heard
+          // nothing — the most natural way to use a voice product was the one
+          // that made it go silent. The button (`abort-button`) is still the
+          // full cancel.
+          //
+          // M3 B.3: `sendPcm`'s `false` means the daemon is applying
+          // backpressure and the frame was dropped on purpose — see
+          // `VoxauraBridge.sendPcm`. Do NOT "fix" that by stopping the
+          // capture: the user's speech is already gone from the wire, and
+          // silencing the microphone would also throw away the audio that
+          // arrives after the resume. The barge above is unaffected either
+          // way, because commands are never gated.
+          const gate = uplinkGateRef.current;
+          const verdict = gate?.decide(bytes, { speaking: speakingRef.current });
+          if (verdict === undefined || !verdict.send) return;
+          if (verdict.barge) {
             playerRef.current?.stop();
             setSpeakingState(false);
             const live = bridgeRef.current;
             if (live !== null) void live.sendCommand({ id: nextCmdId(), kind: 'stopSpeech' });
           }
-          // M3 B.3: `false` here means the daemon is applying backpressure and the
-          // frame was dropped on purpose — see `VoxauraBridge.sendPcm`. Do NOT
-          // "fix" that by stopping the capture: the user's speech is already
-          // gone from the wire, and silencing the microphone would also throw
-          // away the audio that arrives after the resume. The barge above is
-          // unaffected either way, because commands are never gated.
           bridgeRef.current?.sendPcm(bytes);
         },
         onError: (err) => setAnnounce(micFailureNotice(err)),
@@ -488,6 +512,11 @@ export function App(): JSX.Element {
     if (capture !== null) {
       if (next) {
         capture.stop();
+        // A1: the tail is a debt to the daemon's 5 s window, and a muted
+        // microphone stops paying it. Carrying it across a mute would transmit
+        // up to 5.6 s of room tone the moment the user unmutes, which is the
+        // one moment they are most sure nobody is listening.
+        uplinkGateRef.current?.reset();
       } else {
         startMic();
       }

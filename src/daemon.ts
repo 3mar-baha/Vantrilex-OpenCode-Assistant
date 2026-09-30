@@ -363,6 +363,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         replyAr: task.replyAr,
         taskEn: task.taskEn,
         receipt: null,
+        // Phase B: the gate judges ADDRESS from the user's own words, not from
+        // the planner's English restatement. `TaskRecord` has always carried
+        // the verbatim transcript; this is the line that hands it across.
+        transcript: task.transcript,
         ...(task.intakeModel !== undefined ? { intakeModel: task.intakeModel } : {}),
       };
       const mission = await coordinator.plan(ack, { signal, taskId: task.id });
@@ -862,6 +866,25 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           return client.promptSession(session, text, { origin: 'voice', actor: 'capture' });
         },
         activeSessionId: () => activeSession,
+        // Phase B — the ask reaches the user as a notice.
+        //
+        // NOT synthesised here, and that is deliberate. The single audible path
+        // is `onUtterance`, which runs at `think()` time, BEFORE the planner
+        // exists; adding a second synthesis site is exactly the double-Fish-
+        // quota defect D4 was written to remove, and `speak` is deliberately
+        // not passed to the coordinator for that reason. So the ask is RENDERED
+        // immediately and ANSWERED BY VOICE on the next turn.
+        //
+        // The cost, stated: the user hears intake's acknowledgement, then about
+        // 2-4 s later sees the question appear. It is not spoken. Speaking it
+        // needs a second audible surface and is C-phase work.
+        onPermissionRequired: (pending) => {
+          ui.notice(
+            'permission-required',
+            `${pending.askAr} (${pending.taskEn.slice(0, 80)})`,
+            'warn',
+          );
+        },
       });
       // M2 Pattern 1: re-point the daemon-scoped queue at the coordinator that
       // closes over THIS ring. A key save rebuilds the pipeline and therefore the
