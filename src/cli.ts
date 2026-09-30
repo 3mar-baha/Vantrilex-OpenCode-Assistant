@@ -213,6 +213,19 @@ async function serveDaemon(): Promise<number> {
       directory: process.cwd(),
     });
     console.log(`ok   daemon: ws=127.0.0.1:${daemon.ipcPort} serve=${daemon.servePort} (token redacted)`);
+    // Serve health, for free, because the handle exposes the live monitor. Printed
+    // ONCE at start rather than polled: this line's job is to prove the wiring is
+    // live and to name the state machine an operator will see in the UI, and a
+    // repeating line in a long-running process is a line nobody reads.
+    //
+    // `healthy` here is the monitor's post-boot state, which the boot probe at
+    // `daemon.ts:263` already proved — so this is a wiring assertion, not new
+    // evidence. If it ever reads anything else, that is worth seeing on stderr.
+    const serveHealth = daemon.serveHealth.status();
+    console.log(
+      `info serve-health: ${serveHealth.state}` +
+        (serveHealth.state === 'healthy' ? '' : ` detail=${serveHealth.lastFault ?? 'unknown'} attempts=${serveHealth.attempts}`),
+    );
     console.log('next: Ctrl+C to stop');
     await new Promise<void>((resolve) => {
       const stop = (): void => resolve();

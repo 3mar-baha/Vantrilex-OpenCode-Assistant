@@ -9,12 +9,21 @@ import type { SessionId } from './common/brands.js';
 import { VOICE_IDS } from './common/brands.js';
 import { UiServer } from './ipc/index.js';
 import { ServeClient } from './runtime/index.js';
+import {
+  ServeHealthMonitor,
+  SERVE_NOTICE_RECONNECTING,
+  serveBlockedDetail,
+  withServeGate,
+  type ServeProbe,
+} from './runtime/serve-health.js';
+import { createShellTaskBridge, type ShellTaskBridge } from './daemon/shell-tasks.js';
 import { SessionInventory } from './orchestrator/inventory.js';
 import { AudioPipeline } from './orchestrator/audio-pipeline.js';
 import { Coordinator, INTAKE_MODEL, type ChatFn, type IntakeAck } from './orchestrator/coordinator.js';
 import { TaskQueue, type TaskResult } from './orchestrator/task-queue.js';
 import { DeliveryBuffer, type DeliveryItem } from './orchestrator/delivery.js';
-import { createFishTransport } from './voice/fish-ws.js';
+import { createFishTransport, type FishWsTransport } from './voice/fish-ws.js';
+import type { FishHttpTransport } from './voice/tts.js';
 import { isSpeakable, SpeechGate, splitSentences, stripSpeechText } from './voice/tts.js';
 import { FishCreditError } from './voice/tts.js';
 import { TtsCreditMonitor } from './voice/tts-credit.js';
@@ -83,6 +92,33 @@ export interface DaemonOptions {
    * piece of time-dependent state the daemon owns.
    */
   readonly ttsCreditNow?: () => number;
+  /**
+   * Clock seam for the serve health monitor, mirroring `ttsCreditNow` and for the
+   * same reason: the monitor's job is measuring how long an outage has lasted
+   * (`inStateMs`), so a test has to control time to assert it. Production uses
+   * `Date.now()`.
+   */
+  readonly serveHealthNow?: () => number;
+  /**
+   * Probe seam for the serve health monitor.
+   *
+   * `ServeHealthMonitor` defaults to the REAL `probeHealth`, and that default is
+   * load-bearing — a test must be able to prove production uses the same probe,
+   * which it can only do if the seam exists at all. An injected probe is how a
+   * test drives the state machine (and therefore the command gate) without
+   * killing a serve process, which is otherwise the only honest way to reach
+   * `degraded`.
+   */
+  readonly serveHealthProbe?: ServeProbe;
+  /**
+   * Overrides the courtesy TTS line for a finished shell task.
+   *
+   * Present for the same reason as `narratorChat`: every other network client in
+   * this file is injected, and an un-injected one makes the audible half of the
+   * task-completion rule untestable without Fish. `undefined` speaks nothing at
+   * all, which is what every other test in the suite wants.
+   */
+  readonly shellSpeak?: (textAr: string) => void;
 }
 
 export interface DaemonHandle {
@@ -94,6 +130,24 @@ export interface DaemonHandle {
    * snapshot, so it reports the same object the rebuilt pipeline closes over.
    */
   readonly ttsCredit: TtsCreditMonitor;
+  /**
+   * The live serve health monitor. A VIEW, for the same reason `ttsCredit` is
+   * one, and it mirrors that getter exactly: `cli.ts` reads `daemon.ttsCredit`
+   * after `startDaemon` resolves, so `daemon.serveHealth.status()` becomes an
+   * operator-visible line with no new code path.
+   *
+   * What is deliberately NOT exposed: `ServeHealthMonitor` holds the serve
+   * password in a private field, so handing the object to a caller who prints it
+   * is safe, but `status()` is the shape that would cross the WS boundary — and
+   * it deliberately carries no credential (`runtime/serve-health.ts:337`).
+   */
+  readonly serveHealth: ServeHealthMonitor;
+  /**
+   * The live shell-task queue — a VIEW, again for the same reason. It exists so a
+   * caller can `close()` it and so `doctor` can read `stats()` without reaching
+   * into the daemon's closure.
+   */
+  readonly shellTasks: ShellTaskBridge;
   /** Publish a session snapshot to every connected shell. */
   publishSessions(): Promise<number>;
   /** The persona the daemon currently speaks with (real server-side state). */
@@ -206,6 +260,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   if (options.ipcToken.length === 0) {
     throw new OrchestratorError('CONFIG_INVALID', false, 'IPC token is required (fail-closed)');
   }
+
   if (!(await probeHealth(options.servePort, options.servePassword))) {
     throw new OrchestratorError(
       'SERVE_UNREACHABLE',
@@ -213,6 +268,51 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       `no healthy opencode serve on 127.0.0.1:${options.servePort}`,
     );
   }
+
+  // ── SERVE RESILIENCE · POINT 1 ────────────────────────────────────────────
+  // The monitor's precondition is the boot probe ABOVE, which is why it is
+  // constructed here and not earlier: `ServeHealthMonitor` starts `healthy`
+  // unconditionally, and that is only sound because this line has already proven
+  // serve. Nothing below relaxes the boot check — a daemon that starts against a
+  // dead serve still refuses to start, which is a deliberate fail-closed property
+  // and is NOT this integration's to change.
+  //
+  // Constructed here and started beside `inventory.start()` (after `ui.start()`
+  // has returned), because the amber bar needs a socket to travel over and a
+  // monitor that started before one existed would have nowhere to report a loss.
+  // See `docs/SERVE-RESILIENCE.md`.
+  const serveHealth = new ServeHealthMonitor({
+    port: options.servePort,
+    password: options.servePassword,
+    ...(options.serveHealthNow !== undefined ? { now: options.serveHealthNow } : {}),
+    ...(options.serveHealthProbe !== undefined ? { probe: options.serveHealthProbe } : {}),
+    // ── POINT 2 · the amber bar.
+    //
+    // Three visible states, and `notice.code` is an open `z.string().min(1)`, so
+    // none of them needs a protocol change. `level: 'warn'` IS the amber.
+    //
+    // Events fire on TRANSITION only (`serve-health.ts:150`), so a healthy serve
+    // emits nothing, ever. The `exhausted` event is separate from the state
+    // transition because the state STAYS `reconnecting` after the budget is
+    // spent — "still trying" and "gave up" are different things to say and the
+    // user needs to be told which one they are looking at.
+    onEvent: (event) => {
+      if (event.type === 'exhausted') {
+        ui.notice(
+          'serve-reconnect-exhausted',
+          `ما قدرنا نرجع على OpenCode بعد ${event.status.attempts} محاولة — تأكّد إن الخدمة شغالة على 127.0.0.1:${options.servePort}`,
+          'warn',
+        );
+        return;
+      }
+      if (event.type === 'resumed') return;
+      if (event.to === 'healthy') {
+        ui.notice('serve-restored', 'عاد الاتصال بـ OpenCode.', 'info');
+        return;
+      }
+      ui.notice(SERVE_NOTICE_RECONNECTING, 'جارٍ إعادة الاتصال بـ OpenCode…', 'warn');
+    },
+  });
 
   const client = new ServeClient(`http://127.0.0.1:${options.servePort}`, options.servePassword);
   // Phase 5: the 360° control surface over the same client.
@@ -540,6 +640,68 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // reassuring-but-false comment this file keeps hunting.
   let liveRing: Keyring | null = null;
 
+  /**
+   * The Fish transport of the CURRENT pipeline, late-bound.
+   *
+   * Exists for one caller: `speakCourtesy` below. Same late-binding discipline as
+   * `coordinatorRef` — a key save replaces the transport, and a late-bound reader
+   * is how the replacement is picked up without rebuilding whatever holds it. It
+   * is cleared in `rebuildVoice` for the same reason `liveRing` is: a transport
+   * over a destroyed ring is a handle to zeroed key bytes.
+   */
+  // The CONCRETE union, not the `FishTransport` port: `synthesizeStream` is
+  // OPTIONAL on the port (`voice/tts.ts:277`), so a port-typed binding would make
+  // every call below a TS2722 or need a `!` that lies. `createFishTransport`
+  // returns this exact union and both members implement the method as required —
+  // the same decision its own return-type comment records.
+  let speakTransport: FishHttpTransport | FishWsTransport | null = null;
+
+  /**
+   * Speak one courtesy line, out loud, now.
+   *
+   * WHY THIS IS A SYNTHESIS SITE AND NOT A MODEL CALL. `narrateOutcome` above
+   * spends an OpenRouter turn to write a sentence, and D4's rule — "no second
+   * synthesis site" — exists because a reply was synthesised TWICE (double Fish
+   * quota, 1–2 s of dead work). That defect was a duplicate of the SAME sentence.
+   * This is a different sentence, written already, and it is synthesised ONCE:
+   * `buildTaskNotice` produced the text and nothing else speaks it. So the quota
+   * cost is one Fish call for a line the user asked to hear, which is the cost of
+   * speaking at all.
+   *
+   * WHY IT IS NOT THE REPLY PATH. `onUtterance` sets the voice phase, counts
+   * `ttsInFlight`, honours the barge generation and drives `delivery.drain()`. All
+   * four are correct for a reply and WRONG here: a courtesy line is not a turn, so
+   * it must not take the `speaking` phase (the HUD would report the assistant as
+   * mid-answer while a command finishes), must not drain held confirmations, and
+ * must not be cancelled by a barge aimed at a reply. It checks the gate, streams
+   * the audio, and gets out of the way.
+   *
+   * BEST EFFORT BY CONSTRUCTION: every failure is swallowed. A notice already
+   * rendered visually; a Fish fault on top of it is noise, not information. It
+   * must never reject into the task queue's subscriber.
+   */
+  function speakCourtesy(textAr: string): void {
+    const fish = speakTransport;
+    if (fish === null) return; // keyless daemon: there is no voice to speak with
+    const gen = speechGate.capture();
+    const voiceId = VOICE_IDS[activePersona === 'nour' ? 'female-toggle' : 'male-default'];
+    void (async () => {
+      try {
+        for (const sentence of splitSentences(stripSpeechText(textAr))) {
+          if (!speechGate.isCurrent(gen)) return;
+          for await (const chunk of fish.synthesizeStream(sentence, voiceId, {
+            signal: speechGate.signalFor(gen),
+          })) {
+            if (!speechGate.isCurrent(gen)) return;
+            ui.broadcastAudio(chunk);
+          }
+        }
+      } catch {
+        /* see above: a courtesy line never reports a failure of its own */
+      }
+    })();
+  }
+
   // Phase 5 — ZERO CANNED REPLIES.
   //
   // Previously each command site passed a literal like 'تم تبديل النموذج' as its
@@ -657,8 +819,81 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     })();
   };
 
-  ui.onCommand = createCommandHandler({
-    client,
+  // ── SHELL RESULTS · POINT 4 ───────────────────────────────────────────────
+  // Where an approved `execSessionShell` becomes a task, a frame and a notice.
+  //
+  // THE FR-12 CONFIRM GATE IS ABOVE THIS LINE, in the router, and that ordering
+  // is the point. The decorator sits on the `CommandClient` the daemon CONSTRUCTS,
+  // so it fires only after `execute()` released the parked command — a rejected
+  // or expired confirmation never enqueues anything, so no task and no output
+  // frame exist for a command the user did not authorise. Wiring it below the
+  // gate would have been the same fact reached the other way round, except that
+  // the parked command would announce itself before it was allowed to exist.
+  //
+  // The `client` handed to the router is a WRAPPER, not `ServeClient`: four of
+  // its five verbs are forwarded untouched and `execSessionShell` is the
+  // decorated one. That is the whole reason the FR-12 gate is ABOVE this line:
+  // the router reaches serve through this object and nowhere else, so a parked
+  // command never reaches a queue.
+  const shellTasks = createShellTaskBridge({
+    run: (sessionId, command) => client.execSessionShell(sessionId, command),
+    emitOutput: (input) => {
+      ui.output(input);
+    },
+    emitNotice: (code, detail, level) => {
+      ui.notice(code, detail, level);
+    },
+    // THE AUDIO RULE, and its three halves:
+    //   silent while running     — the bridge only emits on `settled`;
+    //   a notice on completion   — unconditional, via `buildTaskNotice`;
+    //   spoken inside a silence window only — this predicate.
+    //
+    // The window is the SAME one `DeliveryBuffer` uses for a held FR-12 ask
+    // (`delivery.state().speechLive` below), deliberately: two silence windows
+    // that disagree is a way to talk over yourself. 'listening' is excluded there
+    // for a stated reason — the mic streams continuously — and it is excluded here
+    // for the same one.
+    speechAvailable: () => voicePhase !== 'speaking' && voicePhase !== 'thinking' && ttsInFlight === 0,
+    speak: options.shellSpeak ?? ((text) => speakCourtesy(text)),
+  });
+
+  // ── SERVE RESILIENCE · POINT 3 · the gate ─────────────────────────────────
+  // EXACTLY the one-line guard `docs/SERVE-RESILIENCE.md` specifies: a wrapper,
+  // two existing arguments, one new. `withServeGate` is generic over the command
+  // and the outcome type, so the handler and the refusal both fit without a cast.
+  //
+  // IT IS DEFAULT-DENY. `SERVE_LOCAL_ONLY_COMMANDS` is an ALLOWLIST of the nine
+  // kinds that provably cannot reach serve — including `abort` and `stopSpeech`,
+  // which are what a user reaches for when the assistant will not stop talking.
+  // Blocking those because serve died would make this gate CAUSE the outage it
+  // exists to describe. Everything else, `confirm` included, is refused with
+  // `serveBlockedDetail(status)`, and a parked command then expires on its own
+  // `CONFIRMATION_TTL_MS` rather than running against a dead port.
+  ui.onCommand = withServeGate(
+    () => serveHealth.status(),
+    createCommandHandler({
+    client: {
+      // Forwarded UNCHANGED. Spelled out rather than spread, deliberately: `client`
+      // is a class instance, so `{ ...client }` would copy no prototype method and
+      // every verb below would become `undefined` at runtime — a spread that type-
+      // checks and does nothing. One line per verb, checked at compile time.
+      setSessionAgent: (sessionId, agent) => client.setSessionAgent(sessionId, agent),
+      setSessionModel: (sessionId, model) => client.setSessionModel(sessionId, model),
+      toggleSessionSkill: (sessionId, skill, skillAction) =>
+        client.toggleSessionSkill(sessionId, skill, skillAction),
+      createSession: (directory) => client.createSession(directory),
+      contextUsage: (sessionId, limit) => client.contextUsage(sessionId, limit),
+      // The decorated one. See the note above on why the gate is above this.
+      //
+      // THREE PARAMETERS, ALL THREE FORWARDED. This line used to take two and drop
+      // the third, which TypeScript accepts without complaint (fewer parameters is
+      // assignable) and which therefore compiled green while the `output` frame
+      // carried the task queue's UUID instead of the WS command id the shell is
+      // waiting on. The router forwards `cmd.id` and this is where it lands; the
+      // id is not defaulted, not clamped and not renamed, because a value invented
+      // here is indistinguishable from a value that was threaded and lost.
+      execSessionShell: (sessionId, command, commandId) => shellTasks.execSessionShell(sessionId, command, commandId),
+    },
     // Phase 4: the project root serve is scoped to, and the directory a new
     // session is created in. Never taken from the command payload.
     projectDirectory: () => options.directory ?? process.cwd(),
@@ -744,7 +979,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return { ok: true, detail: audio === null ? 'keys-saved-voice-unavailable' : 'keys-saved-voice-active' };
       },
     },
-  });
+    }),
+    // The refusal the gate returns instead of calling the handler. Not a throw:
+    // the WS layer turns an outcome into an `ack`, so a blocked command reads as
+    // a refused command, which is what it is.
+    (status) => ({ ok: false, detail: serveBlockedDetail(status) }),
+  );
 
   // Voice capture pipeline (P4+P5): binary PCM → Whisper transcript →
   // 3-agent chain (Dots3 intake → Inkling plan → Inkling handoff). Built from
@@ -843,6 +1083,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // factory lives in fish-ws.ts because tts.ts cannot import it back
       // without a cycle.
       const fish = createFishTransport(ring);
+      // Re-point the courtesy speaker at THIS transport, for the same reason
+      // `coordinatorRef` is re-pointed below: a key save replaces the transport,
+      // and a speaker still holding the previous one would speak over a destroyed
+      // ring's key bytes.
+      speakTransport = fish;
         const chat: ChatFn = async (model, system, user, options) => {
           return withKey(ring, 'openrouter', (key) =>
             openRouterChat(keyMaterial(key), model, system, user, fetch, {
@@ -1321,6 +1566,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     const outgoing = liveRing;
     liveRing = null;
     outgoing?.destroy();
+    // The transport that ring fed goes with it. Left pointing, a courtesy line
+    // fired after a key save would read the DESTROYED ring's cached buffers —
+    // exactly the A.6 leak, one hop removed.
+    speakTransport = null;
     // M3 B.3: the accumulator is about to be replaced by an empty one, so any
     // pause it held can never be released by it. Say so explicitly, or the shell
     // drops uplink audio until the next restart.
@@ -1383,6 +1632,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
   await publishSessions();
   inventory.start();
+  // The monitor STARTS here and not at construction: this is the first moment the
+  // amber bar has a socket to travel over, and a monitor armed before `ui.start()`
+  // returned would have detected an outage it could not report. `start()` does not
+  // probe immediately either (`serve-health.ts:387`) — the boot probe answered this
+  // exact question milliseconds ago, so the first tick is one full interval out.
+  serveHealth.start();
 
   return {
     ipcPort: boundPort,
@@ -1391,9 +1646,29 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     get ttsCredit() {
       return ttsCredit;
     },
+    // ── SERVE RESILIENCE · POINT 5 ───────────────────────────────────────────
+    // A VIEW, mirroring `ttsCredit` exactly, and for the same reason: a snapshot
+    // would report an object nothing else is reading.
+    get serveHealth() {
+      return serveHealth;
+    },
+    get shellTasks() {
+      return shellTasks;
+    },
     publishSessions,
     activePersona: () => activePersona,
     stop: async () => {
+      // FIRST, beside `inventory.dispose()`: both are the periodic pollers, and a
+      // poll that fires during teardown is a probe against a port the supervisor is
+      // already tearing down. `stop()` is unconditional, so this is safe even if the
+      // monitor latched off after exhausting its attempt budget.
+      serveHealth.stop();
+      // The shell queue second, and before the socket closes: `close()` rejects
+      // every in-flight `execSessionShell` waiter, and a command parked in
+      // `confirm` must learn that from an `ack` rather than hanging on a promise
+      // whose daemon is gone. Emitting into a closed socket would be the worse
+      // failure of the two, so this runs while `ui` is still open.
+      shellTasks.close();
       inventory.dispose();
       // Flush the diagnostics buffer before the socket goes away, or the last
       // few rows — usually the ones explaining WHY the user is shutting down —
