@@ -1,6 +1,7 @@
 ---
 name: Project Genesis Dossier
-description: Bootstrap a new project from an external-AI brief through a structured clarification loop into a provisioned dossier. Use when the user brings a project brief (00-GENESIS-BRIEF.md), asks to scaffold a genesis dossier, or needs the 3-question inquiry → response → 28-file provisioning workflow. Handles the full loop: brief intake, exactly-3-question inquiry, response paragraph synthesis, dossier + catalog provisioning.
+description: >-
+  Bootstrap a new project from an external-AI brief through a structured clarification loop into a provisioned dossier. Use when the user brings a project brief (00-GENESIS-BRIEF.md), asks to scaffold a genesis dossier, or needs the 3-question inquiry → response → 28-file provisioning workflow. Handles the full loop: brief intake, exactly-3-question inquiry, response paragraph synthesis, dossier + catalog provisioning.
 ---
 
 # Project Genesis Dossier
