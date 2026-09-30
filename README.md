@@ -101,6 +101,24 @@ npm run test:e2e                        # rebuilds root dist + Playwright
 npm run build:tauri                     # NSIS + AppImage (needs MSVC env + makensis)
 ```
 
+### v0.8.2 installer
+
+| | |
+|---|---|
+| File | `Voxaura_0.8.2_x64-setup.exe` — 24.87 MB (26,074,615 bytes) |
+| SHA-256 | `CD49BB54BAF98CCA22F3C5AC9C0EA1D454A24D630FD5BD1EC60363F1136294A1` |
+| Verified by | **`npm run release:verify` — PASSED.** Full gate, cold silent install after removing the previous one, both ports bound in 6 s on 127.0.0.1 only, `daemon.log` unchanged at 0 B, then reaped. |
+
+This is the first artefact in the 0.8.x line that has been **installed and
+booted**, not merely built. The payload was checked to carry this run's code:
+`withServeGate`, `SERVE_NOTICE_RECONNECTING` and `MAX_OUTPUT_TEXT_BYTES` are
+present in the shipped sidecar, so the binary is this tree and not a stale
+increment.
+
+```powershell
+Get-FileHash .\Voxaura_0.8.2_x64-setup.exe -Algorithm SHA256
+```
+
 ### v0.8.1 installer
 
 | | |

@@ -1111,3 +1111,86 @@ artifacts that really were built.
 3. `decodeAudioData` may resolve with a shorter buffer instead of rejecting, so
    a trailing partial frame is dropped — an audible seam, never wrong audio.
 4. `docs-verify.mjs` reports a failing suite as "reporter unavailable".
+---
+
+## 2026-09-30 — v0.8.2: the agentic bridge lands, and the artefact is finally booted
+
+Seven phases, eight commits, twelve agents, **zero write-set collisions** — a
+discipline imposed after the previous fleet, where two agents shared
+`App.test.tsx` and one overwrote the other's work with no git baseline to
+recover from.
+
+### Gate, all four stages, serial, orchestrator-only
+
+| Stage | Result |
+|---|---|
+| `test:vantrilex` | exit 0 — root **1197/81**, desktop **589/44**, E2E **33**, oxlint **8 = baseline** |
+| `cargo test` | exit 0 — **52 passed** |
+| `docs:verify` | exit 0 after re-derivation |
+| `docs:verify --self-test` | exit 0 — **4/4** |
+| **`release:verify`** | **PASSED** — cold silent install, both ports on loopback in **6 s**, `daemon.log` **0 B**, reaped |
+
+**`oxlint` returned to its baseline of 8.** Four new warnings appeared during the
+fleet and were **fixed, not baselined** — the project's own script says "fix
+them, or raise the baseline and say why", and none of these was deliberate.
+
+### The re-derivation, and two probes that answered wrong
+
+36 anchors and 6 figures were re-found by locating the **symbol** each sentence
+names, never by arithmetic. `daemon.ts:811` moved **+244 lines and was still
+correct** — the insertion was a comment above the code it cites. That is why
+arithmetic is not re-derivation.
+
+Two probes answered wrong first and were caught:
+
+- `ui-server.ts:623` resolved to `notice()`, because the pattern matched any
+  `redactString(` call. The sentence claims the **ack write point**, which is
+  732. A probe broad enough to find the right symbol is also broad enough to
+  find the wrong one.
+- `command-router.ts:305` resolved to a comment that merely **discusses** the
+  error mapping. The catch that performs it is 837.
+
+And one prose claim was **already false before this fleet**: the doc said `ack`
+was "built inline without schema parse", but `AckFrameSchema` exists in
+`git show 957193c:src/ipc/protocol.ts`. **`docs:verify` verifies that a cited
+line is code, not that the sentence about it is true**, so a false claim is
+invisible to it by construction. Recorded as a gap in the claim set.
+
+### v0.8.2 artifact
+
+`Voxaura_0.8.2_x64-setup.exe` · 26,074,615 bytes ·
+SHA-256 `CD49BB54BAF98CCA22F3C5AC9C0EA1D454A24D630FD5BD1EC60363F1136294A1`
+
+**The first artefact in the 0.8.x line that was installed and booted.** The
+shipped sidecar was checked to carry this run's code — `withServeGate`,
+`SERVE_NOTICE_RECONNECTING` and `MAX_OUTPUT_TEXT_BYTES` are present — so the
+binary is this tree and not a stale increment.
+
+### What the agents corrected, and what they refused
+
+Corrections against me, not the reverse: the shell endpoint does not exist; the
+daemon exits rather than degrading at boot; `src/launcher/` **exists** despite
+this file saying otherwise; `min_width` is a Rust name silently ignored in the
+v2 JSON schema; `tsconfig.tests.json` cannot reach `apps/desktop` at all, so my
+"two typecheckers" instruction was over-stated for desktop briefs.
+
+Refusals that were correct: not guarding `setSessionAgent`/`setSessionModel`,
+because nobody measured them and guarding an unmeasured verb risks refusing
+calls that work; `MemoryTaskStore` over `FileTaskStore`, because replay would
+re-execute an approved shell command with no user present; and landing a dead
+shim deletion that turned the suite red rather than preserving dead code to keep
+it green.
+
+Three agents shipped harnesses that reported passes while measuring nothing:
+`execFileSync('npx')` cannot spawn on Windows, and `npx.cmd` fails `EINVAL`,
+producing ten false "guard broken" verdicts. The working form spawns
+`node node_modules/vitest/vitest.mjs` and requires a real `Tests …` summary with
+a named failure, or reports **NO VALID EVIDENCE**.
+
+### Declined, not done
+
+- **`src/daemon.ts` → `src/daemon-host.ts`.** Real name collision with the
+  sibling `src/daemon/`, but not ambiguous today: `./daemon.js` maps to the file
+  and Node does no directory resolution for relative specifiers. Declined as
+  cosmetic risk against ~20 live doc anchors, and **recorded with the fix named**
+  so the next reader does not rediscover it.

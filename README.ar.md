@@ -100,6 +100,20 @@ npm run test:vantrilex
 cd apps/desktop && npm run test:e2e
 ```
 
+## مُثبِّت v0.8.2
+
+| | |
+|---|---|
+| الملف | `Voxaura_0.8.2_x64-setup.exe` — 24.87 ميغابايت (26,074,615 بايت) |
+| بصمة SHA-256 | `CD49BB54BAF98CCA22F3C5AC9C0EA1D454A24D630FD5BD1EC60363F1136294A1` |
+| التحقّق | **`npm run release:verify` — نجح.** البوابة كاملة، تثبيت صامت بارد بعد حذف السابق، المنفذان ارتفعا في ٦ ثوانٍ على 127.0.0.1 وحده، `daemon.log` لم يتغيّر (٠ بايت)، ثم أُزيلت العملية. |
+
+**هذا أول أثرٍ في سلسلة 0.8.x يُثبَّت ويُقلَع فعلياً، لا أن يُبنى فقط.** وفُحصت الحمولة لتتأكّد أنها تحمل كود هذه الجولة: `withServeGate` و`SERVE_NOTICE_RECONNECTING` و`MAX_OUTPUT_TEXT_BYTES` حاضرةٌ داخل الـsidecar المُشحون — **فالملف هذه الشجرة، لا زيادةً قديمة.**
+
+```powershell
+Get-FileHash .\Voxaura_0.8.2_x64-setup.exe -Algorithm SHA256
+```
+
 ## مُثبِّت v0.8.1
 
 | | |

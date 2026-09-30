@@ -1,5 +1,117 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.8.2 — the agentic bridge, and an honest name for what works (2026-09-30)
+
+Seven phases of `docs/AGENTIC_BRIDGE_PLAN.md`, eight commits, and the first
+artefact in the 0.8.x line that was **installed and booted** rather than merely
+built.
+
+### The measurement that reframed the phase
+
+`POST /api/session/{id}/shell` **does not exist.** It answers 200 with the SPA
+HTML fallback — 2884 bytes, byte-identical for any unknown path. The client read
+`res.ok` and returned success, so **`execSessionShell` had never once actually
+run a command.** The real route is v1 `/session/{id}/shell` and it requires an
+`agent` field. `toggleSessionSkill` → `/api/experimental/session/{id}/skill` is
+the same defect: **a user was being asked to approve, by voice, a call that
+provably could not happen.** `probeContract()` reads `/openapi.json`, which is
+also the fallback, so it has never reported a real version; the spec is at `/doc`.
+
+> An unknown path on this server answers **200, not 404**. `res.ok` is therefore
+> not evidence a route exists. Both verbs now carry one shared
+> `spaFallbackContentType` guard that throws `CONTRACT_DRIFT` naming the
+> fallback, so a future serve that drops a route fails loudly instead of lying.
+
+**What the API will not give us, stated rather than faked.** It does not stream —
+it blocks until the command completes (a 7 s ping took 7.4 s) and returns
+everything at once. And **there is no exit code in any field**: `exit 3` returns
+`completed` with empty output, so a failed command and a silent success are
+byte-identical. `outcome: 'unknown'` is the honest answer and will be the common
+case. Nothing synthesises an exit code and nothing infers failure from empty
+output; both are pinned as negative tests. The terminal drawer is therefore
+summary-on-completion, which is a **design**, not a shortfall.
+
+### What the bridge can now do
+
+- **Sessions** — create, switch, list, per-session agent/model/skill, and a
+  directory scope the contract always required.
+- **Terminal** — a collapsible drawer fed by a new additive `output` frame.
+  `OutputAssembler` caps at 32 KiB cumulatively and **before storing**,
+  mirroring `FrameReassembler.accountFor`, because a security audit already
+  found that class. The schema re-refines in **bytes**, not UTF-16 units: a
+  character cap would admit 128 KiB of Arabic.
+- **Background tasks** — a bounded FIFO queue. Concurrency 2, pending 8,
+  history 64, every task timed out, and a hung task provably releases its slot.
+  An interrupted `running` task restores as `interrupted`, **never `done`** —
+  `done` is the one state a user acts on and nobody verified the work.
+- **Serve resilience** — a health monitor that degrades instead of killing the
+  app after a healthy boot, with a **default-deny** command gate. Boot-time
+  `SERVE_UNREACHABLE` is unchanged: refusing to start against a dead serve is
+  deliberate.
+- **A cockpit that cannot strand you** — `abort` was becoming unclickable when
+  serve died, because `inert` is inherited and nothing can re-enable a
+  descendant. The stop controls moved to a sibling escape slot, and every serve
+  state is tested.
+
+### Governance, and what `ok` means
+
+`DESTRUCTIVE_KINDS` was a `Set` of one. It is now a **total mapped type** the
+compiler enforces, so an unclassified verb is a build error rather than an
+absence that must be read as "safe". Conversational turns flow freely; only
+state-mutating verbs ask.
+
+> `ok` is **DISPATCH, not OUTCOME**. Serve reports no exit code, so "the command
+> succeeded" is unrepresentable in this layer and the verdict moves to `detail`.
+
+Three surfaces had been disagreeing about the same command. They do not now.
+A text-matching shim used to collapse a timeout, a cancellation and a daemon
+stop onto one code; it is **deleted**, replaced by a typed field, with a
+tombstone test that fails if the shim returns.
+
+### The queue does not persist, deliberately
+
+`MemoryTaskStore`, not `FileTaskStore`. The engine replays a `queued` record on
+load, which would **re-execute a shell command the FR-12 gate approved once,
+with no second approval and no user present**. Silent re-execution of
+`rm -rf build` is worse than losing interruption recovery.
+
+### Gates
+
+`test:vantrilex` 0 (root 1197/81, desktop 589/44, E2E 33, oxlint back to its
+baseline of 8 after four new warnings were **fixed rather than baselined**) ·
+`docs:verify` 0 · self-test 4/4 · `cargo test` 52. Then `release:verify`:
+cold silent install, both ports on loopback in 6 s, `daemon.log` unchanged at
+0 B, reaped.
+
+### Known, not fixed
+
+- **`toggleSessionSkill` still cannot attach a skill** — the route does not
+  exist in OpenCode. It now fails loudly instead of claiming success. The
+  `Agentic-Bridge-Protocol` skill is written, parsed and fully cited, and
+  cannot be delivered to the agent it was written for. This is an upstream gap.
+- `setSessionAgent` / `setSessionModel` are **unverified** and deliberately
+  unguarded: guarding an unmeasured verb risks refusing calls that work, which
+  is a fabrication in the other direction.
+- `resume()` is unwired; no retry command exists in the schema. A stop after
+  `close()` produces no output frame.
+- `src/daemon.ts` sits beside `src/daemon/`. Not ambiguous today; the
+  recommended rename is recorded and declined as cosmetic risk against live doc
+  anchors.
+
+### Two probe answers that were wrong first
+
+Re-deriving the doc surface, one probe resolved `ui-server.ts:623` to
+`notice()` because it matched any `redactString(` call — **a probe broad enough
+to find the right symbol is also broad enough to find the wrong one.** The
+second resolved `command-router.ts:305` to a comment that merely *discusses* the
+error mapping. Both were caught and corrected rather than shipped.
+
+And one prose claim was **already false before this fleet**: the doc said `ack`
+was "built inline without schema parse", but `AckFrameSchema` has existed since
+before the plan commit. `docs:verify` checks that a cited line is *code*, not
+that the sentence about it is *true*, so a false claim is invisible to it by
+construction. That gap is recorded rather than quietly fixed.
+
 ## v0.8.1 — the corrective fleet, and a version that identifies its own artifact (2026-09-30)
 
 **A version number that cannot tell two binaries apart is not an identifier.**
