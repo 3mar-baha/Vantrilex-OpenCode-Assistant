@@ -943,3 +943,91 @@ half still undone — see `personas/WIRING.md` §6 (re-resolved).
 - Laya 7 dead by decision; earcon pitch gone not fixed; `Crest.tsx` 0
   importers; `mute`/`createSession`-family type+stub only.
 
+
+## v0.8.0 — the audit's findings, closed (2026-09-30)
+
+Built and verified end to end. Full narrative, including the five judgement
+calls made while the owner was asleep, is in
+`docs/reports/M1-M5-SESSION-REPORT.md`.
+
+### Artefact
+
+| | |
+|---|---|
+| Path | `apps/desktop/src-tauri/target/release/bundle/nsis/Voxaura_0.8.0_x64-setup.exe` |
+| Size | 25,994,215 bytes (24.79 MB) |
+| SHA-256 | `AD6FD13D6B17F34C7AFB2D6BA109C16CA5F9214CC3B0100D5CD0F111B4E42B1B` |
+
+### `release:verify` — PASSED, exit 0
+
+All seven stages, and the two that matter most were not skipped:
+
+```
+[3/7] build     tsc ok · sidecar provisioned (99.7 MB)
+               built Voxaura_0.8.0_x64-setup.exe (24.8 MB, produced by THIS run)
+[4/7] install   previous install removed, so this is a true cold install
+               installer exit 0
+[5/7] boot      daemon.log BEFORE launch: 0 B
+               launched C:\Users\omarb\AppData\Local\Voxaura\voxaura.exe
+               both ports bound in 7 s
+[6/7] assert    port 4096 bound to 127.0.0.1 (loopback only)
+               port 4097 bound to 127.0.0.1 (loopback only)
+               daemon.log UNCHANGED (0 B)
+[7/7] cleanup   reaped; 0 voxaura.exe, 0 listeners on 4096/4097
+```
+
+**"produced by THIS run" is the load-bearing phrase.** The bundle directory now
+holds 14 installers, one per release, and a name-only selection would have
+installed `0.7.2` from two days ago and reported success — a green check on a
+binary nobody built from the tree under test. The stale-artefact guard compares
+mtime against `buildStartedAt` for exactly that reason.
+
+`daemon.log` unchanged at 0 B is the actual regression test: the log is
+append-only, so a cold launch that wrote even one byte means the daemon started
+uncleanly. This is the v0.6.0 class — every gate green, daemon could not boot.
+
+### Gates at this tag
+
+| Stage | Result |
+|---|---|
+| root vitest | **905** passed, 0 skipped, 66 files |
+| desktop vitest | **265** passed, 31 files |
+| Playwright E2E | **33** passed, 18 specs |
+| `cargo test` | **52** passed, 0 failed |
+| `oxlint` | 8 warnings / baseline 8 — OK |
+| `npm run docs:verify` | **31/31** |
+| `docs:verify --self-test` | EXIT 0 |
+
+48 commits, 75 files, +14,599 / −272 from the `b3f793b` baseline.
+
+### What this release does NOT prove
+
+- The Fish **WebSocket** transport has never spoken to the real endpoint. Its
+  msgpack codec is hand-rolled and exercised only by tests; `http` is the
+  default, so a default install does not touch it.
+- The VAD **2 s deadline is reasoned, not measured.** Silero has never shipped
+  (`models/*.onnx` is gitignored, `tauri.conf.json` bundles only the sidecar), so
+  every installed build runs the RMS fallback and the model path is untimed.
+- Three M3 bounds cannot fire on the live path: the `resume` byte budget, the
+  `resume-gap` notice and the ingest watermark all need `broadcast()`, which has
+  zero production callers. Each says so at its call site.
+- `doctor --bundle` discriminates a squatter, credit exhaustion and a serve
+  flap. It **cannot** prove an invalid key (consistent-with only, and cannot name
+  which key — **L17 stays open**) and cannot see a shell↔daemon contract
+  mismatch.
+
+### Version bump, and the trap it nearly set
+
+`scripts/provision-sidecar.mjs` and `README.ar.md` each contain a *historical*
+`0.7.2` — a comment explaining how `pino` survived the v0.7.2 payload, and a
+changelog link to the v0.7.2 release. A blanket `split().join()` rewrites the
+past along with the present. The bump therefore targeted LINES, asserting what
+each must contain, and re-verified that the historical mentions survived.
+
+A second trap, caught by the post-check: the download badge carries the version
+**twice** (href and label), and `String.replace` without `/g` fixes one and
+leaves the other. `AGENTS.md` release step 1 now records both.
+
+The `CHANGELOG.md` has **no `v0.7.2` entry** — that version shipped without one.
+The gap is noted in the `v0.8.0` entry rather than back-filled with a history
+nobody wrote down at the time.

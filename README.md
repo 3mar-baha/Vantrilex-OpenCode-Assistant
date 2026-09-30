@@ -9,7 +9,7 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-847%20unit%20%2B%2052%20rust-brightgreen" alt="Tests" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.7.2-blueviolet" alt="Version" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.0-blueviolet" alt="Version" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/tauri-v2%20%7C%20rust-stable-orange" alt="Tauri" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22-339933" alt="Node" /></a>
   <a href="docs/PROJECT_MASTER_DOSSIER.md"><img src="https://img.shields.io/badge/audit-code--first%20dossier-7c3aed" alt="Dossier" /></a>
@@ -101,11 +101,27 @@ npm run test:e2e                        # rebuilds root dist + Playwright
 npm run build:tauri                     # NSIS + AppImage (needs MSVC env + makensis)
 ```
 
+### v0.8.0 installer
+
+| | |
+|---|---|
+| File | `Voxaura_0.8.0_x64-setup.exe` — 24.79 MB (25,994,215 bytes) |
+| SHA-256 | `AD6FD13D6B17F34C7AFB2D6BA109C16CA5F9214CC3B0100D5CD0F111B4E42B1B` |
+| Verified by | `npm run release:verify` — silent install, cold boot, 4096 + 4097 on loopback, `daemon.log` unchanged at 0 B |
+
+```powershell
+Get-FileHash .\Voxaura_0.8.0_x64-setup.exe -Algorithm SHA256
+```
+
+The **no-flag** `doctor` path is byte-identical to v0.7.2 — verified by the
+SHA-256 of its output, not by reading a diff. `--bundle` is additive.
+
 The operator CLI (`src/cli.ts`) is a five-branch argv ladder:
 
 | Command | Function | Contract |
 |---|---|---|
 | `doctor` | env presence (values hidden) + vault counts + serve probe | 0 healthy, 1 otherwise |
+| `doctor --bundle [--out <path>] [--json]` | diagnostic bundle, **redacted for public pasting** | 0 healthy · 1 degraded-collected · 2 collection-failed |
 | `vault bootstrap` | migrate comma key pools into the encrypted vault | 0 on success, 1 if pools missing |
 | `live` | full STT → brain → TTS round-trip with latency JSON | 0 on success, 1 with partial report (burns quota, never in gate) |
 | `serve` | adopt serve, host the WS-4097 plane; fail-closed on empty password; SIGINT/SIGTERM → stop | long-running; only production importer of `startDaemon` |

@@ -1,5 +1,76 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.8.0 — the audit's findings, closed (2026-09-30)
+
+## Six numbered defects closed, and the voice loop stopped lying
+
+A milestone release: the code-first audit's Triad A is gone, the voice loop no
+longer claims progress it cannot observe, and there is a diagnostic artifact
+that is safe to paste into a public ticket.
+
+**A.1–A.6, closed.** A Fish 429 no longer burns a good key; an OpenRouter 402
+costs one attempt instead of three; the credit clock no longer restarts on every
+key save; key material is zeroed per ring on stop, rebuild and narration; the
+vault DACL is re-locked after every save, and the window says so honestly; the
+unreachable Tauri command was **deleted** rather than wired.
+
+**The voice loop stopped lying.** Completion and delivery are now separate: the
+daemon can no longer conclude "the assistant spoke" from "the assistant
+finished". Barge-in stops the SPEECH and leaves the turn alive, so interrupting
+no longer costs the work. TTS drains per chunk instead of awaiting whole
+sentences. Intake and planning moved into an async owner-FIFO queue, so a
+second utterance no longer loses the first.
+
+**Silence is now distinguishable from "nothing happened".** A reconnecting
+shell is told when it predates retention, and a redaction sink exists at every
+point where free text leaves the daemon — not only where a notice does.
+
+**The gate got stronger, not looser.** Every new guard was break-verified, and
+four tests that pinned bugs as correct were rewritten rather than honoured.
+
+### Six defects the audit did not list
+
+Found by probing the built tree, not by reading it:
+
+- A JSON value containing an escaped quote was redacted only up to the escape —
+  **the tail shipped**, through the notice sink, on any provider error that
+  echoes a request body.
+- A value containing `]` was half-redacted, and the safety net did not fire.
+- The shared redactor's prefix patterns were case-**sensitive**, so an uppercase
+  provider key passed both the redactor and its own scanner.
+- `lint-baseline.mjs` exited 2 on a tree whose warning count had not moved, because
+  the pinned oxlint does not print its summary by default.
+- The obvious design for `doctor --bundle` is a fork bomb: `docs:verify` runs the
+  suite, the suite runs the bundle test, the bundle ran `docs:verify` — ~120
+  node processes.
+- `src/diag/bundle.ts` had to be built before the redactor fixes were complete,
+  and its own probes then invalidated three of its tests.
+
+### What this release does NOT claim
+
+Three of the M3 bounds **cannot fire on the live path** — the resume byte
+budget, the `resume-gap` notice and the ingest watermark all need a producer
+that does not exist yet. They are installed ahead of it, and each says so at its
+call site. The Fish WebSocket transport has **never spoken to the real endpoint**;
+its msgpack codec is hand-rolled and unexercised. The VAD's 2 s deadline is
+reasoned, not measured, because Silero has never shipped.
+
+`doctor --bundle` can discriminate a squatter, credit exhaustion and a serve
+flap. It **cannot** prove an invalid key (it is consistent-with, never proof,
+and cannot name which key — L17 stays open) and cannot see a shell↔daemon
+contract mismatch.
+
+### Gates at this tag
+
+root **905** · desktop **265** · E2E **33** across 18 specs · `cargo` **52** ·
+oxlint **8/8** · `docs:verify` **31/31**. Full session detail, including five
+judgement calls made without owner input, is in
+[`docs/reports/M1-M5-SESSION-REPORT.md`](reports/M1-M5-SESSION-REPORT.md).
+
+> **Note:** this file has no `v0.7.2` entry. The version shipped without one;
+> the gap is recorded here rather than back-filled with a history nobody wrote
+> down at the time.
+
 ## v0.7.1 — gates that can fail, and a measured narration ceiling (2026-09-28)
 
 ## Gates that can fail, and a narration ceiling that isn't a coin flip

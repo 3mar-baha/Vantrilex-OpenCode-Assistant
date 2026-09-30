@@ -10,11 +10,11 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-726%20unit%20%2B%2027%20rust-brightgreen" alt="الاختبارات" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="الرخصة" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.7.2-blueviolet" alt="الإصدار" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.0-blueviolet" alt="الإصدار" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.7.2"><img src="https://img.shields.io/badge/download-Voxaura_0.7.2_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
+  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.8.0"><img src="https://img.shields.io/badge/download-Voxaura_0.8.0_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
 </p>
 
 ## ما هو Voxaura؟
@@ -99,6 +99,21 @@ node dist/cli.js doctor
 npm run test:vantrilex
 cd apps/desktop && npm run test:e2e
 ```
+
+## مُثبِّت v0.8.0
+
+| | |
+|---|---|
+| الملف | `Voxaura_0.8.0_x64-setup.exe` — 24.79 ميغابايت (25,994,215 بايت) |
+| بصمة SHA-256 | `AD6FD13D6B17F34C7AFB2D6BA109C16CA5F9214CC3B0100D5CD0F111B4E42B1B` |
+| التحقّق | `npm run release:verify` — تثبيت صامت، إقلاع بارد، 4096 + 4097 على loopback، و`daemon.log` لم يتغيّر (0 بايت) |
+
+```powershell
+Get-FileHash .\Voxaura_0.8.0_x64-setup.exe -Algorithm SHA256
+```
+
+**حزمة تشخيص:** `node dist/cli.js doctor --bundle --out diag.json` تنتج ملفاً
+**مُنقّىاً يُمكن لصقه في تذكرة عامة**. راجع ما لا تستطيع حجزه فيه قبل النشر.
 
 ## قاموس المصطلحات
 
