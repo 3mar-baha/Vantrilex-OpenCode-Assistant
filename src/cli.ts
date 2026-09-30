@@ -307,6 +307,35 @@ if (command === 'doctor') {
 } else if (command === 'knowledge') {
   process.exit(knowledgeReport());
 } else {
-  console.log('usage: opencode-voice doctor | vault bootstrap | live | serve | knowledge');
-  process.exit(2);
+  // ── HEADLESS BRIDGE ──────────────────────────────────────────────────────
+  // A sixth family, reached from the fallback rather than from a sixth `else if`.
+  //
+  // WHY IT IS HERE AND NOT IN THE CHAIN. `AGENTS.md` cites line anchors into this
+  // file (`cli.ts:24`, `cli.ts:182`, `cli.ts:270`, `cli.ts:285`), and
+  // `npm run docs:verify` fails when a cited line stops being the line it cited.
+  // A sixth `else if` plus a top-level import moved every one of them by five and
+  // produced `3 dangling` — measured, and the reason this branch is written here:
+  // nothing above this point moves by a single line.
+  //
+  // WHY THE IMPORT IS DYNAMIC, TWICE OVER. `src/cli/headless.ts` reaches the
+  // coordinator, the serve client, the vault and `daemon.js`. A static import at
+  // the top of this file would load all of that for `doctor` and `knowledge`,
+  // which are supposed to be unchanged. Importing it here means it is only ever
+  // loaded for a command that is not one of the five.
+  //
+  // WHY `process.exitCode` AND NOT `process.exit`. Every headless command ends on
+  // a live HTTP call through `ServeClient`, and tearing the process down while
+  // undici still has a socket closing aborts on Windows with
+  // `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` — a crash AFTER the
+  // report printed, with a non-zero exit code and nothing on stderr explaining it.
+  // Measured on this machine before the change. The five branches above keep
+  // `process.exit()` untouched.
+  const { runHeadless, isHeadlessCommand, headlessUsageSuffix } = await import('./cli/headless.js');
+  if (isHeadlessCommand(command)) {
+    process.exitCode = await runHeadless(command, process.argv.slice(2));
+  } else {
+    console.log('usage: opencode-voice doctor | vault bootstrap | live | serve | knowledge');
+    console.log(headlessUsageSuffix);
+    process.exit(2);
+  }
 }

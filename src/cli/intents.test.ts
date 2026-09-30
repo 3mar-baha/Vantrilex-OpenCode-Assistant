@@ -1,0 +1,192 @@
+import { describe, expect, test } from 'vitest';
+
+import { COORDINATOR_MODEL, INTAKE_MODEL, type ChatFn, type ChatOptions } from '../orchestrator/coordinator.js';
+import { ADDRESSEE_CHAT_OPTIONS, ADDRESSEE_RESPONSE_FORMAT, PERMISSION_TTL_MS, addresseeSystem } from '../orchestrator/permission.js';
+import { INTENT_CASES, probePermissionSlot, replayGateChat, runIntentTable, structuralFaultsOf, type IntentRow } from './intents.js';
+
+// THE INTENT TABLE — the gate, through its real entry point.
+//
+// Every case here is classified by `parseAddressee`, which is the same function
+// `Coordinator.gate()` calls on the same reply shape. What the table measures is
+// stated per source, and the structural assertions are the ones that must hold
+// regardless of which model answered.
+
+/** The replay lookup, keyed exactly as `runIntentTable` composes the user text. */
+function replayFor(cases: readonly (typeof INTENT_CASES)[number][]): ChatFn {
+  const map = new Map(cases.map((c) => [`${c.utterance}\n\nTASK SPECIFICATION:\n${c.taskEn}`, c.reply]));
+  return replayGateChat((key) => map.get(key) ?? null);
+}
+
+describe('the table, replayed through parseAddressee', () => {
+  test('every case classifies to its written expectation', async () => {
+    const report = await runIntentTable(INTENT_CASES, replayFor(INTENT_CASES), 'replay');
+    const got = report.rows.map((r) => `${r.id}: expected=${r.expected} actual=${r.actual}`);
+    expect(got).toEqual(
+      INTENT_CASES.map((c) => `${c.id}: expected=${c.expected} actual=${c.expected}`),
+    );
+    expect(report.accuracy, got.join(' | ')).toBe(1);
+    expect(report.source).toBe('replay');
+  });
+
+  test('the chat is called with the coordinator\'s model and the gate\'s own triple', async () => {
+    // The thing that makes this "the real gate" rather than a reimplementation:
+    // the system prompt, the strict schema and the decoding controls are the
+    // product's own exports, passed through unchanged.
+    const seen: Array<{ model: string; system: string; user: string; options: ChatOptions | undefined }> = [];
+    const spy: ChatFn = async (model, system, user, options) => {
+      seen.push({ model, system, user, options });
+      return INTENT_CASES[0]?.reply ?? '{}';
+    };
+    await runIntentTable([INTENT_CASES[0]!], spy, 'replay');
+    expect(seen).toHaveLength(1);
+    const call = seen[0];
+    expect(call?.model).toBe(COORDINATOR_MODEL);
+    expect(call?.system).toBe(addresseeSystem({}));
+    expect(call?.options?.responseFormat).toBe(ADDRESSEE_RESPONSE_FORMAT);
+    expect(call?.options?.reasoning).toEqual(ADDRESSEE_CHAT_OPTIONS.reasoning);
+    expect(call?.options?.maxTokens).toBe(ADDRESSEE_CHAT_OPTIONS.maxTokens);
+    expect(call?.options?.temperature).toBe(ADDRESSEE_CHAT_OPTIONS.temperature);
+    expect(call?.options?.timeoutMs).toBe(ADDRESSEE_CHAT_OPTIONS.timeoutMs);
+    // The utterance and the task specification both travel, because the gate
+    // judges the USER's words and the planner's restatement together.
+    expect(call?.user).toContain('TASK SPECIFICATION:');
+  });
+
+  test('a transport failure is recorded as `undecided`, the parser\'s fail-closed value', async () => {
+    // `gate()` catches the throw and asks (`coordinator.ts:394-399`). The table
+    // has to show the same: an unreachable model must not read as a decision.
+    const boom: ChatFn = async () => {
+      throw new Error('BRAIN_TIMEOUT');
+    };
+    const report = await runIntentTable([INTENT_CASES[0]!], boom, 'model');
+    expect(report.rows[0]?.actual).toBe('undecided');
+    expect(report.rows[0]?.failure).toContain('BRAIN_TIMEOUT');
+    expect(report.rows[0]?.match).toBe(false);
+  });
+
+  test('prose and truncated JSON both fail closed to undecided', async () => {
+    const byId = new Map(INTENT_CASES.map((c) => [c.id, c]));
+    const garbage = byId.get('undecided-garbage');
+    const truncated = byId.get('undecided-truncated');
+    expect(garbage).toBeDefined();
+    expect(truncated).toBeDefined();
+    const report = await runIntentTable([garbage!, truncated!], replayFor([garbage!, truncated!]), 'replay');
+    expect(report.rows.map((r) => r.actual)).toEqual(['undecided', 'undecided']);
+  });
+
+  test('the ask word count is measured, and the 20-word cap is reported not enforced', async () => {
+    // `Coordinator.ask()` uses the model's line directly. The shared 20-word cap
+    // (`spokenAsk`) is NOT on this path — `permission.ts:127` names that migration
+    // as an open follow-up. Printing the count and calling it enforced would be
+    // claiming a guard that is not there.
+    const askCase = INTENT_CASES.find((c) => c.id === 'task-needs-opencode');
+    const report = await runIntentTable([askCase!], replayFor([askCase!]), 'replay');
+    const row = report.rows[0];
+    expect(row?.askWords).toBeGreaterThan(0);
+    expect(row?.askSayable).toBe(true);
+    expect(row?.askAr).toContain('نمشي');
+  });
+
+  test('the replay lookup is keyed on what the table actually sends', async () => {
+    // A lookup that silently misses would surface as a thrown error per case, not
+    // as a wrong number — this asserts the key construction explicitly so a change
+    // to the composed user text is caught here rather than as five failures.
+    const c = INTENT_CASES[0]!;
+    const chat = replayFor([c]);
+    const raw = await chat(COORDINATOR_MODEL, '', `${c.utterance}\n\nTASK SPECIFICATION:\n${c.taskEn}`);
+    expect(raw).toBe(c.reply);
+    await expect(chat(COORDINATOR_MODEL, '', 'not a case')).rejects.toThrow(/no recorded reply/);
+  });
+});
+
+describe('structural properties, independent of which model answered', () => {
+  test('no approves_id survives a non-approve verdict', async () => {
+    const report = await runIntentTable(INTENT_CASES, replayFor(INTENT_CASES), 'replay');
+    expect(structuralFaultsOf(report.rows)).toEqual([]);
+    // Spelled out, because the interesting row is the one that KEEPS the id.
+    const approver = report.rows.find((r) => r.id === 'approve-id-without-slot');
+    expect(approver?.approvesIdKept).toBe('a0000000-0000-4000-8000-000000000000');
+    const asker = report.rows.find((r) => r.id === 'task-needs-opencode');
+    expect(asker?.approvesIdKept).toBe('');
+  });
+
+  test('parseAddressee itself drops an id carried on a non-approve verdict', async () => {
+    // MEASURED, not assumed: the coercion at `permission.ts:295` is what makes the
+    // outer structural check unreachable through the parser. Establishing that is
+    // the point — a check that can never fire is not obviously correct, and the
+    // next test proves the check is not vacuous on the rows it is given.
+    const leaky = {
+      ...INTENT_CASES[0]!,
+      id: 'leaky-answer',
+      expected: 'answer' as const,
+      reply: JSON.stringify({
+        addressed: true,
+        needs_opencode: false,
+        decision: 'answer',
+        ask_ar: '',
+        approves_id: 'a0000000-0000-4000-8000-000000000000',
+        reason_en: 'a question, but the model carried an id anyway',
+      }),
+    };
+    const report = await runIntentTable([leaky], replayFor([leaky]), 'replay');
+    expect(report.rows[0]?.actual).toBe('answer');
+    expect(report.rows[0]?.approvesIdKept).toBe('');
+    expect(structuralFaultsOf(report.rows)).toEqual([]);
+  });
+
+  test('BREAK: the structural check is not vacuous — a leaked row IS reported', () => {
+    // The break, on the checker rather than on the parser: a hand-built row that
+    // carries an id on a non-approve decision. If `structuralFaultsOf` were
+    // comparing the wrong fields this would return [] and pass.
+    const row: IntentRow = {
+      id: 'leaky-answer',
+      expected: 'answer',
+      actual: 'answer',
+      match: true,
+      addressed: true,
+      approvesIdKept: 'a0000000-0000-4000-8000-000000000000',
+      askAr: '',
+      askWords: 0,
+      askSayable: false,
+      reasonEn: 'a question, but the id leaked',
+      source: 'replay',
+      ms: 1,
+      failure: null,
+    };
+    expect(structuralFaultsOf([row])).toEqual(['leaky-answer: approves_id survived a answer verdict']);
+    // And the same row with an `approve` decision is clean, so the check is keyed
+    // on the decision rather than on the presence of an id.
+    expect(structuralFaultsOf([{ ...row, actual: 'approve' }])).toEqual([]);
+  });
+
+  test('an empty table reports no accuracy rather than 0/0 as a rate', async () => {
+    const report = await runIntentTable([], async () => '{}', 'replay');
+    expect(report.accuracy).toBeNull();
+    expect(report.total).toBe(0);
+    expect(report.correct).toBe(0);
+  });
+});
+
+describe('PermissionSlot, through its own methods', () => {
+  test('an approval names one action, once', () => {
+    const probe = probePermissionSlot('perm-1', 'delete the output dir', PERMISSION_TTL_MS);
+    expect(probe.consumeWrongId).toBe('null');
+    expect(probe.consumeCorrectId).toBe('returned');
+    expect(probe.consumeAgain).toBe('null');
+    expect(probe.taskEnOnConsume).toBe('delete the output dir');
+    expect(probe.slotAfterConsume).toBe('empty');
+    expect(probe.violations).toEqual([]);
+  });
+
+  test('the TTL is the product\'s, not a literal here', () => {
+    expect(PERMISSION_TTL_MS).toBe(30_000);
+    expect(probePermissionSlot('p', 't', PERMISSION_TTL_MS).ttlMs).toBe(30_000);
+  });
+
+  test('the intake model constant is the shipped one', () => {
+    // Pinned because the table's accuracy figures are only meaningful against the
+    // models the product actually routes to.
+    expect(INTAKE_MODEL).toBe('dots-studio/dots-3-note-preview:free');
+    expect(COORDINATOR_MODEL).toBe('thinkingmachines/inkling:free');
+  });
+});
