@@ -1065,7 +1065,24 @@ export class ServeClient {
    */
   async listSessionMessages(sessionId: SessionId): Promise<Array<{ createdAt: number }>> {
     try {
-      const res = await this.request(`/api/session/${sessionId}/message`, { method: 'GET' });
+      // V1 ROUTE, PINNED — measured, not chosen. The two projections of the
+      // same data DISAGREE about what exists, on one serve, at one moment:
+      //
+      //   GET /api/session/{id}/message  -> 200 {"data":[]}          0 rows
+      //   GET /session/{id}/message       -> 200 [ {info,parts} … ]  14 rows
+      //
+      // Across all 46 pre-existing sessions the v1 surface returned 234
+      // messages that the v2 surface does not report. The v2 route is declared
+      // GET-only and returns a `{data: SessionMessage[]}` cursor envelope; the
+      // v1 route is declared GET+POST and returns a bare array of
+      // `{info, parts}`. Neither is a superset of the other, and this method
+      // is decoration — it exists to show when the assistant last spoke — so
+      // reading the empty projection made "last spoke" permanently null.
+      //
+      // DO NOT "modernise" this back to /api/. A 200 is not evidence of
+      // content here, and the failure mode is silent: an empty array, not an
+      // error. The evidence is a 46-session read, not a preference.
+      const res = await this.request(`/session/${sessionId}/message`, { method: 'GET' });
       if (!res.ok) return [];
       const data = unwrapData(await res.json());
       if (!Array.isArray(data)) return [];
