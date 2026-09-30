@@ -104,6 +104,88 @@ export const ADDRESSEE_CHAT_OPTIONS = {
  */
 export const PERMISSION_TTL_MS = 30_000;
 
+// ── THE ASK LINE, FOR BOTH GATES ─────────────────────────────────────────────
+// There are two gates in this product and they now speak the same vocabulary:
+// the contextual addressee gate above (`PermissionSlot`) and the command router's
+// FR-12 park (`command-router.ts`). Each opens a slot, each raises a question, and
+// each is fail-closed. What they must NOT do is grow a private definition of "an
+// ask", because the two defects that matter here are both definitional:
+//
+//   1. an ask is SPOKEN, so it is a short line, and a cap that lives at a call
+//      site is a cap the next call site forgets. `Coordinator.ask()` truncates by
+//      trimming; the router must not invent a second rule. So the cap lives here,
+//      at the sink, and the router calls it.
+//   2. the same reasoning as `UiServer.notice()`: redaction at a call site is
+//      bypassed by the next call site, and there is no way to notice. One helper,
+//      one rule, both gates.
+//
+// DELIBERATELY NO CANNED FALLBACK. `Coordinator.ask()` still has one
+// (`'أرسل للـ OpenCode؟'`, coordinator.ts:481) and it is a lie in the general
+// case — a template is the thing the whole Phase-5 tone work exists to remove.
+// This helper returns `null` instead, and callers treat `null` as "no ask text",
+// never as permission to invent one. Migrating `Coordinator.ask()` onto this
+// helper needs an edit to `coordinator.ts`, which is outside this change's
+// write-set; it is named in the report as a follow-up, not silently skipped.
+
+/** A spoken ask is one line. Twenty words is the narrator's own budget. */
+export const MAX_SPOKEN_ASK_WORDS = 20;
+
+/**
+ * Accept an ask line only if it is actually sayable.
+ *
+ * Returns the cleaned line, or `null` for anything that must not reach a
+ * speaker: empty, or over the word cap. `null` is NOT replaced with a template.
+ *
+ * Why DROP an over-long line rather than truncate it, when `narrate()` truncates
+ * at 240 characters? Because the two are cutting at different granularity.
+ * `narrate()` cuts a *finished* sentence down to a speakable length; cutting a
+ * question to twenty words can delete the verb and leave the user with a noun
+ * and a question mark — "بعدّ，先生？" — which reads as a malfunction. A missing
+ * ask line degrades to the machine-rendered `confirmation-required` signal that
+ * the shell already has; a mangled one actively misleads. The gate itself is
+ * unaffected either way, which is the property that must never move.
+ */
+export function spokenAsk(raw: string): string | null {
+  const line = raw
+    .trim()
+    // The same quote/nothing-happened strip `narrate()` applies: a writer that
+    // returns `"…"` or `تم: …` has not written an ask.
+    .replace(/^["'«]|["'»]$/g, '')
+    .replace(/^(تم\s*[:：-]\s*)/, '')
+    .trim();
+  if (line.length === 0) return null;
+  return line.split(/\s+/).length <= MAX_SPOKEN_ASK_WORDS ? line : null;
+}
+
+/**
+ * The ask the COMMAND ROUTER raises — the counterpart to `PendingPermission`.
+ *
+ * A separate type rather than a shared one on purpose. The two slots have
+ * genuinely different lifetimes and trust properties: this one is a bounded map
+ * of up to `MAX_PARKED` entries keyed by command id, live for
+ * `CONFIRMATION_TTL_MS` (60 s), and the approving party is a `confirm` frame from
+ * the shell; `PermissionSlot` is a single 30 s entry consumed by a model verdict
+ * that must name its id. Merging them would mean one TTL, one id source and one
+ * eviction policy silently governing both, and the smaller of the two would win.
+ *
+ * `tier` is the literal `'state-mutating'`, not `CommandTier`. That is the
+ * structural half of the Phase-5 correction: a value of this type cannot be
+ * constructed for a read-only kind, so `onConfirmationRequired` is unreachable
+ * for `promptSession`, `sessionContext`, `switchSession` or any listing without
+ * a cast. The gate cannot be re-entered by accident from the free-flowing path.
+ */
+export interface PendingConfirmation {
+  readonly id: string;
+  /** The action in the planner's English, machine-facing. Never the spoken line. */
+  readonly taskEn: string;
+  /** The persona's own Arabic ask, or `''` when no writer is wired. */
+  readonly askAr: string;
+  /** The session the parked action is bound to, `''` when unresolved. */
+  readonly sessionId: string;
+  readonly tier: 'state-mutating';
+  readonly openedAt: number;
+}
+
 export interface PendingPermission {
   readonly id: string;
   /** The action, in the planner's English. Bound at ask time, not at approve. */

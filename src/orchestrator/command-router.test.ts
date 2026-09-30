@@ -27,9 +27,13 @@ function harness(overrides: Partial<{ fail: boolean }> = {}): {
       calls.skill!.push([s, k, a]);
       return { ok: true };
     },
-    execSessionShell: async (s: SessionId, c: string) => {
-      calls.shell!.push([s, c]);
-      return { ok: true };
+    execSessionShell: async (s: SessionId, c: string, id: string) => {
+      // The WS command id is recorded, because the router used to drop it and
+      // the `output` frame carried a daemon-internal task id instead. The
+      // verdict returned here is the MEASURED common case — serve reports no
+      // exit code — so every assertion downstream reads `unknown`, not `ok`.
+      calls.shell!.push([s, c, id]);
+      return { outcome: 'unknown' as const };
     },
   };
   const handler = createCommandHandler({
@@ -175,7 +179,16 @@ describe('Phase 4 session manager commands', () => {
     expect(res).toEqual({ ok: false, detail: 'context telemetry unavailable' });
   });
 
-  test('createSession uses the project directory and switches to the new session', async () => {
+  // `createSession` moved to `state-mutating` in the Phase-5 tier model: it
+  // PERSISTS a new session in OpenCode's store, so "read-only" would be a false
+  // description of something that writes. These three tests therefore park
+  // first and confirm — which is the behaviour change, stated here rather than
+  // discovered by a reader wondering why the old assertion moved.
+  //
+  // The daemon's OWN boot-time session creation is unaffected: `daemon.ts` calls
+  // `client.createSession` directly, not through this router, so a cold launch
+  // never meets this gate.
+  test('createSession parks, then uses the project directory and switches session', async () => {
     let dir = '';
     const { h, switched } = harness({
       createSession: async (d) => {
@@ -183,7 +196,12 @@ describe('Phase 4 session manager commands', () => {
         return { sessionId: 'ses_new1' as never };
       },
     });
-    const res = await h(cmd({ kind: 'createSession' }));
+    const parked = await h(cmd({ id: 'c1', kind: 'createSession' }));
+    expect(parked).toEqual({ ok: true, detail: 'confirmation-required' });
+    expect(dir, 'nothing runs on the asking turn').toBe('');
+    expect(switched).toEqual([]);
+
+    const res = await h(cmd({ id: 'c2', kind: 'confirm', confirmId: 'c1' }));
     expect(res.ok).toBe(true);
     expect(dir).toBe('O:/project');
     expect(switched).toEqual(['ses_new1']);
@@ -192,7 +210,9 @@ describe('Phase 4 session manager commands', () => {
 
   test('createSession ignores any directory supplied in the payload', async () => {
     // The directory is the daemon's, never the caller's. A command payload
-    // must not be able to choose where a session is created.
+    // must not be able to choose where a session is created — and now the
+    // payload is parked and re-executed, so this must hold on the EXECUTED
+    // copy too, not only on the live one.
     let dir = '';
     const { h } = harness({
       createSession: async (d) => {
@@ -200,11 +220,14 @@ describe('Phase 4 session manager commands', () => {
         return { sessionId: 'ses_new2' as never };
       },
     });
-    await h(cmd({ kind: 'createSession' } as never));
+    await h(cmd({ id: 'c1', kind: 'createSession', title: 'O:/attacker-chosen' } as never));
+    await h(cmd({ id: 'c2', kind: 'confirm', confirmId: 'c1' }));
     expect(dir).toBe('O:/project');
   });
 
   test('createSession degrades cleanly when the client lacks the manager', async () => {
+    // Availability is checked BEFORE parking, so a daemon that cannot create a
+    // session never spends the user's attention on an ask it cannot honour.
     const { h, switched } = harness();
     const res = await h(cmd({ kind: 'createSession' }));
     expect(res).toEqual({ ok: false, detail: 'session manager unavailable' });
@@ -264,18 +287,29 @@ describe('createCommandHandler', () => {
 
   test('agent/model/skill/shell target the explicit or active session', async () => {
     const h = harness();
+    // Read-only session SELECTION runs on this turn — no park, no confirm.
+    // This is the owner's correction: gating these re-gates conversation.
     await h.handler(cmd({ kind: 'setSessionAgent', agent: 'build' }));
     expect(h.calls.agent).toEqual([['ses_active', 'build']]);
     await h.handler(cmd({ kind: 'setSessionModel', model: 'anthropic/opus', sessionId: 'ses_x' }));
     expect(h.calls.model).toEqual([['ses_x', { providerID: 'anthropic', id: 'opus' }]]);
-    await h.handler(cmd({ kind: 'toggleSessionSkill', skill: 'probe', skillAction: 'detach' }));
+    // State-mutating: a skill changes the instructions the agent will run.
+    const parkedSkill = await h.handler(
+      cmd({ id: 's1', kind: 'toggleSessionSkill', skill: 'probe', skillAction: 'detach' }),
+    );
+    expect(parkedSkill).toEqual({ ok: true, detail: 'confirmation-required' });
+    expect(h.calls.skill, 'nothing runs on the asking turn').toEqual([]);
+    await h.handler(cmd({ id: 's2', kind: 'confirm', confirmId: 's1' }));
     expect(h.calls.skill).toEqual([['ses_active', 'probe', 'detach']]);
     // FR-12: shell is parked first, then executed on explicit confirm.
     const parked = await h.handler(cmd({ kind: 'execSessionShell', command: 'git status' }));
     expect(parked).toEqual({ ok: true, detail: 'confirmation-required' });
     expect(h.calls.shell).toEqual([]);
     await h.handler(cmd({ kind: 'confirm', id: 'c2', confirmId: 'c1' }));
-    expect(h.calls.shell).toEqual([['ses_active', 'git status']]);
+    // The third element is the WS COMMAND id (`c1`), not a daemon task id: the
+    // `output` frame's `commandId` has to match the spinner the shell is still
+    // showing. Threading it is the fix; see `CommandClient.execSessionShell`.
+    expect(h.calls.shell).toEqual([['ses_active', 'git status', 'c1']]);
   });
 
   test('missing required fields fail fast with structured detail', async () => {
@@ -292,7 +326,9 @@ describe('createCommandHandler', () => {
         setSessionAgent: async () => calls.push(1),
         setSessionModel: async () => calls.push(1),
         toggleSessionSkill: async () => calls.push(1),
-        execSessionShell: async () => calls.push(1),
+        execSessionShell: async () => {
+          calls.push(1);
+        },
       },
       switchSession: () => undefined,
       activeSessionId: () => undefined,
@@ -467,7 +503,9 @@ describe('parked-command bound (L20)', () => {
     // cap evicted it, a legitimate confirmation would silently do nothing.
     const newest = ids[ids.length - 1] as string;
     await h.handler(cmd({ id: 'c', kind: 'confirm', confirmId: newest }));
-    expect(h.calls.shell).toEqual([['ses_active', `echo ${MAX_PARKED * 3 - 1}`]]);
+    // The third slot is the parked exec command's own id, which is the one the
+    // `output` frame has to carry.
+    expect(h.calls.shell).toEqual([['ses_active', `echo ${MAX_PARKED * 3 - 1}`, newest]]);
   });
 
   test('the oldest parked command is evicted first', async () => {

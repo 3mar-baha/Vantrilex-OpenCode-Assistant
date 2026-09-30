@@ -47,7 +47,14 @@ describe('FR-12 execution gate', () => {
     const h = harness(now);
     await h.handler(shellCmd('c1', 'git status'));
     const confirmed = await h.handler({ id: 'c2', kind: 'confirm', confirmId: 'c1' } as UiCommand);
-    expect(confirmed).toEqual({ ok: true });
+    // `toMatchObject`, not `toEqual`: this test is about SINGLE EXECUTION, and
+    // the exec ack now carries the derived shell verdict in `detail`
+    // (`shell-outcome-unknown` — serve reports no exit code, so `unknown` is
+    // the measured common case). Asserting the absence of a `detail` here would
+    // make this test a second opinion on the ack's shape, which is
+    // `ack-truth.test.ts`'s job. The verdict itself is pinned there and in
+    // `command-tiers.test.ts`.
+    expect(confirmed).toMatchObject({ ok: true });
     expect(h.shells).toEqual(['git status']);
     // Replaying the confirm finds nothing pending.
     expect(await h.handler({ id: 'c3', kind: 'confirm', confirmId: 'c1' } as UiCommand)).toEqual({
