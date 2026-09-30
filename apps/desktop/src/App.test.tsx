@@ -105,6 +105,9 @@ vi.mock('./audio/playback.js', async (importOriginal) => {
         sink: {
           play: (buffer: AudioBuffer) => {
             played.push(Number((buffer as unknown as string).split('-')[2]));
+            // THE SIGNAL. See `awaitNextPlay` — this is the whole reason the
+            // suite no longer sleeps.
+            signalPlay?.();
           },
         },
         ...(events?.onStart !== undefined ? { onStart: events.onStart } : {}),
@@ -113,6 +116,54 @@ vi.mock('./audio/playback.js', async (importOriginal) => {
     },
   };
 });
+
+/**
+ * Wait for the fake sink to actually run, instead of sleeping for a while and
+ * hoping it ran by then.
+ *
+ * THE FLAKE THIS REMOVES. `deliverAudio` used to `await setTimeout(r, 5)` after
+ * every chunk. That is a race with the wall clock, and it is the reason this
+ * file is the last place in the desktop suite where a millisecond sleep is load-
+ * bearing: under load the real player's coalesce tick plus its `await decode`
+ * can land after 5 ms, `played` is still empty, and a correct HUD fails a test
+ * that says nothing about the HUD. The playback suite shed the same class when
+ * it took the sink signal; this is that change here.
+ *
+ * The gate is the sink, not a duration — so it resolves the instant the work is
+ * done and cannot lose. `PLAYBACK_HANG_MS` remains as a hang-guard for a real
+ * bug (a chunk that never reaches the sink at all), and it FAILS rather than
+ * waits quietly, so it can never turn into a slow pass.
+ */
+const PLAYBACK_HANG_MS = 1_000;
+let signalPlay: (() => void) | null = null;
+
+function awaitNextPlay(): Promise<'played' | 'hung'> {
+  return new Promise<'played' | 'hung'>((resolve) => {
+    signalPlay = () => {
+      signalPlay = null;
+      resolve('played');
+    };
+    setTimeout(() => {
+      signalPlay = null;
+      resolve('hung');
+    }, PLAYBACK_HANG_MS);
+  });
+}
+
+/**
+ * Yield the event loop for a fixed number of macrotask turns, without assuming
+ * any particular DURATION. Used only where the verdict is a negative — a chunk
+ * that must not arrive — so there is no signal to wait on: `enqueue` returns
+ * before the pipeline when the player is muted, and the assertion afterwards is
+ * what decides the test.
+ */
+async function macrotasks(turns: number): Promise<void> {
+  for (let i = 0; i < turns; i += 1) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
@@ -134,14 +185,36 @@ async function mountApp(): Promise<void> {
   expect(bridgeOptions.onAudio).toBeTypeOf('function');
 }
 
-/** Deliver one downlink chunk and let the player drain. */
+/**
+ * Deliver one downlink chunk and wait for the sink to have run it.
+ *
+ * This is the happy path: the chunk MUST reach the sink, so there is a real
+ * signal to wait on and the wait ends when the work ends.
+ */
 async function deliverAudio(firstByte: number): Promise<void> {
+  const gate = awaitNextPlay();
   await act(async () => {
     bridgeOptions.onAudio?.(new Uint8Array([firstByte]));
   });
+  const verdict = await act(async () => gate);
+  expect(verdict, `a chunk that must play never reached the sink (first byte ${firstByte})`).toBe('played');
+}
+
+/**
+ * Deliver a chunk that must NOT be played — the mute cases.
+ *
+ * No signal exists by construction, so this gives the pipeline a fixed number of
+ * macrotask turns (the player's coalesce tick is one, then the decode) and lets
+ * the caller's `expect(played).toEqual([])` be the verdict. That is a weaker
+ * assertion than the happy path by exactly one thing: a chunk delayed by more
+ * than a few turns would escape. It is not a duration, so it does not slow down
+ * or flake under load the way a millisecond sleep did.
+ */
+async function deliverAudioExpectingDrop(firstByte: number): Promise<void> {
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 5));
+    bridgeOptions.onAudio?.(new Uint8Array([firstByte]));
   });
+  await act(async () => macrotasks(4));
 }
 
 function botToggle(): HTMLElement {
@@ -160,6 +233,7 @@ beforeEach(() => {
   pcmUp = [];
   captureEvents = null;
   bridgeOptions = {};
+  signalPlay = null;
 });
 
 afterEach(() => {
@@ -192,7 +266,7 @@ describe('App: assistant mute is a real gate, not an ok:true (W6)', () => {
 
     // The daemon keeps synthesising; the player must refuse it.
     bridgeOptions.onVoice?.({ phase: 'speaking' });
-    await deliverAudio(2);
+    await deliverAudioExpectingDrop(2);
     expect(played).toEqual([1]);
 
     // And the shell must not report audible speech while it is silenced.
@@ -207,7 +281,7 @@ describe('App: assistant mute is a real gate, not an ok:true (W6)', () => {
     await act(async () => {
       botToggle().click();
     });
-    await deliverAudio(3);
+    await deliverAudioExpectingDrop(3);
     expect(played).toEqual([]);
 
     await act(async () => {
