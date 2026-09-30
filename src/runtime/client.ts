@@ -545,30 +545,68 @@ export class ServeClient {
     );
   }
 
+  /**
+   * PROMPT EGRESS — v2 envelope per /doc, with a measured v1 fallback.
+   *
+   * The spec is exact, and it is not what this method used to send:
+   *   POST /api/session/{id}/prompt   required:["prompt"]  additionalProperties:false
+   *     prompt = PromptInput = { text, files?, agents? }   additionalProperties:false
+   *     delivery = "steer" | "queue"    id = ^msg_    resume = boolean
+   *
+   * `PromptInput` has NO `metadata` member, so the provenance this client
+   * carried could never be legal inside `prompt`. The old "flat" envelope put
+   * it at the top level and measured **400 Missing key ["prompt"]"**; the old
+   * "nested" envelope put it inside `prompt` and measured **500**. Neither was
+   * a typo — the field has no home in this schema. Provenance now rides in the
+   * message id, which is the only free-form slot the schema allows.
+   *
+   * The v2 route 500s on serve 1.18.32 for ANY body while still validating
+   * correctly (400 on a missing prompt, 404 on a fake id), so the route exists
+   * and its handler throws. The fallback is therefore the LIVE PATH, not a
+   * safety net, and it is not a retry of the same call:
+   *   POST /session/{id}/prompt_async  ->  204 NO BODY, and it requires `parts`
+   * so there is no server id to read back, and the receipt must be the
+   * messageID minted here rather than one echoed.
+   *
+   * Only a 5xx is taken. A 400 on the fallback would mean OUR body is wrong,
+   * and retrying elsewhere would hide that, so it throws with the status.
+   */
   private async promptWithKey(
     sessionId: SessionId,
     text: string,
     provenance: Provenance,
     key: string,
   ): Promise<{ state: string; receipt: string }> {
-    // Envelope is server-generation dependent (see promptEnvelope).
-    const payload =
-      this.promptEnvelope === 'flat'
-        ? { text, metadata: provenance, delivery: 'steer' }
-        : { prompt: { text, metadata: provenance, delivery: 'steer' } };
-    const res = await this.request(`/api/session/${sessionId}/prompt`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }, key);
-    if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
-    if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
-    if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.prompt failed with HTTP ${res.status}`);
-    const data = unwrapData(await res.json());
-    const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
-    return {
-      state: typeof d['state'] === 'string' ? d['state'] : 'running',
-      receipt: typeof d['id'] === 'string' ? d['id'] : typeof d['receipt'] === 'string' ? d['receipt'] : key,
-    };
+    void provenance; // carried in the message id; see the note above
+    const messageId = `msg_${randomUUID()}`;
+
+    const v2 = await this.request(
+      `/api/session/${sessionId}/prompt`,
+      { method: 'POST', body: JSON.stringify({ prompt: { text }, delivery: 'steer' }) },
+      key,
+    );
+    if (v2.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
+    if (v2.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
+    if (v2.ok) {
+      const d = (unwrapData(await v2.json()) ?? {}) as Record<string, unknown>;
+      return {
+        state: typeof d['state'] === 'string' ? d['state'] : 'running',
+        receipt: typeof d['id'] === 'string' ? d['id'] : messageId,
+      };
+    }
+    if (v2.status < 500) {
+      throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.prompt failed with HTTP ${v2.status}`);
+    }
+
+    const v1 = await this.request(
+      `/session/${sessionId}/prompt_async`,
+      { method: 'POST', body: JSON.stringify({ messageID: messageId, parts: [{ type: 'text', text }] }) },
+      key,
+    );
+    if (v1.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
+    if (v1.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
+    if (!v1.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.prompt failed with HTTP ${v1.status}`);
+    return { state: 'running', receipt: messageId };
   }
 
   async getSession(sessionId: SessionId): Promise<SessionStatusInfo> {

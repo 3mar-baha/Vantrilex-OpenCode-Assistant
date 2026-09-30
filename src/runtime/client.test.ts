@@ -244,7 +244,15 @@ describe('ServeClient vs mock serve', () => {
       });
       req.on('end', () => {
         bodies.push(raw);
-        json(res, 200, { data: { id: 'm1', state: 'running' } });
+        // v2 500s on every body on serve 1.18.32, which is what makes the v1
+        // fallback the live path. Mirrored here so both are exercised.
+        if (bodies.length === 1) {
+          res.writeHead(500);
+          res.end();
+          return;
+        }
+        res.writeHead(204);
+        res.end();
       });
     });
     await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
@@ -252,10 +260,18 @@ describe('ServeClient vs mock serve', () => {
     if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
     try {
       const base = `http://127.0.0.1:${addr.port}`;
-      await new ServeClient(base, 'test-password').promptSession('s' as never, 'hi', { origin: 'cli', actor: 't' });
-      await new ServeClient(base, 'test-password', { promptEnvelope: 'nested' }).promptSession('s' as never, 'hi', { origin: 'cli', actor: 't' });
-      expect(JSON.parse(bodies[0]!)).toMatchObject({ text: 'hi' }); // flat (canonical 2.0.x)
-      expect(JSON.parse(bodies[1]!)).toMatchObject({ prompt: { text: 'hi' } }); // nested (1.18.x)
+      const out = await new ServeClient(base, 'test-password').promptSession('s' as never, 'hi', {
+        origin: 'cli',
+        actor: 't',
+      });
+      // ONE call now reaches BOTH routes, so this asserts the v2 shape AND the
+      // fallback body AND that the receipt is the id we minted (a 204 returns
+      // no id, so an echoed server id would be `undefined` here).
+      expect(JSON.parse(bodies[0]!)).toEqual({ prompt: { text: 'hi' }, delivery: 'steer' });
+      expect(JSON.parse(bodies[1]!)).toMatchObject({ parts: [{ type: 'text', text: 'hi' }] });
+      expect((JSON.parse(bodies[1]!) as { messageID: string }).messageID).toMatch(/^msg_/);
+      expect(out.receipt).toMatch(/^msg_/);
+      expect(out.state).toBe('running');
     } finally {
       await new Promise<void>((resolve) => probe.close(() => resolve()));
     }
@@ -440,9 +456,20 @@ describe('ServeClient vs mock serve', () => {
         taskId: 'task-1',
       });
       expect(sent.receipt).toBe('evt_ok');
-      const body = JSON.parse(seen[seen.length - 1]!.body) as { text: string; metadata: Record<string, unknown> };
-      expect(body.text).toBe('report please');
-      expect(body.metadata).toMatchObject({ origin: 'voice', fromSessionId: 'ses_a', taskId: 'task-1' });
+      // The v2 schema is `additionalProperties:false` with `PromptInput` also
+      // closed, so `metadata` has no legal home anywhere in the body — it was
+      // measured 400 (missing prompt) and 500 (metadata inside prompt). The
+      // text is asserted where it now travels, inside the prompt object.
+      const body = JSON.parse(seen[seen.length - 1]!.body) as {
+        prompt: { text: string };
+        delivery: string;
+      };
+      expect(body.prompt.text).toBe('report please');
+      expect(body.delivery).toBe('steer');
+      // `messageID` belongs to the v1 fallback body, not this one — this probe
+      // answers 200 on v2 so only the v2 request is ever made here. The
+      // fallback shape is pinned by the envelope test above, which serves 500
+      // on v2 and therefore does see both bodies.
       // Same (session, text) but different taskId → different key (no cross-task dedupe).
       const before = seen.length;
       await client.dispatchPrompt('ses_ok' as never, 'report please', {

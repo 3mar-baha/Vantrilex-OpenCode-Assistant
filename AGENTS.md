@@ -140,7 +140,7 @@ Resolve every relative import transitively from `src/daemon.ts` and `src/cli.ts`
 LIVE production modules : 74
 DEAD production modules : 7   (all of src/runtime/laya/*)
 TEST-ONLY scaffolding modules : 1  (claim-matcher.ts — used by a test, ships nowhere)
-live source lines       : 20794
+live source lines       : 20832
 ```
 
 **The 7 are `src/runtime/laya/*`, and they are dead by decision, not by accident.** The Laya dynamic-import seam is deliberately *not* installed in `daemon.ts`, because `models/laya-m7-int8.onnx` is **294 MB** and `layaLoad` has zero consumers — wiring it would load a 294 MB model on every daemon start to change nothing. `ui-server.ts` therefore reports `layaReady: false`, because a frame that asserts a feature is live when it is not is the exact defect class this project keeps hunting. An earlier revision of this file claimed **0 dead**; that went false when Laya was restored, and it is why the number is re-derived here rather than carried. **M5 is the opposite case and is deliberately NOT dead:** `src/diag/bundle.ts` is imported by `cli.ts` and is most needed when nothing is running, which is exactly why it must not import the daemon.
