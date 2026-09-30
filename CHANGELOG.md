@@ -1,5 +1,106 @@
 # Changelog — opencode-voice-runtime / Voxaura
 
+## v0.8.1 — the corrective fleet, and a version that identifies its own artifact (2026-09-30)
+
+**A version number that cannot tell two binaries apart is not an identifier.**
+`v0.8.0` shipped, then four more commits landed, then the installer was rebuilt
+— producing a *second* file called `Voxaura_0.8.0_x64-setup.exe`, 5,396 bytes
+different, with a different SHA-256. The tag `v0.8.0` points at the first;
+the name maps to neither reliably. This release exists to end that: one
+version, one artifact, one tag, and the tag's tree is the tree that built it.
+
+The existing `v0.8.0` tag is **not moved**. It is pushed, and moving it would
+hand every existing fetcher a different tree under a number they already
+recorded. The fix for an ambiguous number is a new number, never a rewritten
+one.
+
+### Downlink audio: coalesce fragments, and stop deferring a barge-in
+
+Fish streams MP3; the player handed each ≤32 KiB chunk to a whole-file decoder.
+An MP3 fragment carries encoder delay and padding, so decoding fragments
+independently and concatenating them produced boundary crackle. And
+`source.start()` took no scheduling horizon, so a decode slower than arrival
+underran.
+
+**There is no sample-rate defect here and none was introduced** — MP3 is
+self-describing and `decodeAudioData` resamples to the context rate. The
+premise was tested and refuted before any edit; building against it would have
+been a plausible-looking no-op.
+
+`gather()` now concatenates a contiguous run into one payload and decodes it
+once. Three defects were found in the fix itself, each pinned:
+
+- **A livelock.** `gather`'s exit condition is "the queue is empty after a
+  tick", so a producer fast enough to refill within one tick never lets it
+  exit — no payload decodes at all, strictly worse than the crackle. Bounded by
+  `MAX_COALESCE_TICKS = 2`, which also bounds `parts` at
+  `(ticks + 1) * PLAYBACK_QUEUE_CAP`.
+- **A barge-in deferred the next reply.** `scheduledUntil` is a closure
+  variable in `createDefaultPlayer`, unreachable from `AudioPlayer.stop()` —
+  the fix needed a hook, not a line edit. A new optional `onStop` halts the
+  live sources *and* resets the horizon together: resetting the horizon while
+  old sources keep playing would overlap speech.
+- A test-name contradiction and a now-false `stop()` doc comment.
+
+Every clock-based wait is gone — 33 `flush(ms)` sleeps replaced by `settled()`
+polling the player's own observables. Measured under load rather than asserted:
+12 workers, 688.5 s CPU over 92.8 s wall, **5/5 runs green, 42/42 every run**,
+per-run 10.3–18.0 s against 1.94 s unloaded.
+
+Break-guards 6/6, each verified landed. One was **vacuous on first write**:
+the tick-bound test fed one chunk per macrotask, so `gather` always woke to an
+empty queue and the livelock never formed. Re-shaped to burst-feed.
+
+### The uplink is gated; the bridge asks before it acts
+
+**Nothing goes to STT in silence.** The microphone stays OPEN — a wake-word
+detector needs an open microphone, so "eliminate ambient listening" and
+"activate on hearing its call-sign" are mutually exclusive, and only the first
+is achievable. What changed is the wire.
+
+The naive version of this would have broken every utterance under five
+seconds, silently: `AudioIngest` emits only COMPLETE 160,000-byte windows and
+nothing on the path flushes a partial one, so a three-second sentence never
+reaches STT. After the last speech frame, up to 56 sub-gate frames (5.6 s) are
+transmitted to close the window the speech opened, then the wire is quiet.
+
+**Fails OPEN, and that is the safety property**: a wrong drop is a user who is
+talking and is not heard — the microphone silently killed on the product's
+primary input. Undecidable frames transmit.
+
+**Contextual permission before any OpenCode interaction**, broader than FR-12,
+which gates only destructive actions. No literal templates: a strict-schema
+model call judges whether the assistant is the addressee, composing with
+`slash.ts` / `mentions.ts` / `isActionableInstruction` and replacing nothing.
+A question is answered verbally and dispatches nothing. **Fails CLOSED
+structurally** — `kind: 'proceed'` is returned from exactly one place, the
+approve branch, and only after `consume` matches the id exactly.
+
+13 break-guards, all hand-run. **Four were vacuous on first write** and were
+found by the worker itself, including a replayable approval a turn-counting
+fake had hidden.
+
+### The precise-workflow skill
+
+`.opencode/skills/Vantrilex-Precision-Workflow/` encodes M1–M5 as it actually
+ran, including the inconvenient parts: guards that were vacuous on first write
+and had to be rewritten; a passing test that is not evidence a feature ships;
+a test that pins a bug, which is worse than no test and happened four times;
+and a break-the-guard run that reported green because the injection never
+landed. Nine unsupported claims were removed during authoring, each with its
+disposition. The first draft **did not parse** — a bare `: ` in an unquoted
+YAML scalar — caught by parsing the file rather than reading it.
+
+### Known, not fixed
+
+`decodeAudioData` may resolve with a SHORTER buffer instead of rejecting, so a
+trailing partial frame is dropped: an audible seam, never wrong audio. The
+correct fix is frame-aware chunking on the send side. `client.execSessionShell`
+still returns a hardcoded `{ ok: true }` and never reads the server's response,
+so a shell command runs and cannot be seen. `App.test.tsx` still sleeps on
+millisecond timers against the real `AudioPlayer`. `docs-verify.mjs` still
+reports a failing suite as "reporter unavailable".
+
 ## v0.8.0 — the audit's findings, closed (2026-09-30)
 
 ## Six numbered defects closed, and the voice loop stopped lying

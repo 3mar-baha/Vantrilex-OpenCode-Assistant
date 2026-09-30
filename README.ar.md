@@ -10,11 +10,11 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-726%20unit%20%2B%2027%20rust-brightgreen" alt="الاختبارات" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="الرخصة" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.0-blueviolet" alt="الإصدار" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.1-blueviolet" alt="الإصدار" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.8.0"><img src="https://img.shields.io/badge/download-Voxaura_0.8.0_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
+  <a href="https://github.com/3mar-baha/Vantrilex-OpenCode-Assistant/releases/tag/v0.8.1"><img src="https://img.shields.io/badge/download-Voxaura_0.8.1_setup.exe-2563eb" alt="تنزيل الإصدار" /></a>
 </p>
 
 ## ما هو Voxaura؟
@@ -100,7 +100,26 @@ npm run test:vantrilex
 cd apps/desktop && npm run test:e2e
 ```
 
+## مُثبِّت v0.8.1
+
+| | |
+|---|---|
+| الملف | `Voxaura_0.8.1_x64-setup.exe` — 24.80 ميغابايت (26,009,032 بايت) |
+| بصمة SHA-256 | `AC8F40572934511AF17DEE29261D153FE135C94AF015847DAB99DCFEB82AE080` |
+| مبنيّ من | `main` عند وسم v0.8.1 — `npm run build` ← `provision-sidecar` ← `build:tauri`، الثلاث بخروج 0 |
+| التحقّق | **بناءٌ فقط.** لم يمرّ بـ`release:verify`: **لم يُثبَّت صامتاً ولم يُقلَع بارداً.** آخر ما مرّ بهما هو مُثبِّت 0.8.0 أدناه. |
+
+```powershell
+Get-FileHash .\Voxaura_0.8.1_x64-setup.exe -Algorithm SHA256
+```
+
 ## مُثبِّت v0.8.0
+
+> **اسم `Voxaura_0.8.0_x64-setup.exe` ملتبس، وكان دائماً كذلك.** ملفّان يحملانه:
+> `AD6FD13D…` (25,994,215 بايت، موسوم، مُثبَت بـ`release:verify`) و`05494180…`
+> (25,999,611 بايت، مبنيّ بعد أربعة التزامات أُخرى، **لم يُثبَّت قط**). إن كان لديك
+> ملفّ من جيل 0.8.0 فاعرفه **بالبصمة لا بالاسم** — فالاسم عاجز عن ذلك.
+> **هذا هو سبب وجود 0.8.1.**
 
 | | |
 |---|---|

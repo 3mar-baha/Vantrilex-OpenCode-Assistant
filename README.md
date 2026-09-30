@@ -9,7 +9,7 @@
   <a href="docs/10-CHECKPOINT.md"><img src="https://img.shields.io/badge/tests-847%20unit%20%2B%2052%20rust-brightgreen" alt="Tests" /></a>
   <a href="apps/desktop/e2e"><img src="https://img.shields.io/badge/e2e-18%2F18-brightgreen" alt="E2E" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
-  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.0-blueviolet" alt="Version" /></a>
+  <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/version-0.8.1-blueviolet" alt="Version" /></a>
   <a href="apps/desktop/src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/tauri-v2%20%7C%20rust-stable-orange" alt="Tauri" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D22-339933" alt="Node" /></a>
   <a href="docs/PROJECT_MASTER_DOSSIER.md"><img src="https://img.shields.io/badge/audit-code--first%20dossier-7c3aed" alt="Dossier" /></a>
@@ -101,7 +101,26 @@ npm run test:e2e                        # rebuilds root dist + Playwright
 npm run build:tauri                     # NSIS + AppImage (needs MSVC env + makensis)
 ```
 
+### v0.8.1 installer
+
+| | |
+|---|---|
+| File | `Voxaura_0.8.1_x64-setup.exe` — 24.80 MB (26,009,032 bytes) |
+| SHA-256 | `AC8F40572934511AF17DEE29261D153FE135C94AF015847DAB99DCFEB82AE080` |
+| Built from | `main` at the v0.8.1 tag — `npm run build` → `provision-sidecar` → `build:tauri`, all three exit 0 |
+| Verified by | **build only.** NOT `release:verify`: this artifact has not been silently installed or cold-booted. The 0.8.0 row below is the last one that has. |
+
+```powershell
+Get-FileHash .\Voxaura_0.8.1_x64-setup.exe -Algorithm SHA256
+```
+
 ### v0.8.0 installer
+
+> **The name `Voxaura_0.8.0_x64-setup.exe` is ambiguous and always was.** Two
+> binaries carry it: `AD6FD13D…` (25,994,215 B, tagged, `release:verify`-proven)
+> and `05494180…` (25,999,611 B, built after four further commits, never
+> installed). If you have a 0.8.0-era file, **identify it by SHA-256, never by
+> name** — the name cannot do it. This is why 0.8.1 exists.
 
 | | |
 |---|---|

@@ -1031,3 +1031,83 @@ leaves the other. `AGENTS.md` release step 1 now records both.
 The `CHANGELOG.md` has **no `v0.7.2` entry** — that version shipped without one.
 The gap is noted in the `v0.8.0` entry rather than back-filled with a history
 nobody wrote down at the time.
+
+---
+
+## 2026-09-30 — v0.8.1: the corrective fleet landed, and a version that identifies its own artifact
+
+Four commits from a four-agent fleet, then a serial gate, then a release.
+
+### Gate, all four stages, in order, no overlap
+
+| Stage | Result |
+|---|---|
+| `npm run test:vantrilex` | exit 0 — root 930/67, desktop 324/33, E2E 33, oxlint 8/8 |
+| `cargo test` | exit 0, 0 FAILED |
+| `npm run docs:verify` | exit 0 after re-derivation |
+| `npm run docs:verify --self-test` | exit 0, 4/4 |
+
+`--self-test` failed first and it was **not an independent regression**: it
+appends a citation to the *real* `AGENTS.md`, so it inherited that document's 19
+dangling anchors. Fixing the document turned it green alone. Sixteen anchors
+were re-derived **by content**, never by arithmetic — a `+1` shift from an
+inserted comment is still a correct reference, and only the text decides.
+
+### The version collision, measured
+
+`v0.8.0` shipped, four commits landed, the installer was rebuilt, and a second
+file named `Voxaura_0.8.0_x64-setup.exe` appeared:
+
+| Build | Bytes | SHA-256 |
+|---|---|---|
+| tagged `v0.8.0`, `5c42bed` | 25,994,215 | `AD6FD13D…` |
+| rebuilt today, `05f8c86` | 25,999,611 | `05494180…` |
+
+Same filename, 5,396 bytes apart, different binaries. A version number that
+cannot tell two artifacts apart is not an identifier.
+
+**The `v0.8.0` tag was NOT moved.** It is pushed; moving it would hand every
+existing fetcher a different tree under a number they already recorded. The fix
+for an ambiguous number is a new number. `v0.8.1` is the new number, and its
+tree is the tree that built its artifact.
+
+### v0.8.1 artifact
+
+`Voxaura_0.8.1_x64-setup.exe` · 26,009,032 bytes ·
+SHA-256 `AC8F40572934511AF17DEE29261D153FE135C94AF015847DAB99DCFEB82AE080`
+
+**Build only — not `release:verify`.** Not silently installed, not cold-booted.
+The honest reason is that installation is the owner's machine and they are
+driving it. A green build is not a green boot; v0.6.0 passed every gate and
+could not start at all.
+
+### The bump itself
+
+12 lines across 10 files, keyed to line numbers with a per-line assertion of
+what each line must already contain. Two traps recurred and were caught by the
+assertions, not by reading:
+
+- `README.ar.md:17` carries the version **twice on one line** — the release-tag
+  href and the download badge's filename. A single `String.replace` fixes one
+  and leaves the other, producing a badge that advertises a file that is no
+  longer current.
+- The bump script **threw on its own post-condition** and **on a verifier
+  regex that had no capture group**, reporting three files as disagreeing when
+  all three were correct. A check that reports a false failure is a check whose
+  green means nothing; both were fixed before any conclusion was drawn from
+  them.
+
+History was preserved: `README.md`, `README.ar.md`, `docs/00-PROJECT-GUIDE.md`
+and `CHANGELOG.md` still carry their `0.8.0` mentions, because they record
+artifacts that really were built.
+
+### Deferred on owner decision, not overlooked
+
+1. `App.test.tsx` still sleeps on millisecond timers against the real
+   `AudioPlayer` — the same flake class playback's suite just shed. Green does
+   not prove stability under load.
+2. `client.execSessionShell` returns a hardcoded `{ ok: true }` and never reads
+   the server's response: a shell command runs and cannot be seen.
+3. `decodeAudioData` may resolve with a shorter buffer instead of rejecting, so
+   a trailing partial frame is dropped — an audible seam, never wrong audio.
+4. `docs-verify.mjs` reports a failing suite as "reporter unavailable".
