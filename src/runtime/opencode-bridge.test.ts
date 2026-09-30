@@ -53,14 +53,18 @@ beforeAll(async () => {
       });
       return;
     }
-    if (url === '/api/session/ses_a/message' && req.method === 'GET') {
-      // Live shape: FLAT rows, no `info` wrapper.
-      json(res, 200, {
-        data: [
-          { id: 'm1', type: 'user', time: { created: 1_700_000_100_000 } },
-          { id: 'm2', type: 'assistant', time: { created: 1_700_000_400_000 } },
-        ],
-      });
+    // V1 MESSAGE ROUTE — matches the pin in `client.ts`. This mock previously
+    // served the `/api/` route with FLAT rows; that route is the one removed,
+    // and it was the one that measured 0 rows against 234 on a live serve.
+    // The v1 surface returns a BARE ARRAY of `{info, parts}`, not a `{data}`
+    // envelope — so this fixture asserts the shape the pinned code must parse,
+    // and the flat-row fallback in `listSessionMessages` stays covered by the
+    // `/context` mock above, which does carry the flat form.
+    if (url.startsWith('/session/ses_a/message') && req.method === 'GET') {
+      json(res, 200, [
+        { info: { id: 'm1', time: { created: 1_700_000_100_000 } }, parts: [{ type: 'text' }] },
+        { info: { id: 'm2', time: { created: 1_700_000_400_000 } }, parts: [{ type: 'text' }] },
+      ]);
       return;
     }
     if (url.startsWith('/api/agent') && req.method === 'GET') {
