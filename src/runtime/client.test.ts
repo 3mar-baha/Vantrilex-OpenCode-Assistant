@@ -305,7 +305,34 @@ describe('ServeClient vs mock serve', () => {
         if (req.url === '/api/session/ses1/agent') return record(raw);
         if (req.url === '/api/session/ses1/model') return record(raw);
         if (req.url === '/api/experimental/session/ses1/skill') return record(raw);
-        if (req.url === '/api/session/ses1/shell') return record(raw);
+        // execSessionShell moved to the v1 route: `/api/session/{id}/shell` was
+        // never a route in serve's v2 family — it answered 200 + `text/html`
+        // from the SPA catch-all, byte-identical to a deliberately absurd path
+        // (measured live 2026-09-30). This block only needs a body to answer
+        // with; the full shape coverage is in `client-shell.test.ts`.
+        if (req.url === '/session/ses1/shell') {
+          seen.push({
+            key: req.headers['idempotency-key'] as string,
+            method: req.method ?? '',
+            url: req.url ?? '',
+            body: raw,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              info: { id: 'msg_1', sessionID: 'ses1' },
+              parts: [
+                {
+                  id: 'prt_1',
+                  type: 'tool',
+                  tool: 'bash',
+                  state: { status: 'completed', input: {}, output: 'ok', time: { start: 1, end: 2 } },
+                },
+              ],
+            }),
+          );
+          return;
+        }
         if (req.url === '/api/session/nope/agent') {
           res.writeHead(404);
           res.end();
@@ -342,8 +369,15 @@ describe('ServeClient vs mock serve', () => {
       const skillCall = seen.find((s) => s.url.endsWith('/skill'))!;
       expect(JSON.parse(skillCall.body)).toMatchObject({ id: 'probe-skill', resume: true });
 
-      expect(await client.execSessionShell('ses1' as never, 'git status')).toEqual({ ok: true });
-      expect(await client.execSessionShell('ses1' as never, 'git status')).toEqual({ ok: true });
+      // The return is the server's answer, not a fabricated `{ok: true}` — the
+      // pre-fix assertion was `toEqual({ ok: true })`, which is exactly the
+      // defect `client-shell.test.ts` pins. Full coverage is there.
+      const shell1 = await client.execSessionShell('ses1' as never, 'git status');
+      const shell2 = await client.execSessionShell('ses1' as never, 'git status');
+      expect(shell1.status).toBe('completed');
+      expect(shell1.output).toBe('ok');
+      expect(shell1.outcome).toBe('unknown'); // serve reports no exit code
+      expect(shell2.outcome).toBe('unknown');
       const shellKeys = seen.filter((s) => s.url.endsWith('/shell')).map((s) => s.key);
       expect(shellKeys[0]).not.toBe(shellKeys[1]); // fresh key: exec is not idempotent
 

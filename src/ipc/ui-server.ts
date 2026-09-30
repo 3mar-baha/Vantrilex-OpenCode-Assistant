@@ -17,6 +17,9 @@ import {
   MAX_CONNECTIONS,
   NoticeFrameSchema,
   Opcode,
+  type OutputFrame,
+  type OutputFrameInput,
+  buildOutputFrame,
   parseSeq,
   PING_INTERVAL_MS,
   RESUME_BUFFER_CAP,
@@ -53,8 +56,19 @@ import { encodeAudioChunk, splitAudio } from './audio.js';
  */
 export const RESUME_BUFFER_MAX_BYTES = 64 * 1024;
 
+/**
+ * Anything the resume window can replay.
+ *
+ * `UiEvent` alone was the whole type when `broadcast()` was the only writer.
+ * The `output` frame joins it, and the union is declared HERE rather than at
+ * each use site so a third retained family is a deliberate edit instead of an
+ * inferred `any`. Both members carry `seq`, which is the only field the replay
+ * filter reads, and `frameBytes` only serialises.
+ */
+type RetainedFrame = UiEvent | OutputFrame;
+
 /** Retained cost of one frame: its JSON payload, which is what a replay re-sends. */
-function frameBytes(frame: UiEvent): number {
+function frameBytes(frame: RetainedFrame): number {
   return Buffer.byteLength(JSON.stringify(frame), 'utf8');
 }
 
@@ -122,7 +136,7 @@ export class UiServer {
   private readonly conns = new Set<Conn>();
   private seq = 0;
   private audioSeq = 0;
-  private readonly resume: UiEvent[] = [];
+  private readonly resume: RetainedFrame[] = [];
   /** Running total of retained payload bytes — the B.2b budget's live figure. */
   private resumeBytes = 0;
   /**
@@ -204,7 +218,7 @@ export class UiServer {
    * frame and is itself bounded by the count cap, so charging it would be
    * precision applied to the wrong term.
    */
-  private retainForResume(frame: UiEvent): void {
+  private retainForResume(frame: RetainedFrame): void {
     this.resume.push(frame);
     this.resumeBytes += frameBytes(frame);
     while (this.resume.length > RESUME_BUFFER_CAP || this.resumeBytes > RESUME_BUFFER_MAX_BYTES) {
@@ -263,6 +277,49 @@ export class UiServer {
       if (safeWrite(conn, this.conns, wire)) sent += 1;
     }
     return sent;
+  }
+
+  /**
+   * Publish the result of an `execSessionShell` command.
+   *
+   * THE FRAME IS A SUMMARY ON COMPLETION, NOT A STREAM. Measured live against
+   * opencode 1.18.32 on 2026-09-30: `POST /session/{id}/shell` has
+   * `transfer-encoding: null` and `t_firstbyte == t_headers == t_end` on every
+   * probe, and a 7-second `ping` took 7 384 ms end to end. It blocks until the
+   * command is done and then returns the whole thing. So there is nothing to
+   * chunk, no partial text to append, and no `delta` field here to be tempted
+   * into faking later.
+   *
+   * RETAINED, unlike `voice`/`notice`/`context`/`flow`. Those are ambient
+   * signals where a stale copy is worse than none — "the assistant is speaking"
+   * from four minutes ago is a lie. This is not ambient: it is the payload of a
+   * request the shell itself made and already holds an `ack` for, so a shell
+   * that misses it has a spinner with no result and no way to learn the command
+   * finished. Dropping it would manufacture the indefinite-pending defect this
+   * frame exists to end.
+   *
+   * AND THE RETENTION IS BOUNDED ON BOTH AXES. `RESUME_BUFFER_CAP` (256) bounds
+   * the count; `RESUME_BUFFER_MAX_BYTES` (64 KiB) bounds the bytes, and it is
+   * the byte axis that matters here because a 256 KiB output frame x 256 frames
+   * is 64 MiB of resident heap. `retainForResume` evicts OLDEST-FIRST until both
+   * hold, so a long-disconnected shell can demand a bounded replay and not an
+   * OOM. `MAX_OUTPUT_TEXT_BYTES` (32 KiB, in protocol.ts) is deliberately HALF
+   * that budget: an output frame bigger than the whole budget would evict the
+   * buffer including itself, so the newest result would never be replayable —
+   * a silent hole, the same defect class as `layaReady: true`. At 32 KiB one
+   * always fits; two max-size frames do not, which is the accepted trade.
+   */
+  output(input: OutputFrameInput): OutputFrame {
+    this.seq += 1;
+    // The cap runs inside `buildOutputFrame`, on the only production path — a
+    // cap reachable only from a test would not be a cap.
+    const frame = buildOutputFrame(this.seq, input);
+    this.retainForResume(frame);
+    const wire = encodeTextFrame(JSON.stringify(frame));
+    for (const conn of this.conns) {
+      safeWrite(conn, this.conns, wire);
+    }
+    return frame;
   }
 
   /**

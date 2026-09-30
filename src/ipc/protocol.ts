@@ -30,6 +30,7 @@ export const AUDIO_FRAME_BYTES = ((AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS) / 1000) *
 export const MAX_AUDIO_BYTES = 64 * 1024;
 export const ACK_KIND = 'ack';
 export const ERROR_KIND = 'error';
+export const OUTPUT_KIND = 'output';
 
 export enum Opcode {
   Continuation = 0x0,
@@ -686,3 +687,304 @@ export const FlowFrameSchema = z.object({
 });
 export type FlowFrame = z.infer<typeof FlowFrameSchema>;
 export type FlowState = FlowFrame['state'];
+
+// --- Shell output stream (Phase 1 of the agentic bridge).
+//
+// ADDITIVE, like every frame above: an older shell has no `output` branch and
+// ignores the type, and a NEW shell against an OLDER daemon simply never
+// receives one — which is exactly the pre-Phase-1 behaviour. Neither half can
+// crash on the other.
+//
+// THE ENDPOINT DOES NOT STREAM. Measured live against opencode 1.18.32 on
+// 2026-09-30, `POST /session/{id}/shell` (v1 — the ONLY route that exists; the
+// `/api/session/{id}/shell` path this repo used was never a route at all, see
+// `ServeClient.execSessionShell`):
+//
+//   command                     HTTP  t_firstbyte  t_end   tool state
+//   --------------------------  ----  -----------  ------  -----------
+//   echo hi                       200       1348 ms  1348 ms  completed
+//   exit 3                        200        249 ms   249 ms  completed  <- output ""
+//   <nonexistent binary>          200        359 ms   359 ms  completed  <- PS error text
+//   node -e 'x'.repeat(20000)    200        554 ms   554 ms  completed  <- 40884 B body
+//   ping -n 8 127.0.0.1           200       7384 ms  7384 ms  completed
+//
+// `transfer-encoding: null` and `t_firstbyte == t_headers == t_end` on every
+// probe: it COMPLETES THEN RETURNS, it does not stream, and it BLOCKS until the
+// command is done (a 7 s ping took 7.4 s). So this frame is a SUMMARY ON
+// COMPLETION. There is no partial-output path to build and no `delta` field to
+// be tempted into faking.
+//
+// Two measured facts shape every field below, and both were invisible while the
+// response was discarded and `{ ok: true }` fabricated:
+//
+//  1. `ToolStateCompleted` in serve's own OpenAPI has NO exit code — measured
+//     against the live `/doc` spec, every tool-state variant is
+//     `{status, input, output|error, title, metadata, time}` and none carries
+//     one. `exit 3` comes back `status: "completed"` with `output: ""`. So a
+//     failed command is INDISTINGUISHABLE from a silent success, by the server
+//     itself, forever. `exitCode` is therefore `null` in practice, and
+//     `outcome` is `unknown` for anything serve did not flag as an error. A
+//     frame that reported `ok` here would be a lie with a schema on it.
+//  2. The response is UNBOUNDED — 20 000 chars of output produced a 40 884-byte
+//     body with no truncation. `cat` on a large file would produce megabytes on
+//     the wire and in the retained resume window. Hence the cap below.
+
+/**
+ * Cumulative per-MESSAGE cap on one assembled `output` frame's text, enforced
+ * BEFORE a fragment is stored. The same class of bound as `MAX_MESSAGE_BYTES`,
+ * for the same reason: a security audit found `FrameReassembler` accumulated
+ * `pendingParts` with no running total and then did one `Buffer.concat`, so a
+ * peer could send N continuation frames just under 1 MiB each and the assembled
+ * message grew to the sum — the effective limit was the peer's patience, not
+ * the constant. `OutputAssembler` is that same accumulator, on the daemon's own
+ * output stream, so the fix is not a one-caller special case.
+ *
+ * 32 KiB, not 1 MiB, and the number is not arbitrary in the way it looks:
+ * `RESUME_BUFFER_MAX_BYTES` (ui-server.ts) is 64 KiB and the resume window
+ * evicts OLDEST-FIRST to stay under it. An output frame larger than half that
+ * budget would evict the whole buffer INCLUDING ITSELF, so a shell that
+ * reconnected could never be shown the result of the command it just ran — a
+ * silent hole of exactly the `layaReady: true` kind. At 32 KiB the newest
+ * output frame always fits and at least one is always replayable; two
+ * max-size frames do not, which is the accepted trade and is pinned by a test.
+ */
+export const MAX_OUTPUT_TEXT_BYTES = 32 * 1024;
+/** Matches `UiCommandSchema.command`, so an echoed command is always legal. */
+export const OUTPUT_MAX_COMMAND_CHARS = 512;
+/** Correlation token for the `execSessionShell` command that caused this. */
+export const OUTPUT_MAX_COMMAND_ID_CHARS = 128;
+
+/**
+ * Verbatim serve-side tool state, normalised.
+ *
+ * MEASURED values on 1.18.32: `completed` for a command that succeeded, a
+ * command that exited 3, AND a command that did not exist. `error` is in the
+ * serve schema (`ToolStateError`) and is the only value that means "failed"
+ * today. `pending`/`running` are in the schema and are reachable if a future
+ * serve answers before the tool settles. `unknown` is OURS: the 200 carried no
+ * tool part, so we say we do not know rather than defaulting to a success.
+ */
+export const ShellOutputStatusSchema = z.enum(['completed', 'error', 'pending', 'running', 'unknown']);
+
+/**
+ * What can honestly be concluded about the command.
+ *
+ * `unknown` is the common case and it is the whole point: serve reports no exit
+ * code, so a completed tool call proves only that the tool ran. Deriving `ok`
+ * from `status: 'completed'` is precisely the fabricated `{ ok: true }` this
+ * frame exists to replace — it would be a lie wearing a zod schema.
+ */
+export const ShellOutputOutcomeSchema = z.enum(['ok', 'failed', 'unknown']);
+
+/**
+ * Derive the outcome from ONLY what serve reported. Exported so the client and
+ * the frame builder cannot disagree — two derivations of the same judgement is
+ * how a frame and a log start telling different stories.
+ */
+export function deriveShellOutcome(
+  status: z.infer<typeof ShellOutputStatusSchema>,
+  exitCode: number | null,
+): z.infer<typeof ShellOutputOutcomeSchema> {
+  if (status === 'error') return 'failed';
+  if (exitCode !== null) return exitCode === 0 ? 'ok' : 'failed';
+  // MEASURED: no exit code exists. `completed` is not `ok`.
+  return 'unknown';
+}
+
+/**
+ * Cumulative output accumulator — the `FrameReassembler` cap, on a stream the
+ * daemon produces rather than a peer sends.
+ *
+ * THE ORDER IS THE WHOLE POINT: `push` consults the running total BEFORE the
+ * fragment is retained, exactly as `FrameReassembler.accountFor` does before
+ * `pendingParts.push`. Capping at `text()` time instead would still have
+ * stored — and therefore allocated — every oversized fragment, so the bound
+ * would hold only after the memory was already spent. `bytes` is therefore
+ * INVARIANTLY <= `MAX_OUTPUT_TEXT_BYTES`, which is the property the test
+ * asserts and the property a moved check would break.
+ *
+ * Unlike the frame path this does NOT throw. An over-cap output is the
+ * DAEMON's condition, not a peer protocol violation, and `WsProtocolError`
+ * means "destroy the connection" — a shell that ran `cat bigfile` must not
+ * lose its socket. The overflow is reported instead: `truncated` and
+ * `droppedBytes` ride the frame, so a shell is told it is seeing partial
+ * output. A silent trim is the `INVENTORY_MAX_SESSIONS` defect class that
+ * `totalSessions` was added to fix.
+ */
+export class OutputAssembler {
+  private readonly parts: Uint8Array[] = [];
+  private storedBytes = 0;
+  private droppedBytes = 0;
+
+  /** Bytes actually STORED. Never exceeds `MAX_OUTPUT_TEXT_BYTES`. */
+  get bytes(): number {
+    return this.storedBytes;
+  }
+
+  /** Bytes refused by the cumulative cap, across every rejected fragment. */
+  get dropped(): number {
+    return this.droppedBytes;
+  }
+
+  get truncated(): boolean {
+    return this.droppedBytes > 0;
+  }
+
+  /** Store a fragment, or refuse it. Returns whether it was kept. */
+  push(fragment: Uint8Array): boolean {
+    const n = fragment.byteLength;
+    // Cap FIRST. Nothing is retained past the limit, so `storedBytes` cannot
+    // drift over it no matter how many fragments arrive.
+    if (this.storedBytes + n > MAX_OUTPUT_TEXT_BYTES) {
+      this.droppedBytes += n;
+      return false;
+    }
+    this.storedBytes += n;
+    this.parts.push(fragment);
+    return true;
+  }
+
+  /** Convenience for the streaming case. Same all-or-nothing contract. */
+  pushText(text: string): boolean {
+    return this.push(Buffer.from(text, 'utf8'));
+  }
+
+  /**
+   * Store as much of `text` as fits and drop the remainder. Returns the bytes
+   * kept.
+   *
+   * WHY THIS EXISTS, and it is not redundancy. `push` is deliberately
+   * all-or-nothing because the streaming case is a tail: by the time a fragment
+   * arrives the earlier bytes are already the prefix, and refusing the whole
+   * fragment loses nothing. The SINGLE-SHOT case is different, and the first
+   * version of this class got it wrong in a way its own test caught: the whole
+   * output arrives as ONE oversized fragment, `push` refused it, and the frame
+   * went out carrying `output: ''` with `truncated: true` and `outputBytes:
+   * 37 KiB` — honest, and completely useless. A caller whose command printed a
+   * megabyte would be shown nothing at all.
+   *
+   * The accounting is unchanged and still pre-storage: `kept` is computed
+   * BEFORE anything is retained, and it is `min(n, cap - stored)`, so
+   * `storedBytes` still cannot exceed the cap and the dropped tail is still
+   * counted rather than silently discarded.
+   */
+  pushPrefixText(text: string): number {
+    const buf = Buffer.from(text, 'utf8');
+    const room = MAX_OUTPUT_TEXT_BYTES - this.storedBytes;
+    if (room <= 0) {
+      this.droppedBytes += buf.byteLength;
+      return 0;
+    }
+    if (buf.byteLength <= room) {
+      this.storedBytes += buf.byteLength;
+      this.parts.push(buf);
+      return buf.byteLength;
+    }
+    this.parts.push(buf.subarray(0, room));
+    this.storedBytes = MAX_OUTPUT_TEXT_BYTES;
+    this.droppedBytes += buf.byteLength - room;
+    return room;
+  }
+
+  /** The stored prefix. Bounded by the cap; may cut a multi-byte char. */
+  text(): string {
+    if (this.parts.length === 0) return '';
+    return Buffer.concat(this.parts.map((p) => Buffer.from(p))).toString('utf8');
+  }
+
+  /** Drop everything. The `discardPending` analogue — counters MUST go too. */
+  reset(): void {
+    this.parts.length = 0;
+    this.storedBytes = 0;
+    this.droppedBytes = 0;
+  }
+}
+
+/**
+ * The `output` frame. `seq` is REQUIRED on the wire so a retained copy can be
+ * replayed through the same `seq > lastSeq` filter as every other frame — a
+ * shell must be able to order a command's result against the events around it.
+ */
+export const OutputFrameSchema = z.object({
+  type: z.literal(OUTPUT_KIND),
+  seq: z.number().int().nonnegative(),
+  sessionId: z.string().regex(/^ses_[A-Za-z0-9_-]{1,120}$/),
+  /** The `execSessionShell` command id, so a shell can match result to spinner. */
+  commandId: z.string().min(1).max(OUTPUT_MAX_COMMAND_ID_CHARS).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters'),
+  command: z.string().max(OUTPUT_MAX_COMMAND_CHARS),
+  status: ShellOutputStatusSchema,
+  outcome: ShellOutputOutcomeSchema,
+  /**
+   * The command's own exit code, or null. Null is the MEASURED case: serve has
+   * no such field (see `ToolStateCompleted` above). It is carried anyway so a
+   * future serve has a home for it — and so a shell can read "no exit code"
+   * rather than inferring 0.
+   */
+  exitCode: z.number().int().nullable(),
+  /** CAPPED, tail-truncated text. See `MAX_OUTPUT_TEXT_BYTES`. */
+  output: z
+    .string()
+    // BYTES, not zod's `.max()` units. `.max()` counts UTF-16 code units, so a
+    // 32 KiB cap there would admit 128 KiB of Arabic/CJK (2 or 3 bytes per
+    // unit) and quietly blow the budget. The assembler already enforces bytes;
+    // this is the boundary check that makes a producer which bypasses it fail
+    // loudly instead of shipping an over-cap frame.
+    .refine((s) => Buffer.byteLength(s, 'utf8') <= MAX_OUTPUT_TEXT_BYTES, 'output exceeds MAX_OUTPUT_TEXT_BYTES'),
+  /** Byte length of the output BEFORE the cap. `output` alone under-reports. */
+  outputBytes: z.number().int().nonnegative(),
+  /** Bytes refused by the cumulative cap. 0 unless `truncated`. */
+  droppedBytes: z.number().int().nonnegative(),
+  /** True when `output` is NOT the whole story. Never set silently. */
+  truncated: z.boolean(),
+  /** Wall time the command took, or null when serve reported no timing. */
+  durationMs: z.number().int().nonnegative().nullable(),
+});
+export type OutputFrame = z.infer<typeof OutputFrameSchema>;
+
+/** Producer-side input: everything except the seq the server assigns. */
+export interface OutputFrameInput {
+  readonly sessionId: string;
+  readonly commandId: string;
+  readonly command: string;
+  readonly status: z.infer<typeof ShellOutputStatusSchema>;
+  readonly exitCode: number | null;
+  readonly output: string;
+  readonly durationMs: number | null;
+}
+
+/**
+ * Producer-side constructor — throws on malformed input (fail-fast, never on
+ * the wire), and runs `output` through the SAME `OutputAssembler` the
+ * streaming path uses.
+ *
+ * That last part is deliberate: it means the cumulative cap is on the only
+ * production path, not on a test-only one. A cap reachable only from a test
+ * proves nothing about the producer, and a cap the producer can skip is not a
+ * cap. `buildOutputFrame` therefore cannot emit a frame the cap would have
+ * rejected, and cannot emit an over-cap one either.
+ */
+export function buildOutputFrame(seq: number, input: OutputFrameInput): OutputFrame {
+  const asm = new OutputAssembler();
+  // `pushPrefixText`, not `pushText`: a single-shot producer already holds the
+  // whole string, and all-or-nothing would ship an EMPTY output for every
+  // command that printed more than the cap. The single-shot case keeps a
+  // prefix; the streaming case (`push`) refuses the fragment. See
+  // `OutputAssembler.pushPrefixText` for why both exist.
+  asm.pushPrefixText(input.output);
+  const outputBytes = Buffer.byteLength(input.output, 'utf8');
+  return OutputFrameSchema.parse({
+    type: OUTPUT_KIND,
+    seq,
+    sessionId: input.sessionId,
+    commandId: input.commandId,
+    command: input.command,
+    status: input.status,
+    outcome: deriveShellOutcome(input.status, input.exitCode),
+    exitCode: input.exitCode,
+    output: asm.text(),
+    outputBytes,
+    droppedBytes: asm.dropped,
+    truncated: asm.truncated,
+    durationMs: input.durationMs,
+  });
+}

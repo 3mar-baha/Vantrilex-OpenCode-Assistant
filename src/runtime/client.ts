@@ -2,15 +2,43 @@ import { randomUUID } from 'node:crypto';
 import { nowIso } from '../common/brands.js';
 import type { SessionId } from '../common/brands.js';
 import { OrchestratorError } from '../common/errors.js';
+import { deriveShellOutcome } from '../ipc/protocol.js';
 
 // Typed serve client — docs/03 §3.4, docs/06 §6.2, docs/25 §25.2. Raw fetch with
 // shape-normalizing parsers (the documented equivalent of @opencode/client calls);
 // idempotency ids are reused on retry so create/prompt never double-apply.
 //
-// Contract (verified live + against @opencode/client 1.18.x, 2026-09-24):
+// Contract (re-measured live 2026-09-30; originally 2026-09-24):
 //  - Auth: HTTP Basic `opencode:<password>` (Bearer is rejected).
 //  - Sessions live at the /api/session family; envelopes are `{data:...}`.
-//  - create/prompt return 200 with `{data}`; agent/model/skill/shell return 204.`
+//  - create/prompt return 200 with `{data}` (MEASURED).
+//  - agent/model: status UNVERIFIED. They were documented here as `204` and
+//    that was an assumption, not an observation — see the per-method comments.
+//
+// This block was WRONG until 2026-09-30 and is kept because the reason it was
+// wrong is a defect class, not a typo. It claimed `shell` returns 204. Measured:
+//   - `POST /api/session/{id}/shell` DOES NOT EXIST. It answers 200 with the
+//     SPA HTML fallback — 2884 bytes, byte-identical for ANY unknown path. The
+//     old `res.ok` check read that as SUCCESS, so `execSessionShell` had never
+//     once actually run a command. The real route is v1 `/session/{id}/shell`,
+//     which REQUIRES an `agent` field (`additionalProperties: false`).
+//   - `toggleSessionSkill` -> `/api/experimental/session/{id}/skill` ALSO does
+//     not exist; no `experimental/session` path appears in serve's own spec.
+//     Same 200-with-HTML lie, and the same class of fabrication: a
+//     state-mutating verb behind an FR-12 approval that reported success for
+//     every call. NOW GUARDED — it goes through the same
+//     `spaFallbackContentType` rule as `execSessionShell` and throws a typed
+//     `CONTRACT_DRIFT`. It fails loudly now; the path is still wrong and a real
+//     route in `/doc` is the only fix.
+//   - The real spec is at `/doc`, not `/openapi.json`; the latter is also the
+//     SPA fallback, so `probeContract()` has never reported a real version.
+//
+// THE LESSON: an unknown path on this server answers 200, not 404. `res.ok` is
+// therefore NOT evidence a route exists. Every call here must either check the
+// content type or hit a path present in `/doc`; the guard is one shared
+// predicate (`spaFallbackContentType`) rather than one per method, so the next
+// mutating verb inherits it instead of forgetting it.
+// Re-verify this block against `/doc` before trusting it.
 export function basicAuth(password: string): string {
   return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
 }
@@ -249,6 +277,174 @@ export interface DispatchProvenance extends Provenance {
   readonly taskId?: string;
 }
 
+/**
+ * The agent serve executes the shell through. MEASURED live 2026-09-30:
+ * `POST /session/{id}/shell` requires `agent` in the body
+ * (`{"name":"BadRequest","data":{"message":"Missing key\n  at [\"agent\"]","kind":"Payload"}}`
+ * without it) and `build` is present on a default install. It is a parameter
+ * rather than a hardcoded literal so a caller whose session has no `build`
+ * agent can pass another; the schema is not `default`-able from here.
+ */
+export const DEFAULT_SHELL_AGENT = 'build';
+
+/** Verbatim serve tool state. `unknown` is OURS: the 200 had no tool part. */
+export type ShellStatus = 'completed' | 'error' | 'pending' | 'running' | 'unknown';
+/**
+ * `unknown` is the COMMON case and is the honest one. Measured: serve reports
+ * no exit code, so `completed` proves only that the tool ran. A command that
+ * exited 3 and a command that printed nothing are the same response.
+ */
+export type ShellOutcome = 'ok' | 'failed' | 'unknown';
+
+/** One tool part from the v1 `{info, parts}` response. */
+export interface ShellToolResult {
+  readonly messageId: string;
+  readonly partId: string;
+  readonly tool: string;
+  readonly status: ShellStatus;
+  readonly output: string;
+  /** Always null against 1.18.32 — serve has no such field. Kept for the future. */
+  readonly exitCode: number | null;
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
+}
+
+export interface SessionShellResult extends ShellToolResult {
+  readonly sessionId: string;
+  readonly command: string;
+  readonly outcome: ShellOutcome;
+  /** Byte length of `output` as serve sent it. Unbounded by design here. */
+  readonly outputBytes: number;
+  readonly durationMs: number | null;
+}
+
+/**
+ * THE SPA-FALLBACK RULE, in one place, used by every verb that mutates.
+ *
+ * MEASURED 2026-09-30 against opencode 1.18.32: an unknown path on this server
+ * answers **`200 OK`** with `content-type: text/html` and a 2 884-byte
+ * `<!doctype html>` page — byte-identical for `/api/session/{id}/shell` and for
+ * a deliberately absurd `/api/zzz-not-a-route-<ts>`. So `res.ok` is NOT evidence
+ * a route exists, and a mutating verb that reads only `res.ok` reports success
+ * against a path the server has no handler for. Two verbs have been caught at
+ * exactly this: `execSessionShell` and `toggleSessionSkill`.
+ *
+ * THE RULE: a 2xx that DECLARES a content-type and that type is not JSON did
+ * not reach a route. Returns the offending type, or `null`.
+ *
+ * WHY A MISSING CONTENT-TYPE IS NOT A FAULT HERE. `204 No Content` is what the
+ * canonical controls answer and it legitimately carries no type, so rejecting
+ * `''` would break a verb that is measured working. `execSessionShell` needs a
+ * body, so it checks the type a second time before parsing and a body-less 2xx
+ * there still ends in a typed `CONTRACT_DRIFT` from the parse — same code, and
+ * the diagnosis moves from "got no content-type" to "response was not JSON".
+ * That is a message difference, not a behaviour one, and it is stated rather
+ * than discovered.
+ */
+function spaFallbackContentType(res: Response): string | null {
+  const contentType = res.headers.get('content-type') ?? '';
+  if (contentType === '' || contentType.includes('json')) return null;
+  return contentType;
+}
+
+const SHELL_STATUSES: ReadonlySet<string> = new Set(['completed', 'error', 'pending', 'running']);
+
+/** Read an exit code if a future serve ever sends one. Absent -> null, never 0. */
+function readExitCode(state: Record<string, unknown>): number | null {
+  for (const key of ['exitCode', 'exit_code', 'code']) {
+    const v = state[key];
+    if (typeof v === 'number' && Number.isInteger(v)) return v;
+  }
+  return null;
+}
+
+function readTime(state: Record<string, unknown>, key: string): number | null {
+  const time = state['time'];
+  if (typeof time !== 'object' || time === null) return null;
+  // `num` yields `undefined` for a non-finite value; a missing timestamp is
+  // null here, and `exactOptionalPropertyTypes` would refuse the union anyway.
+  return num((time as Record<string, unknown>)[key]) ?? null;
+}
+
+/**
+ * Normalize a v1 `/session/{id}/shell` 200 body.
+ *
+ * MEASURED shape:
+ *   `{info: {id, sessionID, role:"assistant", time:{created,completed}, …},
+ *    parts: [{id, type:"tool", callID, tool:"bash",
+ *             state:{status:"completed", input:{command}, output, title,
+ *                     metadata:{output}, time:{start,end}}}]}`
+ *
+ * Two deliberate decisions, both about not inventing certainty:
+ *
+ *  - The FIRST `tool` part wins, and an absent one is `status: 'unknown'` with
+ *    `output: ''` rather than an error. Serve answered 200; it is not our place
+ *    to declare that a contract we did not receive was a failure. The caller
+ *    sees `outcome: 'unknown'`, which is the correct reading.
+ *  - `output` is read from `state.output` and NOT from `state.metadata.output`,
+ *    which holds the same bytes today. `metadata` is an open object in serve's
+ *    schema; `output` is a declared field of `ToolStateCompleted`. Reading the
+ *    declared one keeps this from silently becoming empty if metadata changes.
+ */
+function normalizeShellResult(sessionId: SessionId, command: string, raw: unknown): SessionShellResult {
+  const root = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const info = (typeof root['info'] === 'object' && root['info'] !== null ? root['info'] : {}) as Record<string, unknown>;
+  const parts = Array.isArray(root['parts']) ? root['parts'] : [];
+  let part: Record<string, unknown> | null = null;
+  for (const candidate of parts) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const c = candidate as Record<string, unknown>;
+    if (c['type'] === 'tool') {
+      part = c;
+      break;
+    }
+  }
+  if (part === null) {
+    return {
+      sessionId,
+      command,
+      outcome: 'unknown',
+      messageId: typeof info['id'] === 'string' ? info['id'] : '',
+      partId: '',
+      tool: '',
+      status: 'unknown',
+      output: '',
+      outputBytes: 0,
+      exitCode: null,
+      startedAt: null,
+      endedAt: null,
+      durationMs: null,
+    };
+  }
+  const state = (typeof part['state'] === 'object' && part['state'] !== null ? part['state'] : {}) as Record<string, unknown>;
+  const statusRaw = state['status'];
+  const status: ShellStatus =
+    typeof statusRaw === 'string' && SHELL_STATUSES.has(statusRaw) ? (statusRaw as ShellStatus) : 'unknown';
+  // `ToolStateError` puts the failure text on `error`, not `output`. Reading
+  // only `output` would show a failed command as having produced no output,
+  // which is a second way of saying "nothing went wrong".
+  const source = status === 'error' && typeof state['error'] === 'string' ? state['error'] : state['output'];
+  const output = typeof source === 'string' ? source : '';
+  const exitCode = readExitCode(state);
+  const startedAt = readTime(state, 'start');
+  const endedAt = readTime(state, 'end');
+  return {
+    sessionId,
+    command,
+    outcome: deriveShellOutcome(status, exitCode),
+    messageId: typeof info['id'] === 'string' ? info['id'] : '',
+    partId: typeof part['id'] === 'string' ? part['id'] : '',
+    tool: typeof part['tool'] === 'string' ? part['tool'] : '',
+    status,
+    output,
+    outputBytes: Buffer.byteLength(output, 'utf8'),
+    exitCode,
+    startedAt,
+    endedAt,
+    durationMs: startedAt !== null && endedAt !== null && endedAt >= startedAt ? endedAt - startedAt : null,
+  };
+}
+
 export class ServeClient {
   constructor(
     private readonly baseUrl: string,
@@ -394,8 +590,24 @@ export class ServeClient {
 
   /**
    * Control funnel (Phase 3/4): 404 fail-closed, 409 busy-retryable, 401
-   * non-retryable, other non-2xx transient. Canonical controls return
-   * **204 No Content** — the body is never read.
+   * non-retryable, other non-2xx transient.
+   *
+   * THE "204 NO CONTENT, THE BODY IS NEVER READ" COMMENT THAT USED TO BE HERE
+   * WAS THE BUG, not a description. It was an assumption, and this server
+   * falsifies it in the worst possible direction: an unknown path answers
+   * **200 with an HTML body**, so `res.ok` is true for a route that does not
+   * exist and a mutating verb that only checks the status reports success
+   * against nothing. `toggleSessionSkill` did exactly that, for every call, for
+   * as long as the assumption stood. Status is necessary and not sufficient.
+   *
+   * `guardSpaFallback` is therefore opt-in per caller, and it is the reason the
+   * body is cancelled rather than parsed: we are checking the TYPE, not reading
+   * the payload. It is ON for the one verb measured to hit the fallback, and
+   * OFF for `setSessionAgent` / `setSessionModel` / `compact` / `interrupt` /
+   * `revert` because nobody has measured whether their routes exist at all —
+   * turning the guard on for an unmeasured verb would refuse calls that might
+   * be working, which is a fabrication in the other direction. See the
+   * per-method comments for what is known and what is not.
    */
   private async control(
     method: string,
@@ -403,12 +615,24 @@ export class ServeClient {
     body: unknown,
     key: string | undefined,
     what: string,
+    guardSpaFallback = false,
   ): Promise<void> {
     const res = await this.request(path, { method, body: JSON.stringify(body) }, key);
     if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `${what}: session not found`);
     if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `${what}: session busy — backpressure`);
     if (res.status === 401) throw new OrchestratorError('SERVE_UNREACHABLE', false, `${what}: rejected credentials (401)`);
     if (res.status !== 204 && !res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `${what} failed with HTTP ${res.status}`);
+    if (guardSpaFallback) {
+      const contentType = spaFallbackContentType(res);
+      if (contentType !== null) {
+        throw new OrchestratorError(
+          'CONTRACT_DRIFT',
+          false,
+          `${what}: expected JSON, got ${contentType} (HTTP ${res.status}) — ` +
+            'the request most likely hit the SPA fallback, not a route',
+        );
+      }
+    }
     // 204 No Content (or a tolerated 2xx): nothing to parse.
     try {
       await res.body?.cancel();
@@ -417,7 +641,18 @@ export class ServeClient {
     }
   }
 
-  /** POST /api/session/{id}/agent {agent} → 204. Stable key per target+agent. */
+  /**
+   * POST /api/session/{id}/agent {agent}. Stable key per target+agent.
+   *
+   * **UNVERIFIED.** The status this answers with has never been measured against
+   * a live serve — the previous comment here asserted `204 No Content`, and that
+   * assertion is exactly what let the same class of defect through on the skill
+   * verb. The path's existence in serve's own `/doc` spec is likewise
+   * unverified. Nothing in this method's behaviour depends on the status beyond
+   * "not an error status", and it does not carry the SPA-fallback guard for the
+   * stated reason: doing so against an unmeasured route risks refusing a call
+   * that works. MEASURE IT, then decide.
+   */
   async setSessionAgent(sessionId: SessionId, agent: string): Promise<{ ok: true }> {
     await this.control(
       'POST',
@@ -429,7 +664,13 @@ export class ServeClient {
     return { ok: true };
   }
 
-  /** POST /api/session/{id}/model {model: ModelRef} → 204. Stable key per target+model. */
+  /**
+   * POST /api/session/{id}/model {model: ModelRef}. Stable key per target+model.
+   *
+   * **UNVERIFIED** on the same two counts as `setSessionAgent`: the response
+   * status and the route's presence in `/doc` have both never been measured.
+   * The `204` this comment used to claim was an assumption, not an observation.
+   */
   async setSessionModel(sessionId: SessionId, model: ModelRef): Promise<{ ok: true }> {
     await this.control(
       'POST',
@@ -442,8 +683,28 @@ export class ServeClient {
   }
 
   /**
-   * POST /api/experimental/session/{id}/skill {id, resume} → 204. Stable key
-   * per target+skill+action. `attach` maps to resume:true, `detach` to false.
+   * POST /api/experimental/session/{id}/skill {id, resume}. Stable key per
+   * target+skill+action. `attach` maps to resume:true, `detach` to false.
+   *
+   * MEASURED 2026-09-30: **this path does not exist.** No `experimental/session`
+   * route appears anywhere in serve's own spec at `/doc`, and the request
+   * answers the SPA catch-all — `200 OK`, `content-type: text/html`, 2 884
+   * bytes, byte-identical to a deliberately absurd path. The comment this
+   * replaces claimed `204 No Content`; nothing of the kind was ever observed,
+   * and `control()` read `res.ok` as success, so this method has reported a
+   * successful skill attach/detach for every call it has ever made without
+   * reaching a handler.
+   *
+   * THAT IS WORSE THAN THE SHELL CASE. This verb is state-mutating, it is
+   * parked behind FR-12, so a user is asked to say yes out loud to change the
+   * instructions the agent will run — and the app then tells them it worked.
+   * The guard below is the same `spaFallbackContentType` rule `execSessionShell`
+   * uses, deliberately not a second mechanism: one rule, two call sites.
+   *
+   * The cost, stated rather than hidden: with the guard on, the skill verb now
+   * FAILS loudly (a typed `CONTRACT_DRIFT`) instead of lying. Until a real
+   * route is found, the honest state is "this capability does not exist on this
+   * serve", and an unverified-but-plausible path in `/doc` is the only fix.
    */
   async toggleSessionSkill(
     sessionId: SessionId,
@@ -456,24 +717,129 @@ export class ServeClient {
       { id: skill, resume: action === 'attach' },
       this.promptKey(sessionId, `skill:${skill}:${action}`),
       'session.skill',
+      true,
     );
     return { ok: true };
   }
 
   /**
-   * POST /api/session/{id}/shell {id, command} → 204. Output is delivered
-   * asynchronously over the session event stream, not in the response.
-   * Fresh UUID per call (exec is not idempotent).
+   * Run a shell command in a session and RETURN WHAT SERVE ACTUALLY SAID.
+   *
+   * MEASURED LIVE 2026-09-30 against opencode 1.18.32 (`opencode serve --port
+   * 4096`, spec read from the live `/doc`). This method previously read
+   *
+   *     await this.control('POST', `/api/session/${sessionId}/shell`, …);
+   *     return { ok: true };
+   *
+   * and both halves of that were wrong.
+   *
+   * **The path was not a route.** `/api/session/{id}/shell` is absent from the
+   * v2 `/api/*` family in serve's own OpenAPI — the family has agent, model,
+   * prompt, compact, wait, revert/*, context, history, event, interrupt and
+   * message, and no `shell`. So every call fell through to the SPA catch-all,
+   * which answers `200 OK` with `content-type: text/html` and a 2 884-byte
+   * `<!doctype html>` page. Measured byte-identical to a deliberately absurd
+   * path (`/api/zzz-not-a-route-<ts>`): `byte-identical = true`. `control()`
+   * tested `res.ok`, which was true, discarded the body, and returned a
+   * fabricated success. Against an UNKNOWN session id — a case that must be a
+   * 404 — it also answered 200 HTML. So a command that never ran, against a
+   * session that does not exist, was reported to the user as a success.
+   *
+   * The route that DOES exist is v1, WITHOUT the `/api` prefix:
+   * `POST /session/{sessionID}/shell`, `operationId: session.shell`. Measured
+   * working; it is what this method now calls.
+   *
+   * **It does not stream, and it blocks.** `transfer-encoding: null` and
+   * `t_firstbyte == t_headers == t_end` on every probe. It completes, then
+   * returns, having waited for the command:
+   *
+   *     echo hi                     200  1348 ms  completed  "hi\r\n"
+   *     exit 3                      200   249 ms  completed  ""          <- failed
+   *     <nonexistent binary>        200   359 ms  completed  <PS error text>
+   *     node -e 'x'.repeat(20000)  200   554 ms  completed  40 884 B body
+   *     ping -n 8 127.0.0.1         200  7384 ms  completed  <full output>
+   *
+   * **There is no exit code, anywhere.** `ToolStateCompleted` in the live spec
+   * is `{status, input, output, title, metadata, time, attachments}` — no
+   * `exitCode`, and neither does `ToolStateError`. `exit 3` is `completed` with
+   * empty output, which is what a silent success also looks like. So this
+   * method reports `outcome: 'unknown'` in the common case, and the ONLY way to
+   * get `'failed'` is serve flagging the tool as `error`. That is a hard limit
+   * of the transport, not a parsing gap: returning `ok` here would be the same
+   * fabrication as before, one layer down.
+   *
+   * Errors are `{name, data:{message, kind?}}` — NOT the `{data}` envelope the
+   * v2 family uses, and NOT a `{ok}` shape. Measured: 400
+   * `{"name":"BadRequest","data":{"message":"Missing key\n  at [\"agent\"]","kind":"Payload"}}`,
+   * 404 `{"name":"NotFoundError","data":{"message":"Session not found: …"}}`.
+   *
+   * Throws `OrchestratorError` for transport/contract failures so every
+   * existing `catch` site keeps working; returns the truth on a 200. The
+   * returned `output` is UNBOUNDED on purpose (a 20 000-char command produced a
+   * 40 884-byte body with no truncation) — this layer must not silently hide
+   * bytes from its caller; the WS frame's `OutputAssembler` is where the cap
+   * and the `truncated` flag belong.
    */
-  async execSessionShell(sessionId: SessionId, command: string): Promise<{ ok: true }> {
-    await this.control(
-      'POST',
-      `/api/session/${sessionId}/shell`,
-      { id: randomUUID(), command },
+  async execSessionShell(
+    sessionId: SessionId,
+    command: string,
+    agent = DEFAULT_SHELL_AGENT,
+  ): Promise<SessionShellResult> {
+    // v1 requires `agent` and `command` and is `additionalProperties: false`,
+    // so the old `{id}` field would be a 400 — verified live.
+    const res = await this.request(
+      `/session/${sessionId}/shell`,
+      { method: 'POST', body: JSON.stringify({ agent, command }) },
       randomUUID(),
-      'session.shell',
     );
-    return { ok: true };
+    if (res.status === 401) throw new OrchestratorError('SERVE_UNREACHABLE', false, 'session.shell: rejected credentials (401)');
+    if (res.status === 404) {
+      throw new OrchestratorError('SESSION_NOT_FOUND', false, `session.shell: session ${sessionId} not found`);
+    }
+    if (res.status === 409) {
+      throw new OrchestratorError('SESSION_BUSY', true, `session.shell: session ${sessionId} busy — backpressure`);
+    }
+    if (!res.ok) {
+      throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.shell failed with HTTP ${res.status}`);
+    }
+
+    // THE SPA-FALLBACK GUARD, and the durable half of this fix.
+    //
+    // A 2xx is not proof of anything here: the catch-all answers 200 + HTML, so
+    // `res.ok` is true for a route that does not exist. Reading the body first
+    // and rejecting a non-JSON content-type converts the silent lie back into a
+    // typed, non-retryable failure. Without this, a future serve that drops the
+    // v1 route silently reintroduces the exact defect this method was rewritten
+    // to remove — and the test that pins it fails on the day it happens.
+    //
+    // ONE RULE, TWO CALL SITES: `spaFallbackContentType` is the same predicate
+    // `toggleSessionSkill` uses through `control()`. This method then re-checks
+    // the type before parsing because it REQUIRES a body, and that second check
+    // is what turns a body-less 2xx into a typed failure rather than a raw
+    // `SyntaxError` from `res.json()`.
+    const fallback = spaFallbackContentType(res);
+    if (fallback !== null) {
+      throw new OrchestratorError(
+        'CONTRACT_DRIFT',
+        false,
+        `session.shell: expected JSON, got ${fallback} (HTTP ${res.status}) — ` +
+          'the request most likely hit the SPA fallback, not a route',
+      );
+    }
+    // `res.json()` THROWS on a non-JSON body — including a 2xx that declared no
+    // content-type at all — and an unhandled throw here would be an opaque
+    // `SyntaxError` rather than a typed OrchestratorError.
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch (err) {
+      throw new OrchestratorError(
+        'CONTRACT_DRIFT',
+        false,
+        `session.shell: response was not JSON (${err instanceof Error ? err.message : 'unknown'})`,
+      );
+    }
+    return normalizeShellResult(sessionId, command, raw);
   }
 
   /**
