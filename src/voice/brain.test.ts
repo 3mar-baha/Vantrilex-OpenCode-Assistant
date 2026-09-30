@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   OpenRouterBrainClient,
+  BRAIN_CEILING_MS,
   BRAIN_OPENROUTER_MODEL,
   openRouterChat,
   normalizeBrainJson,
@@ -275,6 +277,51 @@ describe('openRouterChat (shared P5 transport)', () => {
       retryable: false,
     });
     expect(calls).toBe(1);
+  });
+
+  // The timeout message used to hardcode "5.0s" while the abort timer used
+  // `options.timeoutMs ?? BRAIN_CEILING_MS`. A caller passing its own budget
+  // therefore got a timeout that misreported its own ceiling — a measured 6.0 s
+  // abort announced itself as "exceeded 5.0s ceiling", which sent the first
+  // investigation hunting for a 5 s budget on a 6 s timeout. The gate passes
+  // 12 s, so this is now the difference between a diagnostic that names its
+  // budget and one that confidently names the wrong one.
+  describe('the timeout reports the budget actually in force', () => {
+    const aborting = () => {
+      const e = new Error('aborted');
+      e.name = 'AbortError';
+      return Promise.reject(e);
+    };
+
+    test('a caller-supplied budget is reported, not the 5 s default', async () => {
+      const aborts = aborting as unknown as typeof fetch;
+      await expect(openRouterChat('k', 'm', 's', 'u', aborts, { timeoutMs: 12_000 })).rejects.toMatchObject({
+        code: 'BRAIN_TIMEOUT',
+        message: 'brain exceeded 12.0s ceiling',
+      });
+    });
+
+    test('with no override it names the default ceiling', async () => {
+      const aborts = aborting as unknown as typeof fetch;
+      await expect(openRouterChat('k', 'm', 's', 'u', aborts)).rejects.toMatchObject({
+        code: 'BRAIN_TIMEOUT',
+        message: `brain exceeded ${(BRAIN_CEILING_MS / 1000).toFixed(1)}s ceiling`,
+      });
+    });
+
+    // BREAK-THE-GUARD: restore the hardcoded literal
+    // `aborted ? 'brain exceeded 5.0s ceiling' : …` and both of the above fail
+    // — the first because it says 5.0s while the budget is 12 s, the second
+    // because it passes only by coincidence. Mutation run and reverted.
+    test('no timeout message hardcodes a ceiling', async () => {
+      const src = readFileSync(new URL('./brain.ts', import.meta.url), 'utf8');
+      // Guards the two throw sites rather than one: the BrainClient path has its
+      // own copy, which was correct-by-coincidence and would rot silently.
+      const literals = src.match(/brain exceeded [\d.]+s/g) ?? [];
+      expect(literals).toEqual([]);
+      expect(src).toContain('(budgetMs / 1000).toFixed(1)');
+      expect(src).toContain('(BRAIN_CEILING_MS / 1000).toFixed(1)');
+    });
   });
 });
 

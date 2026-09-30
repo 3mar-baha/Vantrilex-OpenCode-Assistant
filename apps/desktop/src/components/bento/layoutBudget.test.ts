@@ -35,9 +35,10 @@ const LONG_AR =
 describe('layoutBudget: the numbers', () => {
   test('the base width equals the window config minimum', () => {
     // If these drift apart the component tests are auditing a window that does
-    // not exist, so the value is asserted rather than assumed.
-    expect(BENTO_BASE_WIDTH_PX).toBe(440);
-    expect(BENTO_BASE_HEIGHT_PX).toBe(600);
+    // not exist, so the value is asserted rather than assumed. 380/380 since
+    // the HUD became the square companion widget — see `layoutBudget.ts`.
+    expect(BENTO_BASE_WIDTH_PX).toBe(380);
+    expect(BENTO_BASE_HEIGHT_PX).toBe(380);
   });
 
   test('LONG_TEXT_CHARS clears the shortest real labels in the HUD', () => {
@@ -82,7 +83,7 @@ describe('layoutBudget: the width audit detects a real overflow', () => {
   test('a KNOWN-BAD `w-[480px]` is caught', () => {
     const root = el('<div data-testid="bad"><span class="w-[480px] block">x</span></div>');
     const found = auditWidthBudget(root);
-    expect(found.length, formatViolations(found, 440)).toBe(1);
+    expect(found.length, formatViolations(found, BENTO_BASE_WIDTH_PX)).toBe(1);
     expect(found[0]?.kind).toBe('authored-width');
     expect(found[0]?.marker).toBe('span');
   });
@@ -90,7 +91,7 @@ describe('layoutBudget: the width audit detects a real overflow', () => {
   test('a KNOWN-BAD inline width is caught', () => {
     const root = el('<div><span style="width:520px" data-testid="inline">x</span></div>');
     const found = auditWidthBudget(root);
-    expect(found.length, formatViolations(found, 440)).toBe(1);
+    expect(found.length, formatViolations(found, BENTO_BASE_WIDTH_PX)).toBe(1);
     expect(found[0]?.kind).toBe('authored-width');
     expect(found[0]?.marker).toBe('[data-testid="inline"]');
   });
@@ -98,7 +99,7 @@ describe('layoutBudget: the width audit detects a real overflow', () => {
   test('a KNOWN-BAD min-width is caught and named as a min-width', () => {
     const root = el('<div><span class="min-w-[600px] block">x</span></div>');
     const found = auditWidthBudget(root);
-    expect(found.length, formatViolations(found, 440)).toBe(1);
+    expect(found.length, formatViolations(found, BENTO_BASE_WIDTH_PX)).toBe(1);
     expect(found[0]?.kind).toBe('min-width');
   });
 
@@ -118,7 +119,7 @@ describe('layoutBudget: the text audit detects a real overflow', () => {
   test('a KNOWN-BAD uncontained Arabic run is caught', () => {
     const root = el(`<div><span class="text-xs">${LONG_AR}</span></div>`);
     const found = auditTextContainment(root);
-    expect(found.length, formatViolations(found, 440)).toBe(1);
+    expect(found.length, formatViolations(found, BENTO_BASE_WIDTH_PX)).toBe(1);
     expect(found[0]?.kind).toBe('uncontained-text');
   });
 
@@ -141,7 +142,7 @@ describe('layoutBudget: the text audit detects a real overflow', () => {
     // "fine" here would make the audit pass by accident of structure.
     const root = el(`<div class="truncate"><span class="text-xs">${LONG_AR}</span></div>`);
     const found = auditTextContainment(root);
-    expect(found.length, formatViolations(found, 440)).toBe(1);
+    expect(found.length, formatViolations(found, BENTO_BASE_WIDTH_PX)).toBe(1);
   });
 });
 
@@ -161,6 +162,6 @@ describe('layoutBudget: helpers', () => {
     const root = el('<div class="min-w-0 flex flex-col gap-2"><span class="truncate">ok</span></div>');
     const found = auditBento(root);
     expect(found).toEqual([]);
-    expect(formatViolations(found, 440)).toBe('no violations at 440px');
+    expect(formatViolations(found, BENTO_BASE_WIDTH_PX)).toBe(`no violations at ${BENTO_BASE_WIDTH_PX}px`);
   });
 });

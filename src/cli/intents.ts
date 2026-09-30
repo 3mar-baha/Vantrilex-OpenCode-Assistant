@@ -8,15 +8,16 @@ import {
   type AddresseeVerdict,
 } from '../orchestrator/permission.js';
 import { openRouterChat } from '../voice/brain.js';
-import { COORDINATOR_MODEL, type ChatFn } from '../orchestrator/coordinator.js';
+import { COORDINATOR_MODEL, GATE_TIMEOUT_MS, type ChatFn } from '../orchestrator/coordinator.js';
 
 // HEADLESS INTENT TABLE — the contextual gate, measured.
 //
 // WHAT "THE REAL GATE" MEANS HERE, PRECISELY. The classification is
 // `parseAddressee` (`permission.ts:276`) applied to a reply produced under
-// `addresseeSystem()` with `ADDRESSEE_RESPONSE_FORMAT` and
-// `ADDRESSEE_CHAT_OPTIONS`. That is the identical triple `Coordinator.gate()`
-// passes to `deps.chat` (`coordinator.ts:388-393`). The table below never
+// `addresseeSystem()` with `ADDRESSEE_RESPONSE_FORMAT`, `ADDRESSEE_CHAT_OPTIONS`
+// and the 12 s `GATE_TIMEOUT_MS` override. That is the identical option bundle
+// `Coordinator.gate()` passes to `deps.chat` (`coordinator.ts:434`) — the
+// override included, because that is the part that drifted. The table below never
 // re-decides anything and never inspects the reply text: it records what
 // `parseAddressee` returned and compares it to a written expectation.
 //
@@ -202,8 +203,17 @@ export async function runIntentTable(cases: readonly IntentCase[], chat: ChatFn,
   const started = Date.now();
   const rows: IntentRow[] = [];
   for (const c of cases) {
-    // EXACTLY the triple `Coordinator.gate()` builds. If any of these three is
-    // substituted, this stops measuring the gate.
+    // EXACTLY the option bundle `Coordinator.gate()` builds (`coordinator.ts:434`),
+    // including the 12 s gate ceiling. If any part of it is substituted, this stops
+    // measuring the gate.
+    //
+    // THE TIMEOUT IS THE PART THAT DRIFTED, and it is why the spread order here is
+    // load-bearing rather than cosmetic. This call site once omitted `timeoutMs`
+    // entirely and so silently inherited the shared bundle's 6 s, while the real
+    // gate ran at 12 s — meaning a `undecided` recorded here could be an abort at a
+    // ceiling the gate does not have. `timeoutMs` therefore goes AFTER the spread:
+    // move it above and the spread clobbers it straight back to 6 s. Do not
+    // "simplify" it into the bundle, and do not delete it as redundant.
     const at = Date.now();
     let actual: AddresseeVerdict;
     let failure: string | null = null;
@@ -212,7 +222,7 @@ export async function runIntentTable(cases: readonly IntentCase[], chat: ChatFn,
         COORDINATOR_MODEL,
         addresseeSystem({}),
         `${c.utterance}\n\nTASK SPECIFICATION:\n${c.taskEn}`,
-        { ...ADDRESSEE_CHAT_OPTIONS, responseFormat: ADDRESSEE_RESPONSE_FORMAT },
+        { ...ADDRESSEE_CHAT_OPTIONS, responseFormat: ADDRESSEE_RESPONSE_FORMAT, timeoutMs: GATE_TIMEOUT_MS },
       );
       actual = parseAddressee(raw);
     } catch (err) {

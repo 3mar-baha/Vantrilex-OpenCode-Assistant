@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { COORDINATOR_MODEL, INTAKE_MODEL, type ChatFn, type ChatOptions } from '../orchestrator/coordinator.js';
+import { COORDINATOR_MODEL, GATE_TIMEOUT_MS, INTAKE_MODEL, type ChatFn, type ChatOptions } from '../orchestrator/coordinator.js';
 import { ADDRESSEE_CHAT_OPTIONS, ADDRESSEE_RESPONSE_FORMAT, PERMISSION_TTL_MS, addresseeSystem } from '../orchestrator/permission.js';
 import { INTENT_CASES, probePermissionSlot, replayGateChat, runIntentTable, structuralFaultsOf, type IntentRow } from './intents.js';
 
@@ -28,10 +28,10 @@ describe('the table, replayed through parseAddressee', () => {
     expect(report.source).toBe('replay');
   });
 
-  test('the chat is called with the coordinator\'s model and the gate\'s own triple', async () => {
+  test('the chat is called with the coordinator\'s model and the gate\'s own option bundle', async () => {
     // The thing that makes this "the real gate" rather than a reimplementation:
-    // the system prompt, the strict schema and the decoding controls are the
-    // product's own exports, passed through unchanged.
+    // the system prompt, the strict schema, the decoding controls and the 12 s
+    // ceiling are the product's own exports, passed through unchanged.
     const seen: Array<{ model: string; system: string; user: string; options: ChatOptions | undefined }> = [];
     const spy: ChatFn = async (model, system, user, options) => {
       seen.push({ model, system, user, options });
@@ -46,10 +46,45 @@ describe('the table, replayed through parseAddressee', () => {
     expect(call?.options?.reasoning).toEqual(ADDRESSEE_CHAT_OPTIONS.reasoning);
     expect(call?.options?.maxTokens).toBe(ADDRESSEE_CHAT_OPTIONS.maxTokens);
     expect(call?.options?.temperature).toBe(ADDRESSEE_CHAT_OPTIONS.temperature);
-    expect(call?.options?.timeoutMs).toBe(ADDRESSEE_CHAT_OPTIONS.timeoutMs);
+
+    // THE TIMEOUT, AND WHY THE OLD LINE HERE WAS VACUOUS.
+    //
+    // This used to read `toBe(ADDRESSEE_CHAT_OPTIONS.timeoutMs)`, which cannot
+    // fail: when this call site carried no `timeoutMs` the call simply INHERITED
+    // `ADDRESSEE_CHAT_OPTIONS.timeoutMs`, so the assertion compared the value the
+    // code had inherited against the same inherited value. The 6 s → 12 s drift in
+    // `coordinator.ts` passed straight through it. The property under test is
+    // that the call site OVERRIDES the shared bundle, so it is asserted as one:
+    // the concrete number the socket will actually use, the gate's exported
+    // constant, and — the part that would really catch a dropped property — a
+    // non-equality against the bundle value that an omission falls back to.
+    expect(GATE_TIMEOUT_MS).toBe(12_000);
+    expect(call?.options?.timeoutMs).toBe(12_000);
+    expect(call?.options?.timeoutMs).toBe(GATE_TIMEOUT_MS);
+    expect(call?.options?.timeoutMs).not.toBe(ADDRESSEE_CHAT_OPTIONS.timeoutMs);
+
     // The utterance and the task specification both travel, because the gate
     // judges the USER's words and the planner's restatement together.
     expect(call?.user).toContain('TASK SPECIFICATION:');
+  });
+
+  test('BREAK: dropping `timeoutMs` from the call site is caught, not inherited away', async () => {
+    // The break, on the assertion above rather than on the code: this hands the
+    // table the SAME options object the call site builds with the gate's timeout
+    // removed, i.e. exactly what the call site used to send. The strengthened
+    // timeout assertion must reject it. If the assertions were still comparing a
+    // value against `ADDRESSEE_CHAT_OPTIONS.timeoutMs` this would pass, because
+    // an omitted property means the 6 s bundle value — which is what made the
+    // original assertion unfailable.
+    const drifted: ChatOptions = { ...ADDRESSEE_CHAT_OPTIONS, responseFormat: ADDRESSEE_RESPONSE_FORMAT };
+    expect(drifted.timeoutMs).toBe(ADDRESSEE_CHAT_OPTIONS.timeoutMs);
+    expect(drifted.timeoutMs).not.toBe(GATE_TIMEOUT_MS);
+    expect(drifted.timeoutMs).toBe(6_000);
+
+    // Same table, same call path, only the options differ — and the real gate's
+    // own gate call does carry the override, which is the thing being mirrored.
+    expect(ADDRESSEE_CHAT_OPTIONS.timeoutMs).toBe(6_000);
+    expect({ ...ADDRESSEE_CHAT_OPTIONS, timeoutMs: GATE_TIMEOUT_MS }.timeoutMs).toBe(12_000);
   });
 
   test('a transport failure is recorded as `undecided`, the parser\'s fail-closed value', async () => {

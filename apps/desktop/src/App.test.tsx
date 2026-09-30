@@ -33,7 +33,6 @@ let pcmUp: number[] = [];
 let bridgeOptions: {
   onAudio?: (audio: Uint8Array) => void;
   onVoice?: (v: { phase: string }) => void;
-  onEvent?: (e: { state: string }) => void;
 } = {};
 
 vi.mock('./settings/ipc-token.js', () => ({
@@ -98,7 +97,7 @@ vi.mock('./audio/playback.js', async (importOriginal) => {
   return {
     ...actual,
     // The REAL AudioPlayer (so the real gate runs) with a fake codec and sink.
-    createDefaultPlayer: (events?: { onStart?(): void; onEnd?(): void }) => {
+    createDefaultPlayer: (events?: { onStart?(): void; onEnd?(): void; onLevel?(level: number): void }) => {
       let n = 0;
       return new actual.AudioPlayer({
         decode: async (bytes: Uint8Array) => `buf-${(n += 1)}-${bytes[0] ?? -1}` as unknown as AudioBuffer,
@@ -112,6 +111,10 @@ vi.mock('./audio/playback.js', async (importOriginal) => {
         },
         ...(events?.onStart !== undefined ? { onStart: events.onStart } : {}),
         ...(events?.onEnd !== undefined ? { onEnd: events.onEnd } : {}),
+        // Forwarded so the real player's level seam stays reachable from here.
+        // `App.orb.test.tsx` owns the wiring assertion; this file only needs the
+        // option not to be dropped by the mock.
+        ...(events?.onLevel !== undefined ? { onLevel: events.onLevel } : {}),
       });
     },
   };
@@ -227,6 +230,11 @@ function statusPill(): string {
   return document.body.querySelector('[data-testid="bridge-status"]')?.textContent ?? '';
 }
 
+/** The phase the orb is currently wearing, as the shell derived it. */
+function orbPhase(): string | null {
+  return document.body.querySelector('[data-testid="orb"]')?.getAttribute('data-phase') ?? null;
+}
+
 beforeEach(() => {
   played = [];
   sent = [];
@@ -254,10 +262,18 @@ describe('App: assistant mute is a real gate, not an ok:true (W6)', () => {
     expect(played).toEqual([1]);
   });
 
-  test('muted: downlink audio is dropped, and the pill stops claiming speech', async () => {
+  test('muted: downlink audio is dropped, and the shell stops claiming speech', async () => {
     await mountApp();
     await deliverAudio(1);
     expect(played).toEqual([1]);
+
+    // Positive control FIRST, on the unmuted shell: an audible turn really does
+    // put the widget in `speaking`. Without it, the assertion at the end of this
+    // test would also pass on a shell that never showed `speaking` at all.
+    await act(async () => {
+      bridgeOptions.onVoice?.({ phase: 'speaking' });
+    });
+    expect(orbPhase(), 'precondition: audible speech is shown as speaking').toBe('speaking');
 
     await act(async () => {
       botToggle().click();
@@ -265,13 +281,18 @@ describe('App: assistant mute is a real gate, not an ok:true (W6)', () => {
     expect(botToggle().getAttribute('aria-pressed')).toBe('true');
 
     // The daemon keeps synthesising; the player must refuse it.
-    bridgeOptions.onVoice?.({ phase: 'speaking' });
+    await act(async () => {
+      bridgeOptions.onVoice?.({ phase: 'speaking' });
+    });
     await deliverAudioExpectingDrop(2);
     expect(played).toEqual([1]);
 
-    // And the shell must not report audible speech while it is silenced.
+    // And the shell must not report audible speech while it is silenced. The
+    // old `speaking-indicator` paragraph is gone with the bento column; the
+    // orb's phase is now the shell's primary state readout, so that is what this
+    // asserts — and the status line beside it, which is a second reader.
+    expect(orbPhase(), 'a silenced assistant is not speaking').not.toBe('speaking');
     expect(statusPill()).not.toContain('يتحدث الآن');
-    expect(document.body.querySelector('[data-testid="speaking-indicator"]')).toBeNull();
   });
 
   test('un-muting restores audio, and the mute state survives the player being created late', async () => {
@@ -375,17 +396,36 @@ describe('App: barge-in stops SPEECH, the button stops the TURN (M2-P2)', () => 
     expect(pcmUp, 'a ducked frame never reaches STT').toEqual([]);
   });
 
-  test('the explicit abort button still sends abort, never stopSpeech', async () => {
+  test('the shell has NO turn-cancel control, so `abort` can never be sent', async () => {
+    // The old HUD had an `abort-button` in the bento's escape slot, and this
+    // suite's companion `App.escape.test.tsx` spent 300 lines proving a dead
+    // 4096 could not take it away. The 380x380 widget has three buttons and none
+    // of them is that one: mic, assistant volume, keys. So the property is now
+    // stronger and simpler — there is nothing to click.
+    //
+    // A "was not sent" assertion needs a matching "was sent" one or it is
+    // vacuous, and the barge case above is exactly that control: the SAME frame
+    // that used to reach the abort button reaches `stopSpeech` instead.
     await mountApp();
-    // The button's branch is `matrix !== 0` (`App.tsx:480`), so a real turn has
-    // to be on screen first — `matrixForDaemonState('running')` is 2.
+    // The assistant has to be AUDIBLY speaking before a loud frame is a barge:
+    // the gate compares against `speakingRef`, which only `onStart` sets. Same
+    // precondition `speakingWithMicOpen` establishes above.
+    await deliverAudio(1);
     await act(async () => {
-      bridgeOptions.onEvent?.({ state: 'running' });
+      (document.body.querySelector('[data-testid="mic-toggle"]') as HTMLElement).click();
     });
+    sent = [];
     await act(async () => {
-      (document.body.querySelector('[data-testid="abort-button"]') as HTMLElement).click();
+      captureEvents?.onFrame?.(loudFrame());
     });
-    expect(sent.map((c) => c.kind)).toEqual(['abort']);
+    expect(
+      sent.map((c) => c.kind),
+      'the barge path still sends, and it is the speech stop, not a turn cancel',
+    ).toEqual(['stopSpeech']);
+    expect(document.body.querySelector('[data-testid="abort-button"]')).toBeNull();
+    // And nothing in the shell can produce an `abort` on any path.
+    for (const node of Array.from(document.body.querySelectorAll('button'))) node.click();
+    expect(sent.map((c) => c.kind)).not.toContain('abort');
   });
 });
 

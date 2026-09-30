@@ -31,6 +31,42 @@ import {
 export const INTAKE_MODEL = 'dots-studio/dots-3-note-preview:free';
 export const COORDINATOR_MODEL = 'thinkingmachines/inkling:free';
 
+/**
+ * The gate's own transport budget, in ms.
+ *
+ * WHY THIS OVERRIDES `ADDRESSEE_CHAT_OPTIONS.timeoutMs` RATHER THAN EDITING IT.
+ * `ADDRESSEE_CHAT_OPTIONS` (permission.ts) is a shared decoding bundle: the
+ * offline intent table in `cli/intents.ts` reproduces it verbatim so the table
+ * measures the gate. A budget is a decision about the LIVE gate's blocking
+ * behaviour, and the live gate is here, immediately in front of the only
+ * `deps.dispatch` call in the tree. So the override sits at the call site and
+ * the shared bundle is left alone. The cost of that split is that
+ * `cli/intents.ts`'s "exactly the triple the gate builds" comment is now one
+ * component out of date — it measures the gate at the OLD 6 s budget. Reported,
+ * not silently absorbed; fixing that file was outside this change's write set.
+ *
+ * WHY 12,000 AND NOT THE 6,000 THAT WAS THERE. Measured 2026-09-30 against
+ * `thinkingmachines/inkling:free` on this exact path — `addresseeSystem()` +
+ * `ADDRESSEE_RESPONSE_FORMAT` strict schema, 31 completed calls across three
+ * sessions: min 3264, p50 4349, p90 5537, max 6607 ms. Under the shipped 6 s
+ * ceiling 3 of those calls aborted at ~6.01 s (6011 / 6013 / 6019), which is
+ * the same cliff the live turn hit: `BRAIN_TIMEOUT` → `gate-unavailable` →
+ * nothing dispatched, on a model whose p50 is 4.3 s. The product's only egress
+ * was being closed by a budget that fired on roughly one turn in ten.
+ *
+ * Those 3 samples are TRUNCATED, so the tail is bounded below and not above —
+ * 12 s is a budget, not a claim that nothing is slower. 12 s is ~1.8x the
+ * slowest completion ever observed (6607 ms) and follows the narrator precedent
+ * (8 s → 12 s after three ~5 s measurements). It is deliberately generous
+ * because the error is ASYMMETRIC: a ceiling that is too low does not make the
+ * gate slower, it fails the gate CLOSED and the user gets no dispatch at all
+ * (FR-12 is preserved — `gate()` catches, asks, and never reaches dispatch),
+ * while a ceiling that is too high costs latency on a rare path and nothing on
+ * a common one. Free-tier latency is documented in this repo as slow and
+ * lossy — re-measure, do not assume — so the budget carries headroom.
+ */
+export const GATE_TIMEOUT_MS = 12_000;
+
 export const IntakeSchema = z.object({
   reply_ar: z.string().min(1),
   task_en: z.string().min(1),
@@ -389,12 +425,26 @@ export class Coordinator {
         this.deps.coordinatorModel ?? COORDINATOR_MODEL,
         addresseeSystem(pending !== null ? { pending } : {}),
         `${opts.transcript}\n\nTASK SPECIFICATION:\n${opts.taskEn}`,
-        { ...ADDRESSEE_CHAT_OPTIONS, responseFormat: ADDRESSEE_RESPONSE_FORMAT },
+        // `timeoutMs` LAST so it overrides the shared bundle's 6 s. See
+        // `GATE_TIMEOUT_MS` for the measurement; the short version is that a
+        // 6 s ceiling aborted ~1 turn in 10 against a 4.3 s p50, and the gate
+        // fails closed, so every one of those was a turn that dispatched
+        // nothing. The spread order matters and is load-bearing: move
+        // `timeoutMs` above the spread and this silently reverts to 6 s.
+        { ...ADDRESSEE_CHAT_OPTIONS, responseFormat: ADDRESSEE_RESPONSE_FORMAT, timeoutMs: GATE_TIMEOUT_MS },
       );
     } catch {
       // Undecidable. Asking is the safe direction for BOTH misreads: a task we
       // swallowed silently is work the user asked for and never got, and a
       // question we dispatched is a prompt sent to a coding agent on a guess.
+      //
+      // STILL FAIL-CLOSED AT 12 s, and that is the property this budget must
+      // not buy its way out of. Raising the ceiling raises WHEN a genuine
+      // timeout is detected, never WHETHER it is: this catch is unchanged, it
+      // still returns without touching `deps.dispatch`, and `proceed` remains
+      // reachable only through `permission.consume()`. A slow gate that failed
+      // OPEN would be the far worse defect — it would send a prompt to a
+      // coding agent with nobody's approval.
       return this.ask(opts, session, 'تحتاج إذنك قبل ما أبعت أي شي لـ OpenCode؟', 'gate-unavailable');
     }
     if (opts.aborted()) {

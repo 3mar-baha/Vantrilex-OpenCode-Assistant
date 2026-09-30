@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   AudioPlayer,
   createDefaultPlayer,
+  LEVEL_FRAME_MS,
   MAX_COALESCE_TICKS,
   PLAYBACK_GAIN,
   PLAYBACK_QUEUE_CAP,
@@ -89,17 +90,87 @@ function harness() {
  * horizon lives in the sink, so that is the only place it is observable. `stops`
  * records halt calls, which is how barge-in is observed. `currentTime` is fixed
  * rather than ticking: the assertions are about the SCHEDULE asked for relative
- * to "now", which a frozen clock pins exactly.
+ * to "now", which a frozen clock pins exactly. `edges` records the graph wiring
+ * as `from->to`, which is the only way to prove a node sits BETWEEN two others.
+ *
+ * WHY A STUB AND NOT REAL WEBAUDIO: happy-dom 20.14.5 implements
+ * `requestAnimationFrame` but has no `AudioContext` at all (verified: `typeof
+ * window.AudioContext === 'undefined'`), so there is nothing real to read. Every
+ * `createDefaultPlayer` test in this file has always run against a fake context
+ * and this one does too. What the fake CAN establish, and does: the graph is
+ * wired `source -> gain -> analyser -> destination`; the sampler reads the
+ * analyser node rather than fabricating a number; and the mapping, smoothing,
+ * silence and containment properties hold on real bytes. What it cannot, and
+ * does not claim to, establish: that a real `getByteTimeDomainData` reports the
+ * graph's signal. That is a Web Audio guarantee — and the edge recording above
+ * is what makes the wiring claim structural instead of assumed.
  */
 function fakeContext(state: AudioContextState = 'running') {
   const connected: string[] = [];
+  const edges: string[] = [];
   const starts: (number | undefined)[] = [];
   const stops: number[] = [];
   let closed = 0;
   let resumed = 0;
+  /**
+   * The analyser's stand-in, and the part of this fake that has to be honest or
+   * the level tests are worthless.
+   *
+   * `amplitude` is the sine the GRAPH would be carrying; `live` is how many
+   * sources have been started. The waveform is emitted ONLY while `live > 0`,
+   * because a real `AnalyserNode` returns the silence constant (128) whenever
+   * nothing is connected and playing. A fake that returned a level whenever the
+   * test asked for one would pass every test in this block and prove nothing
+   * about silence.
+   *
+   * `reads` counts reads, so a test can assert the sampler read the NODE.
+   * `bufferLength` records what length buffer the node was handed, so a test can
+   * assert the sampler sizes it from `fftSize` rather than hard-coding a length.
+   */
+  const level = { amplitude: 1, live: 0, reads: 0, bufferLength: 0 };
+  const decode = { entered: 0, hold: false, release: null as null | (() => void) };
+  const nodeName = (v: unknown): string =>
+    typeof v === 'object' && v !== null && '__name' in v
+      ? String((v as { __name: string }).__name)
+      : String(v);
+  // The single analyser this context hands out, exposed as `ctx.analyser` so a
+  // test can assert how the WIRING configured it (fftSize, the smoothing
+  // constant it was told to set) and not merely that a node exists.
+  const analyser = {
+    __name: 'analyser',
+    // Both set by the wiring under test. `smoothingTimeConstant` starts at −1,
+    // not at the real 0.8 default, so an omission is visible instead of
+    // indistinguishable from a deliberate choice.
+    fftSize: 0,
+    smoothingTimeConstant: -1,
+    getByteTimeDomainData: (out: Uint8Array) => {
+      level.reads += 1;
+      level.bufferLength = out.length;
+      const amp = level.live > 0 ? level.amplitude : 0;
+      // Spec-faithful on length: the node writes `fftSize` elements and leaves
+      // any excess of `out` UNTOUCHED. That makes an over-allocated buffer a
+      // real failure rather than an invisible one — 0 in byte time-domain data
+      // is −1.0 once normalised, not silence, so leftover zero-fill shows up as
+      // a loud non-zero level in a silent passage. (The `fftSize/2` rule belongs
+      // to the FREQUENCY methods, not this one; an earlier version of the
+      // buffer-length test here asserted it and was wrong.)
+      const n = Math.min(out.length, analyser.fftSize);
+      for (let i = 0; i < n; i += 1) {
+        // A real sine, not a planted constant: the RMS the sampler computes is
+        // then the RMS of an actual waveform, and a full-scale sine measures
+        // ~0.707 (−3 dBFS) rather than 1.
+        out[i] = 128 + Math.round(amp * 127 * Math.sin((2 * Math.PI * i) / 32));
+      }
+    },
+    connect: (d: unknown) => {
+      connected.push('analyser');
+      edges.push(`analyser->${nodeName(d)}`);
+    },
+  };
   const ctx = {
     state,
     currentTime: 12,
+    analyser,
     resume: async () => {
       resumed += 1;
     },
@@ -107,28 +178,72 @@ function fakeContext(state: AudioContextState = 'running') {
       closed += 1;
     },
     createGain: () => ({
+      __name: 'gain',
       gain: { value: 1 },
       connect: (d: unknown) => {
         connected.push('gain');
-        void d;
+        edges.push(`gain->${nodeName(d)}`);
       },
     }),
+    createAnalyser: () => analyser,
     createBufferSource: () => ({
+      __name: 'source',
       buffer: null as AudioBuffer | null,
       onended: null as (() => void) | null,
       connect: (n: unknown) => {
         connected.push('source');
-        void n;
+        edges.push(`source->${nodeName(n)}`);
       },
-      start: (when?: number) => void starts.push(when),
+      start: (when?: number) => {
+        starts.push(when);
+        level.live += 1;
+      },
       stop: () => void stops.push(starts.length),
     }),
-    decodeAudioData: async () => ({ duration: 1.5 }) as unknown as AudioBuffer,
+    decodeAudioData: async () => {
+      decode.entered += 1;
+      if (decode.hold) {
+        decode.hold = false;
+        await new Promise<void>((r) => {
+          decode.release = r;
+        });
+      }
+      return { duration: 1.5 } as unknown as AudioBuffer;
+    },
     destination: 'destination',
   };
   return {
     ctx,
-    stats: () => ({ closed, resumed, connected, starts, stops }),
+    level,
+    /**
+     * Hold the NEXT decode open, so a run stays latched for as long as a test
+     * needs. Off by default, so every pre-existing test's decode resolves
+     * immediately exactly as it did before.
+     *
+     * This exists because a run that drains in three macrotasks never gets a
+     * 16 ms sampler tick: a level test written against the drain alone would
+     * measure nothing and pass. The real decode is async too, so parking one is
+     * faithful rather than a contrivance.
+     */
+    hold: (): void => {
+      decode.hold = true;
+    },
+    release: (): void => {
+      const r = decode.release;
+      decode.release = null;
+      if (r !== null) r();
+    },
+    stats: () => ({
+      closed,
+      resumed,
+      connected,
+      edges,
+      starts,
+      stops,
+      decodes: decode.entered,
+      reads: level.reads,
+      bufferLength: level.bufferLength,
+    }),
   };
 }
 
@@ -890,5 +1005,365 @@ describe('AudioPlayer regression pins (M1)', () => {
     expect(starts[1]).toBe('pb-2'); // monotonic correlation id, per run
     expect(ends).toHaveLength(2); // the latch CLEARED — no third end
     expect(player.playing).toBe(false);
+  });
+});
+
+// ── Downlink LEVEL (onLevel) ───────────────────────────────────────────────────
+// The orb's `outputLevel`. `capture.ts` has measured the UPLINK since P4; this is
+// the downlink equivalent, and the whole point of the seam is that it is a
+// MEASUREMENT of the audio in the graph rather than a proxy for "something was
+// enqueued" — a proxy would hold the orb lit through the gaps Fish leaves
+// between sentences and through the silence after a barge-in.
+//
+// The four properties pinned here, in the order they matter:
+//   1. the analyser is IN the output path (not tapped beside it),
+//   2. a playing source reads in (0, 1], and the reading is smoothed,
+//   3. silence reads as EXACTLY 0 — the orb cannot be pinned lit,
+//   4. a throwing consumer cannot break playback or reject the drain.
+describe('AudioPlayer downlink level (onLevel)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  type FakeCtx = ReturnType<typeof fakeContext>;
+
+  function stub(f: FakeCtx): void {
+    vi.stubGlobal('AudioContext', function AudioContextStub() {
+      return f.ctx;
+    });
+  }
+
+  /**
+   * A player MID-SENTENCE, which is the only state in which "a level" means
+   * anything: one payload already handed to the graph (so the analyser has a
+   * live source and stops returning the silence constant) and a second decode
+   * parked so the run stays latched while the 16 ms sampler ticks.
+   *
+   * Both halves are needed. Without the parked decode the run drains in three
+   * macrotasks and the sampler never ticks, so a level test written against the
+   * drain alone measures nothing and passes — the exact failure this file's
+   * header warns about. Without the first payload the graph is silent, so there
+   * is no signal to measure.
+   *
+   * `levels` is truncated before returning: the first payload's run ends inside
+   * the same macrotask that starts its source, so its only emission is the
+   * terminal zero, and what follows must measure the run that is still open.
+   */
+  async function midSentence(f: FakeCtx, levels: number[]): Promise<AudioPlayer> {
+    stub(f);
+    const player = createDefaultPlayer({ onLevel: (l) => void levels.push(l) });
+    player.enqueue(new Uint8Array([1]));
+    await settled('the first source to start', () => f.stats().starts.length === 1);
+    await settled('the first run to end', () => !player.playing);
+    levels.length = 0;
+    f.hold();
+    player.enqueue(new Uint8Array([2]));
+    await settled('the second decode to park', () => f.stats().decodes === 2);
+    return player;
+  }
+
+  // ── 1. the wiring ──────────────────────────────────────────────────────────
+  test('the analyser sits IN the output path: source -> gain -> analyser -> destination', async () => {
+    // The strongest available statement about requirement 1, and structural
+    // rather than behavioural: the edge list says where each node is attached.
+    // Moving the analyser to the tail (source -> gain -> destination, tapped off
+    // the gain) or in front of the gain both change this list and fail here,
+    // which a test that only asserted "an analyser exists" would not catch.
+    const f = fakeContext();
+    stub(f);
+    const player = createDefaultPlayer();
+    player.enqueue(new Uint8Array([1]));
+    await settled('a source to be connected', () => f.stats().edges.includes('source->gain'));
+    expect(f.stats().edges).toEqual(['gain->analyser', 'analyser->destination', 'source->gain']);
+    // Post-gain, not pre-gain: the level a consumer sees is the level that
+    // reaches the speakers, so the orb cannot disagree with PLAYBACK_GAIN.
+    expect(f.ctx.analyser.smoothingTimeConstant).toBe(0);
+  });
+
+  test('the sampler reads the node at the window the node was configured for', async () => {
+    const f = fakeContext();
+    stub(f);
+    const player = createDefaultPlayer({ onLevel: () => undefined });
+    // The run has to be HELD OPEN here, exactly as in `midSentence`. A run that
+    // drains in three macrotasks never gets a 16 ms sampler tick, so the
+    // analyser is never read at all and `bufferLength` stays 0 — which is what
+    // the first version of this test asserted, and it failed for exactly that
+    // reason rather than for anything to do with the buffer length.
+    player.enqueue(new Uint8Array([1]));
+    await settled('the first source to start', () => f.stats().starts.length === 1);
+    f.hold();
+    player.enqueue(new Uint8Array([2]));
+    await settled('the second decode to park', () => f.stats().decodes === 2);
+    await settled('the sampler to read the analyser', () => f.stats().reads >= 1);
+    expect(f.ctx.analyser.fftSize).toBeGreaterThan(0);
+    // `getByteTimeDomainData` fills `fftSize` elements (the `fftSize/2` rule is
+    // the FREQUENCY methods'). Sizing the buffer from the node rather than from a
+    // constant is the property here: a hard-coded length that happened to match
+    // today's would be right today and silently wrong the first time someone
+    // retuned the window, and the symptom is a wrong NUMBER — which reads as a
+    // slightly quiet reply, not as a bug.
+    expect(f.stats().bufferLength).toBe(f.ctx.analyser.fftSize);
+  });
+
+  // ── 2. a playing source ────────────────────────────────────────────────────
+  test('a playing source reports a level in (0, 1], read from the node', async () => {
+    const f = fakeContext();
+    const levels: number[] = [];
+    const player = await midSentence(f, levels);
+    await settled('the sampler to read the analyser several times', () => f.stats().reads >= 6);
+    f.release();
+    await settled('the run to end', () => !player.playing);
+
+    // The value came from the NODE, several times over. Queue depth and chunk
+    // count cannot produce this counter, and neither can a fabricated constant.
+    expect(f.stats().reads).toBeGreaterThanOrEqual(6);
+    expect(levels.length).toBeGreaterThan(0);
+    const loud = levels.filter((l) => l > 0);
+    expect(loud.length).toBeGreaterThan(0);
+    for (const level of levels) {
+      expect(level).toBeGreaterThanOrEqual(0);
+      expect(level).toBeLessThanOrEqual(1);
+    }
+    // …and it does not PEG. A full-scale sine measures −3 dBFS and maps to ~0.95
+    // against a 0 dBFS ceiling, so the mapping keeps a top end. A ceiling that
+    // a sine can reach would flatten loud replies to the same value and leave
+    // the orb with no dynamic range in the half of its range that matters.
+    expect(Math.max(...levels)).toBeLessThan(1);
+  });
+
+  test('the reading is SMOOTHED — the first frame is not the raw measurement', async () => {
+    const f = fakeContext();
+    const levels: number[] = [];
+    const player = await midSentence(f, levels);
+    await settled('the sampler to read the analyser several times', () => f.stats().reads >= 6);
+    f.release();
+    await settled('the run to end', () => !player.playing);
+
+    // Stated as a RELATION rather than a threshold on purpose. The raw
+    // measurement for a full-scale sine is ~0.95, so an unsmoothed read would
+    // report the full value on the FIRST frame and the orb would jump to full
+    // brightness on every syllable. One frame of a 40 ms attack cannot be most
+    // of the way to the target however the machine paces its timers, so
+    // `first < peak` separates the two without hard-coding a constant that
+    // would break the moment the attack changes.
+    const first = levels[0] as number;
+    const peak = Math.max(...levels);
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(peak);
+  });
+
+  // ── 3. silence ─────────────────────────────────────────────────────────────
+  test('with no source playing the level is EXACTLY 0, even though the graph could be loud', async () => {
+    // The anti-vacuity case, and the one that matters most for a lit-forever orb.
+    // The fake's analyser is PRIMED to return a full-scale sine and returns the
+    // silence constant only because no source has been started — so a sampler
+    // that fabricated a level from the queue, from `playing`, or from a stale
+    // buffer fails here. An assertion over an empty array of emissions would
+    // have passed vacuously, so the emptiness is closed off: the reads counter
+    // proves the sampler really was running, and the run really was open.
+    const f = fakeContext();
+    const levels: number[] = [];
+    stub(f);
+    f.hold();
+    const player = createDefaultPlayer({ onLevel: (l) => void levels.push(l) });
+    player.enqueue(new Uint8Array([1]));
+    await settled('the decode to park', () => f.stats().decodes === 1);
+    await settled('the sampler to read the analyser several times', () => f.stats().reads >= 4);
+    // The run is OPEN and the sampler is RUNNING while the level reads zero.
+    expect(player.playing).toBe(true);
+    f.release();
+    await settled('the run to end', () => !player.playing);
+
+    expect(f.stats().reads).toBeGreaterThanOrEqual(4);
+    expect(levels.length).toBeGreaterThan(0);
+    for (const level of levels) expect(level).toBe(0);
+  });
+
+  test('a reply that falls silent releases the level back to exactly 0', async () => {
+    // The tail of every real reply, and the release half of the smoothing. The
+    // source stays live — `amplitude` goes to zero with the graph untouched —
+    // which is what an inter-word gap and a decoded MP3's silent tail both look
+    // like. The 200 ms release then has to land on an exact zero, not a value
+    // too small for a consumer to see.
+    const f = fakeContext();
+    const levels: number[] = [];
+    const player = await midSentence(f, levels);
+    await settled('a non-zero level', () => levels.some((l) => l > 0));
+    f.level.amplitude = 0;
+    await settled('the level to release to 0', () => levels[levels.length - 1] === 0);
+    f.release();
+    await settled('the run to end', () => !player.playing);
+    expect(levels.some((l) => l > 0)).toBe(true);
+    expect(levels[levels.length - 1]).toBe(0);
+  });
+
+  test('a run that ends on its own publishes a terminal zero', async () => {
+    // The natural end of a reply, as opposed to a barge-in. Without this the
+    // consumer is left holding the last envelope value of a player that has
+    // stopped, and the orb stays lit for the rest of the session.
+    const f = fakeContext();
+    const levels: number[] = [];
+    const player = await midSentence(f, levels);
+    await settled('a non-zero level', () => levels.some((l) => l > 0));
+    f.release();
+    await settled('the run to end', () => !player.playing);
+    expect(levels[levels.length - 1]).toBe(0);
+  });
+
+  test('a barge-in returns the level to 0 and stops the sampler for good', async () => {
+    const f = fakeContext();
+    const levels: number[] = [];
+    const player = await midSentence(f, levels);
+    await settled('a non-zero level', () => levels.some((l) => l > 0));
+    const readsBeforeStop = f.stats().reads;
+    const beforeStop = levels.length;
+    player.stop();
+    expect(levels[levels.length - 1]).toBe(0);
+    // A real wait, and deliberately: the property is that something does NOT
+    // happen, and a negative has no predicate to poll. `turns()` counts
+    // macrotasks and the sampler's period is 16 ms of WALL time, so `turns()`
+    // here would be a bet that enough macrotasks elapse rather than a statement
+    // about this code. Sized at three nominal frames, off the exported constant.
+    await new Promise<void>((r) => setTimeout(r, LEVEL_FRAME_MS * 3));
+    // The race `clearTimeout` cannot win: a tick already sitting in the
+    // macrotask queue still runs, and one that published a non-zero level would
+    // repaint a lit orb straight through the barge-in that stopped it.
+    expect(f.stats().reads).toBe(readsBeforeStop);
+    // Exactly one emission — the terminal zero — and nothing after it.
+    expect(levels.length).toBe(beforeStop + 1);
+    expect(levels[levels.length - 1]).toBe(0);
+  });
+
+  test('a muted player reports no level at all — the gate is before the run', async () => {
+    const f = fakeContext();
+    const levels: number[] = [];
+    stub(f);
+    const player = createDefaultPlayer({ onLevel: (l) => void levels.push(l) });
+    player.setMuted(true);
+    player.enqueue(new Uint8Array([1]));
+    await turns(4);
+    expect(levels).toEqual([]);
+    expect(f.stats().decodes).toBe(0);
+    expect(f.stats().reads).toBe(0);
+  });
+
+  // ── 4. a throwing consumer ─────────────────────────────────────────────────
+  test('a throwing onLevel cannot wedge the player or reject the floating drain', async () => {
+    // vitest fails a run on an unhandled rejection, so the absence of one is
+    // part of what this asserts — that is why the second chunk playing is the
+    // signal and not the first. Same shape as the F-01 finding for `onEnd` and
+    // the throwing-`onStop` test above: a consumer callback must not be able to
+    // break every later chunk.
+    const played: number[] = [];
+    const ends: number[] = [];
+    const player = new AudioPlayer({
+      decode: async (b: Uint8Array) => b[0] as unknown as AudioBuffer,
+      sink: { play: (b: AudioBuffer) => void played.push(b as unknown as number) },
+      // The same shape as the production sampler: reports off a timer, so
+      // throws land where a real one would put them — off a callback rather
+      // than on the caller's stack.
+      levelSource: (emit) => {
+        let stopped = false;
+        const pump = (): void => {
+          if (stopped) return;
+          emit(0.5);
+          setTimeout(pump, 1);
+        };
+        pump();
+        return () => {
+          stopped = true;
+        };
+      },
+      onLevel: () => {
+        throw new Error('consumer blew up');
+      },
+      onEnd: () => void ends.push(1),
+    });
+    player.enqueue(new Uint8Array([1]));
+    await settled('the first run to end', () => ends.length === 1);
+    player.enqueue(new Uint8Array([2]));
+    await settled('a later chunk to still play', () => played.length === 2);
+    expect(played).toEqual([1, 2]);
+    expect(ends).toHaveLength(2);
+    expect(() => player.stop()).not.toThrow();
+  });
+
+  test('a throwing onLevel does not break the PRODUCTION sampler or the run', async () => {
+    const f = fakeContext();
+    stub(f);
+    const player = createDefaultPlayer({
+      onLevel: () => {
+        throw new Error('consumer blew up');
+      },
+    });
+    player.enqueue(new Uint8Array([1]));
+    await settled('the first source to start', () => f.stats().starts.length === 1);
+    player.enqueue(new Uint8Array([2]));
+    // The second source is the observable: a throw escaping the sampler would
+    // have stopped the timer or the drain, and this is where it shows.
+    await settled('the second source to start', () => f.stats().starts.length === 2);
+    expect(f.stats().starts).toHaveLength(2);
+    expect(() => player.stop()).not.toThrow();
+    expect(() => player.dispose()).not.toThrow();
+  });
+
+  test('a levelSource that throws cannot take the enqueue path down with it', async () => {
+    // The other containment: a sampler that cannot START. A level is an optional
+    // visual, and losing it must not cost the user their audio.
+    const played: number[] = [];
+    const player = new AudioPlayer({
+      decode: async (b: Uint8Array) => b[0] as unknown as AudioBuffer,
+      sink: { play: (b: AudioBuffer) => void played.push(b as unknown as number) },
+      levelSource: () => {
+        throw new Error('no analyser here');
+      },
+      onLevel: () => undefined,
+    });
+    player.enqueue(new Uint8Array([1]));
+    await settled('the chunk to play', () => played.length === 1);
+    expect(played).toEqual([1]);
+    expect(() => player.stop()).not.toThrow();
+  });
+
+  // ── the optional path ──────────────────────────────────────────────────────
+  test('a player with no onLevel supplied samples nothing and raises nothing', async () => {
+    // Both halves or neither. With no consumer there must be no sampler, so no
+    // analyser read and no 60 Hz timer per run — and, the other direction, a
+    // player nobody is watching must not fail for wanting to be watched.
+    const f = fakeContext();
+    stub(f);
+    const player = createDefaultPlayer();
+    player.enqueue(new Uint8Array([1]));
+    await settled('the first source to start', () => f.stats().starts.length === 1);
+    await turns(4);
+    expect(f.stats().reads).toBe(0);
+    expect(f.stats().starts).toHaveLength(1);
+    expect(() => player.stop()).not.toThrow();
+    expect(() => player.dispose()).not.toThrow();
+  });
+
+  test('a sampler is created per run and stopped per run, not once per player', async () => {
+    const started: number[] = [];
+    const stopped: number[] = [];
+    const player = new AudioPlayer({
+      decode: async (b: Uint8Array) => b[0] as unknown as AudioBuffer,
+      sink: { play: () => undefined },
+      onEnd: () => undefined,
+      levelSource: (emit) => {
+        emit(0.5);
+        started.push(1);
+        return () => stopped.push(1);
+      },
+      onLevel: () => undefined,
+    });
+    player.enqueue(new Uint8Array([1]));
+    await settled('the first run to end', () => !player.playing);
+    player.enqueue(new Uint8Array([2]));
+    await settled('the second run to end', () => !player.playing);
+    // Two runs, two samplers, two stops. A sampler cached for the player's
+    // lifetime would carry run 1's smoothed value into run 2 — the envelope of
+    // a reply that has already finished.
+    expect(started).toHaveLength(2);
+    expect(stopped).toHaveLength(2);
   });
 });

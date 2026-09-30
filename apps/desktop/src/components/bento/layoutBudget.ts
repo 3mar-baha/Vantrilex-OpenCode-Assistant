@@ -1,4 +1,4 @@
-// The 440 px budget, as an instrument rather than a comment.
+// The window-width budget, as an instrument rather than a comment.
 //
 // ── WHY A STATIC AUDIT AND NOT A MEASUREMENT ─────────────────────────────────
 //
@@ -17,7 +17,7 @@
 //
 //   1. AN AUTHORED WIDTH OVER BUDGET — a `w-[480px]` or `min-w-[500px]` on any
 //      node. That is a hard overflow by construction, regardless of viewport.
-//   2. AN UNCONTAINED LONG TEXT NODE — Arabic prose that can out-run 440 px
+//   2. AN UNCONTAINED LONG TEXT NODE — Arabic prose that can out-run the budget
 //      with nothing to clip, wrap or scroll it. This is the mechanism the
 //      brief names ("long Arabic strings must truncate, not overflow"), and it
 //      is the one that actually bites: a 90-character task title in a flex row
@@ -39,15 +39,22 @@
  * The base window width, in CSS px. Mirrors `width` / `minWidth` in
  * `src-tauri/tauri.conf.json`, which are documented as LOGICAL pixels — the
  * same unit this audit works in, so the two are directly comparable.
+ *
+ * MOVED from 440 when the HUD became a 380x380 companion widget. The audit
+ * itself did NOT go away with the bento column: it is a static instrument for
+ * the two mechanisms that cause horizontal overflow, and `App.shell.test.tsx`
+ * runs it against the composed shell that replaced `BentoGrid`. What changed is
+ * the number it judges against, and leaving it at 440 would have made every
+ * audit in the repo pass a budget the window does not have.
  */
-export const BENTO_BASE_WIDTH_PX = 440;
+export const BENTO_BASE_WIDTH_PX = 380;
 
 /** The base/minimum window height. Same source, same unit. */
-export const BENTO_BASE_HEIGHT_PX = 600;
+export const BENTO_BASE_HEIGHT_PX = 380;
 
 /**
- * A text node longer than this is assumed able to out-run 440 px and so is
- * required to be contained. Set well clear of the shortest labels in the HUD
+ * A text node longer than this is assumed able to out-run the budget and so is
+ * required to be contained. Set well clear of the shortest labels in the shell
  * ("الجلسة النشطة", "Voxaura", "جارٍ التنفيذ") so an ordinary short static
  * label never trips it — the audit is for the length that actually overflows,
  * not for text being text.
@@ -66,7 +73,7 @@ export interface BudgetViolation {
 }
 
 /**
- * Classes that make a box SAFE at 440 px: it clips, it wraps, or it scrolls.
+ * Classes that make a box SAFE at the budget: it clips, it wraps, or it scrolls.
  *
  * `max-w-[900px]` is deliberately absent from the width audit below but present
  * here, because a max-width is a CEILING, not a floor: it never forces a box

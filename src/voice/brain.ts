@@ -5,6 +5,20 @@ import { OrchestratorError } from '../common/errors.js';
 // 2.0 s golden mark / 5.0 s hard abort, validated JSON output, high-stakes gate.
 // Phrasing is synthesized by the model under the RAG-grounded system prompt;
 // anchors in docs are illustrative, never templates.
+//
+// SCOPE, because the gate now runs on a different budget and the two numbers
+// read as a contradiction if this is not stated. `BRAIN_CEILING_MS` is the
+// DEFAULT for `openRouterChat` and the hard abort for the `BrainClient` path
+// (`respond`, used by `cli live`). It is NOT the ceiling for the coordinator
+// chain, whose stages pass their own budgets — intake 10 s, plan 25 s, and the
+// permission gate `GATE_TIMEOUT_MS` (12 s), each measured separately. The gate
+// outgrew the default because a 6 s budget aborted ~1 turn in 10 against a
+// 4.3 s p50; see `GATE_TIMEOUT_MS` in coordinator.ts for the distribution.
+//
+// `BRAIN_GOLDEN_MS` is a REPORTING threshold, not a budget: it sets
+// `goldenBreached` on the result and aborts nothing. Nothing in the tree
+// enforces it, so it can be exceeded without consequence — do not "fix" a
+// golden breach by raising a timeout, which is a different problem.
 export const BRAIN_GOLDEN_MS = 2000;
 export const BRAIN_CEILING_MS = 5000;
 
@@ -181,8 +195,11 @@ export const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completion
 /**
  * Raw OpenRouter chat call returning the assistant content string. Shared by
  * the brain client and the P5 coordinator chain so both stages speak the same
- * transport: Bearer auth, `response_format: json_object`, 5 s ceiling. Key is
- * caller-supplied (vault) — never hardcoded, never logged.
+ * transport: Bearer auth, `response_format: json_object`. The ceiling DEFAULTS
+ * to `BRAIN_CEILING_MS` but is overridable per call, and stages that override it
+ * (the permission gate passes `GATE_TIMEOUT_MS`) get their own budget rather
+ * than being clamped to the default. Key is caller-supplied (vault) — never
+ * hardcoded, never logged.
  */
 export async function openRouterChat(
   apiKey: string,
@@ -193,7 +210,16 @@ export async function openRouterChat(
   options: { reasoning?: unknown; maxTokens?: number; temperature?: number; timeoutMs?: number; responseFormat?: unknown } = {},
 ): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? BRAIN_CEILING_MS);
+  // Hoisted so the abort timer and the error message are driven by ONE value.
+  // They were not: the message below hardcoded "5.0s" while the timer used
+  // this expression, so a caller passing its own budget (the gate passes
+  // `GATE_TIMEOUT_MS`) produced a timeout that misreported its own ceiling —
+  // a measured 6.0 s abort announced itself as "exceeded 5.0s ceiling". That
+  // sent the first investigation looking for a 5 s budget on a 6 s timeout,
+  // which is exactly the wrong place to look. A diagnostic that lies about its
+  // own limit is worse than no diagnostic: it is confidently wrong.
+  const budgetMs = options.timeoutMs ?? BRAIN_CEILING_MS;
+  const timer = setTimeout(() => controller.abort(), budgetMs);
   try {
     const res = await fetchImpl(OPENROUTER_CHAT_URL, {
       method: 'POST',
@@ -257,7 +283,14 @@ export async function openRouterChat(
   } catch (err) {
     if (err instanceof OrchestratorError) throw err;
     const aborted = err instanceof Error && err.name === 'AbortError';
-    throw new OrchestratorError('BRAIN_TIMEOUT', true, aborted ? 'brain exceeded 5.0s ceiling' : `brain call failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    // The budget in force, not a constant. `(budgetMs / 1000).toFixed(1)` is
+    // what "5.0s ceiling" always meant to say; it is now derived from the same
+    // value the abort timer used, so the two cannot disagree.
+    throw new OrchestratorError(
+      'BRAIN_TIMEOUT',
+      true,
+      aborted ? `brain exceeded ${(budgetMs / 1000).toFixed(1)}s ceiling` : `brain call failed: ${err instanceof Error ? err.message : 'unknown'}`,
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -365,7 +398,17 @@ export class OpenRouterBrainClient implements BrainClient {
     } catch (err) {
       if (err instanceof OrchestratorError) throw err;
       const aborted = err instanceof Error && err.name === 'AbortError';
-      throw new OrchestratorError('BRAIN_TIMEOUT', true, aborted ? 'brain exceeded 5.0s ceiling — fallback briefing' : `brain call failed: ${err instanceof Error ? err.message : 'unknown'}`);
+      // Same rule as `openRouterChat`, for the same reason. This path has no
+      // per-call override so its budget IS `BRAIN_CEILING_MS`, which means the
+      // literal "5.0s" is correct today and will be silently wrong the day the
+      // constant moves. Derived, so it cannot rot.
+      throw new OrchestratorError(
+        'BRAIN_TIMEOUT',
+        true,
+        aborted
+          ? `brain exceeded ${(BRAIN_CEILING_MS / 1000).toFixed(1)}s ceiling — fallback briefing`
+          : `brain call failed: ${err instanceof Error ? err.message : 'unknown'}`,
+      );
     } finally {
       clearTimeout(timer);
     }

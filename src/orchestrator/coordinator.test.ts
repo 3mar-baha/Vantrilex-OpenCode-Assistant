@@ -3,6 +3,7 @@ import {
   Coordinator,
   INTAKE_MODEL,
   COORDINATOR_MODEL,
+  GATE_TIMEOUT_MS,
   buildHandoff,
   type MissionResult,
 } from './coordinator.js';
@@ -761,5 +762,124 @@ describe('M2 Pattern 6a — never assert results', () => {
     await coordinator.intake('اعرض الجلسات');
 
     expect(systems[0]).toMatch(/nothing has run/i);
+  });
+});
+
+// The gate's transport budget, and the invariant that raising it must not have
+// moved.
+//
+// WHY THIS BLOCK EXISTS SEPARATELY FROM THE FR-12 SUITE ABOVE. The FR-12 tests
+// assert that a destructive plan is held for approval. They do NOT assert which
+// budget the gate call runs on, which is why a 6 s ceiling could ship against a
+// 4.3 s p50 and close the product's only egress on roughly one turn in ten
+// while every FR-12 test stayed green: the gate was failing CLOSED, which is
+// precisely the behaviour those tests were built to enforce. A fail-closed
+// regression is invisible to a suite that only checks fail-closed.
+describe('gate transport budget', () => {
+  test('the gate call carries the measured 12 s budget, not the shared 6 s default', () => {
+    // The value itself. Measured 2026-09-30 on the gate's own path (31 calls,
+    // p50 4349 ms, max 6607 ms); 6 s aborted 3 of them at ~6.01 s and each one
+    // failed closed, so the turn dispatched nothing.
+    expect(GATE_TIMEOUT_MS).toBe(12_000);
+
+    // The spread ORDER, which is the part that rots. `timeoutMs` sits after the
+    // `...ADDRESSEE_CHAT_OPTIONS` spread; moving it above the spread reverts the
+    // gate to 6 s with no type error and no failing test anywhere else.
+    let seen: { timeoutMs?: number } | null = null;
+    const dispatched: string[] = [];
+    const coordinator = new Coordinator({
+      chat: async (model, system, _user, options) => {
+        if (system.includes('addressee gate')) {
+          seen = (options ?? {}) as { timeoutMs?: number };
+          return gateReplyFor(system);
+        }
+        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+      },
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'x' };
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    return coordinator
+      .run('اعرض الجلسات')
+      .then(() => {
+        expect(seen).not.toBeNull();
+        expect(seen!.timeoutMs).toBe(12_000);
+        // Explicitly NOT the shared bundle's value. If someone edits
+        // ADDRESSEE_CHAT_OPTIONS to something larger this is the assertion that
+        // stops the gate silently drifting away from its own documented budget.
+        expect(seen!.timeoutMs).not.toBe(6_000);
+        expect(dispatched).toHaveLength(0);
+      });
+  });
+
+  test('the raised budget does NOT make the gate fail open — a slow gate still asks', async () => {
+    // The FR-12 invariant, restated against the specific change. This is the
+    // test that matters most in this file: raising a budget is exactly the kind
+    // of edit that can quietly become "give it more time and assume it worked".
+    //
+    // It must NOT. A gate call that never resolves must still reach the catch,
+    // still ask, and still dispatch NOTHING. Approving is reachable only
+    // through `permission.consume()` with an exact id match.
+    const dispatched: string[] = [];
+    let asks = 0;
+    const coordinator = new Coordinator({
+      chat: async (model, system) => {
+        if (system.includes('addressee gate')) {
+          // Simulates the transport aborting at the new ceiling.
+          throw Object.assign(new Error('brain exceeded 12.0s ceiling'), { name: 'AbortError' });
+        }
+        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+      },
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'must_not_happen' };
+      },
+      onPermissionRequired: () => {
+        asks += 1;
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const result = await coordinator.run('اعرض الجلسات');
+
+    // BREAK-THE-GUARD: change the gate's `catch` to `return { kind: 'proceed' }`
+    // (or widen it to only rethrow), and this test fails — dispatched goes from
+    // [] to one entry and detail stops being 'gate-unavailable'. Verified by
+    // running that mutation; see the report.
+    expect(dispatched).toEqual([]);
+    expect(result.detail).toBe('gate-unavailable');
+    expect(result.receipt).toBeNull();
+    expect(asks).toBe(1);
+
+    // The planner was never reached either: a gate that cannot decide spends
+    // nothing downstream, which is the other half of "fails closed".
+    expect(result.plan).toBeUndefined();
+  });
+
+  test('a gate timeout is reported as a timeout, not a dispatch', async () => {
+    // One turn, one aborting gate. The result must be a structured
+    // gate-unavailable ask and never a thrown provider error — the gate's
+    // catch is the reason a free-tier outage is a question rather than silence.
+    const dispatched: string[] = [];
+    const coordinator = new Coordinator({
+      chat: async (model, system) => {
+        if (system.includes('addressee gate')) throw new Error('upstream 500');
+        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+      },
+      dispatch: async (text) => {
+        dispatched.push(text);
+        return { receipt: 'must_not_happen' };
+      },
+      activeSessionId: () => 'ses_a' as never,
+    });
+
+    const result = await coordinator.run('اعرض الجلسات');
+
+    expect(dispatched).toEqual([]);
+    expect(result.detail).toBe('gate-unavailable');
+    expect(result.ok).toBe(false);
   });
 });

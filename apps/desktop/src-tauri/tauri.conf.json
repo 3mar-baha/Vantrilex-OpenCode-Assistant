@@ -13,11 +13,11 @@
     "windows": [
       {
         "title": "Voxaura",
-        "width": 440,
-        "height": 600,
+        "width": 380,
+        "height": 380,
         "resizable": true,
-        "minWidth": 440,
-        "minHeight": 600,
+        "minWidth": 380,
+        "minHeight": 380,
         "maximizable": false,
         "alwaysOnTop": false,
         "decorations": false,
