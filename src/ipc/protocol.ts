@@ -1,5 +1,5 @@
 import { z } from 'zod';
-
+import { redactString } from '../common/logger.js';
 // Voxaura UI IPC protocol — ADR-010. Zero-dependency RFC 6455 codec +
 // versioned frame schemas for the ws://127.0.0.1:4097/v1/ui channel.
 // The daemon is the sole supervisor; the renderer never assigns `seq`.
@@ -463,6 +463,14 @@ export type UiEvent = z.infer<typeof UiEventSchema>;
  * length cap enforced at the schema rather than only in the router.
  */
 const CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]/;
+/**
+ * The same character class, global, for the ONE place a control character is
+ * scrubbed rather than refused (`buildAckFrame`). Derived from `CONTROL_CHARS_RE`
+ * rather than written out again: a second copy of the class is a second thing to
+ * forget, and the schema's `refine` and the builder's sanitiser must agree on
+ * exactly which characters are "control".
+ */
+const CONTROL_CHARS_GLOBAL_RE = new RegExp(CONTROL_CHARS_RE.source, 'g');
 /** Identifiers forwarded to serve: `provider/id`, agent and skill names. */
 const IDENT_RE = /^[A-Za-z0-9._:/-]+$/;
 
@@ -543,12 +551,278 @@ export const UiCommandSchema = z
   .strict();
 export type UiCommand = z.infer<typeof UiCommandSchema>;
 
-export const AckFrameSchema = z.object({
-  type: z.literal(ACK_KIND),
-  id: z.string().min(1),
-  ok: z.boolean(),
-  detail: z.string().optional(),
-});
+// ── Command ack ──────────────────────────────────────────────────────────────
+// W29. This is the frame that ended a session's "was it received?" question, and
+// it was the last frame in `src/ipc/` with a schema nothing applied: declared at
+// this line, re-exported from `src/ipc/index.ts`, and `.parse`d NOWHERE. The
+// producer was an inline object literal in `UiServer.dispatchCommand`, so
+// `detail` reached the wire with no length bound, no character bound, and no
+// schema behind it — a frame whose declared contract and emitted bytes had
+// nothing to do with each other.
+//
+// ── WHERE PROVIDER TEXT ENTERS, AND WHY THE SHAPE IS NOT `error`'s ──────────
+// `dispatchCommand` catches whatever `onCommand` throws and puts the raw
+// `err.message` in `detail`, so provider text reaches a client through this
+// frame. That was ALREADY scrubbed before W29 — but by an inline
+// `redactString(...)` in the emit site, which is the exact arrangement the
+// `output` frame's own comment rejects ("Wrapping `UiServer.output()` instead
+// would leave `buildOutputFrame` reachable unscrubbed"). The `ack` path never
+// went through `UiServer.notice()`, the documented sink; it had a second,
+// per-call-site scrub that only covered its one call site.
+//
+// SO `error` GETS A CLOSED ENUM AND `ack` GETS A BRANDED FRAME, and the reason
+// is that `ack.detail` is legitimately open — it carries command outcomes
+// ('persona-set', 'shell-outcome-unknown', 'no active session'), so closing it
+// would mean inventing a vocabulary the router already owns. Closing it anyway
+// would be the W28 shape applied where it does not fit.
+//
+// WHAT REPLACES THE ENUM'S GUARANTEE. `error.detail` is unrepresentable because
+// the TYPE admits three strings. `ack.detail` cannot be unrepresentable without
+// a closed vocabulary, so the guarantee is moved one level up, to the frame:
+// `AckFrame` is BRANDED, so the only way to obtain one is `buildAckFrame`, and
+// an emit site that hand-rolls the literal is a COMPILE ERROR. That is the same
+// property `buildErrorFrame` gives, and it is what makes the sink below
+// unavoidable rather than merely recommended.
+//
+// WHAT THIS DOES NOT CATCH, stated rather than discovered later:
+//   · It does not make the OUTCOME unrepresentable. `CommandOutcome.detail` is
+//     still an open `string` (see `ui-server.ts`), so a future router branch
+//     forwarding provider text still COMPILES — it is scrubbed at the sink
+//     instead. Converting the type to a branded `scrubAckDetail()` result would
+//     make that a compile error too, at a MEASURED cost of 48 detail sites in
+//     `command-router.ts`, one in `daemon.ts`, and ~64 assertions across 7 test
+//     files (several of which pin the current source text verbatim). That
+//     refactor is available and is not done here; the wire property holds
+//     without it, because the scrub is at the producer of the frame.
+//   · It does not bound a CLIENT's input. `ack` is server→client only; nothing
+//     here validates what a shell sends (that is `UiCommandSchema`).
+//   · It does not cover a DIFFERENT DAEMON BUILD. A shell talking to an older
+//     daemon gets that daemon's frames, branded or not.
+//
+// (`ACK_KIND` is declared at the top of this file with the other wire constants;
+// it is not repeated here.)
+
+/**
+ * `detail` cap, in UTF-16 code units (zod's unit, and `String.length`'s).
+ *
+ * MEASURED against every detail the router can produce — the longest shipped
+ * literals are `'shell-outcome-failed'` and the Arabic
+ * `جلسة جديدة: ses_…`, i.e. under 40 units — so 200 is ~5x headroom and cannot
+ * fire on any legitimate outcome. What it DOES bound is the case that was live
+ * before: an `onCommand` that throws a provider error with a long body shipped a
+ * 5 065-byte ack frame (captured, `w29` before-image) carrying 5 000 characters
+ * of someone else's text into a HUD row.
+ */
+export const ACK_MAX_DETAIL_CHARS = 200;
+/**
+ * Matches `UiCommandSchema.id`'s `.max(128)`. The bound CANNOT fire on the live
+ * path — `dispatchCommand` only ever passes an id that `UiCommandSchema` already
+ * validated — so this is a second line of defence on the frame's declared
+ * contract, not a new constraint on any real traffic.
+ */
+export const ACK_MAX_ID_CHARS = 128;
+
+export const AckFrameSchema = z
+  .object({
+    type: z.literal(ACK_KIND),
+    id: z.string().min(1).max(ACK_MAX_ID_CHARS).refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters'),
+    ok: z.boolean(),
+    /**
+     * OPEN, deliberately — see the W29 note above. It is bounded and
+     * control-character-free, not closed: the frame's job is to answer a
+     * question the router phrases, and the router's vocabulary is not this
+     * module's to enumerate.
+     */
+    detail: z
+      .string()
+      .max(ACK_MAX_DETAIL_CHARS)
+      .refine((v) => !CONTROL_CHARS_RE.test(v), 'control characters')
+      .optional(),
+  })
+  // `.strict()` for the reason `ErrorFrameSchema` gives: every ack is built by
+  // `buildAckFrame`, so an unexpected key can only mean the constructor and the
+  // schema have diverged, which must throw at the producer rather than ship a
+  // frame the client has no branch for. (That comment used to say the opposite
+  // of this about `ack` — correctly, while `ack` had no constructor.)
+  .strict();
+
+/**
+ * The BRANDED frame. A `z.infer` type would let any object literal stand in for
+ * an ack, which is how the inline literal in `dispatchCommand` came to exist;
+ * the brand makes "was this built by `buildAckFrame`" a question the compiler
+ * answers. There is no runtime representation — see the cast in the builder.
+ */
+declare const ACK_FRAME_BRAND: unique symbol;
+export type AckFrame = z.infer<typeof AckFrameSchema> & { readonly [ACK_FRAME_BRAND]: true };
+
+/**
+ * Producer-side input. `detail` is an OPEN `string` on purpose: this is the
+ * UNTRUSTED side of the boundary, and typing it as a scrubbed brand would only
+ * move the same obligation one call site up. The obligation is met inside.
+ */
+export interface AckOutcomeInput {
+  readonly ok: boolean;
+  readonly detail?: string;
+}
+
+/** What a truncated detail says about what it dropped, and by how much. */
+function truncationMarker(dropped: number): string {
+  return `…(+${dropped} chars)`;
+}
+
+/**
+ * Producer-side constructor — the single function every `ack` frame passes
+ * through, and the redaction SINK for this frame type.
+ *
+ * `.parse`, not `.safeParse`, for `buildErrorFrame`'s reason: a swallowed
+ * failure would emit a frame nothing validates and a re-thrown one would escape
+ * a `void`-ed promise. It cannot throw for any input this function admits,
+ * because `detail` is sanitised before the parse rather than after it:
+ *
+ *   1. `redactString` — the sink. Idempotent on its own `[REDACTED]`, so a
+ *      producer that pre-redacts is not double-processed. It runs FIRST because
+ *      `[REDACTED]` is longer than the secret it replaces, so redaction after
+ *      the cap could push an already-at-cap detail past `ACK_MAX_DETAIL_CHARS`
+ *      and throw. `buildOutputFrame` documents the same ordering for the same
+ *      reason.
+ *   2. Control characters become SPACES. Not rejected: `parse` rejecting here
+ *      would throw inside `dispatchCommand`, which `onData` calls as
+ *      `void` — an unhandled rejection, i.e. a dead daemon, in exchange for a
+ *      detail string that is never useful. A newline is a HUD-forging hazard,
+ *      not information, so it is neutralised rather than preserved. The
+ *      schema's own `refine` still REJECTS one, so a caller reaching
+ *      `AckFrameSchema.parse` directly gets a refusal instead of a silent pass.
+ *   3. Truncation keeps a PREFIX and names the loss (`…(+N chars)`), because a
+ *      silent trim is the `INVENTORY_MAX_SESSIONS` defect class `totalSessions`
+ *      was added to fix. If a trailing high surrogate would be orphaned by the
+ *      cut it is dropped, so the frame never carries half a code unit.
+ *   4. `parse` then validates — and it cannot fail on 1–3's output.
+ *
+ * `id` is the one field not sanitised, deliberately: an id is a correlation
+ * token, so mangling it would break the pairing with the shell's own pending
+ * map. A control character in one is a forgery attempt and the `refine` throws.
+ *
+ * BYTE-IDENTICAL for every value the pre-W29 code could emit, and that was
+ * measured rather than assumed — SHA-256 of the JSON and of the full RFC 6455
+ * frame, key order and frame length, captured before the edit and re-verified
+ * after (`src/ipc/ack-frame.test.ts` pins the exact bytes). `ack` carries no
+ * `seq`, is not retained for resume, and zod rebuilds the object in SHAPE
+ * ORDER, which is `type, id, ok, detail` — the order the old literal used.
+ */
+export function buildAckFrame(id: string, outcome: AckOutcomeInput): AckFrame {
+  const detail =
+    outcome.detail === undefined
+      ? undefined
+      : boundAckDetail(redactString(outcome.detail).replace(CONTROL_CHARS_GLOBAL_RE, ' '));
+  return AckFrameSchema.parse({
+    type: ACK_KIND,
+    id,
+    ok: outcome.ok,
+    ...(detail !== undefined ? { detail } : {}),
+    // The brand. `parse` returns a plain `z.infer` value, and this cast is the
+    // only way to add the marker — which is precisely the point: the marker is
+    // unobtainable by any route except this function.
+  }) as AckFrame;
+}
+
+/**
+ * Keep a prefix that fits the cap and say how much did not. Exported for the
+ * test that pins the marker; not exported for reuse.
+ */
+function boundAckDetail(detail: string): string {
+  if (detail.length <= ACK_MAX_DETAIL_CHARS) return detail;
+  const marker = truncationMarker(detail.length - ACK_MAX_DETAIL_CHARS);
+  const keep = ACK_MAX_DETAIL_CHARS - marker.length;
+  let head = detail.slice(0, keep);
+  const last = head.charCodeAt(head.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1); // orphaned high surrogate
+  return head + marker;
+}
+
+// --- Error stream: a PROTOCOL fault the shell could not have avoided.
+// W28. This frame had NO schema at all: it was emitted as three inline object
+// literals in `UiServer.onData`, so nothing parsed it, nothing bounded it, and a
+// typo in one of the three was invisible to every gate. Eleven wire types, ten
+// of them schema-validated; this was the eleventh.
+//
+// DELIBERATELY NOT `ack`'s PRECEDENT, AND `ack` IS ITS SIBLING HERE.
+// `AckFrameSchema` was declared and exported and `.parse`d NOWHERE in the tree
+// (the dossier's F1) — a schema nothing ever applies, i.e. this defect one level
+// down. `error` therefore got what `ack` never got: a producer-side constructor
+// every emit site is forced through, so the parse is on the only production path
+// rather than only in a test. W29 gave `ack` that same constructor; the two
+// siblings now differ only in what `detail` may CONTAIN, never in whether
+// anything checks it. `ack`'s REDACTION handling, by contrast, IS worth
+// inheriting — except that here it is redundant, and the comment says why.
+//
+// `detail` IS A CLOSED 3-MEMBER ENUM, NOT AN OPEN STRING. `ack.detail` is open and
+// safe only by convention; `dispatchCommand` already forwards a raw `err.message`
+// through it, one branch away from reaching a client. This frame must not inherit
+// that. An `error` frame is the channel a future contributor reaches for when
+// something fails, and the obvious next edit is `detail: err.message` — which is
+// how provider text would enter a frame that today carries none. Making `detail`
+// a union makes that edit a COMPILE ERROR and, if forced with a cast, a throw
+// inside `parse`. Provider failure text has a channel already, and it is `notice`
+// (`code` + Arabic `detail`, redacted at `UiServer.notice()`); a protocol-fault
+// frame is a different job and does not need free text to do it.
+//
+// CONSEQUENCE, STATED RATHER THAN DISCOVERED LATER: widening this enum is the
+// deliberate, reviewed act that a free-text `error.detail` would have been an
+// accident of. Whoever widens it inherits this comment.
+export const ERROR_DETAILS = {
+  /** Binary uplink frame over `MAX_AUDIO_BYTES` (`ui-server.ts` `onData`). */
+  audioTooLarge: 'audio frame too large',
+  /** A TEXT frame whose payload is not parseable JSON (`onData`). */
+  invalidJson: 'invalid JSON',
+  /** Valid JSON that fails `UiCommandSchema` (`onData`). */
+  unknownCommand: 'unknown command',
+} as const;
+/** The complete `error.detail` domain. The type AND the runtime enum read this. */
+export type ErrorDetail = (typeof ERROR_DETAILS)[keyof typeof ERROR_DETAILS];
+
+export const ErrorFrameSchema = z
+  .object({
+    type: z.literal(ERROR_KIND),
+    /**
+     * `.strict()` here for the reason it is `.strict()` on every other frame in
+     * this file: the frames are built by a constructor and nowhere else, so an
+     * unexpected key can only mean the constructor and the schema have diverged
+     * — which should throw at the producer, not ship a frame the client has no
+     * branch for. (This comment used to contrast `error` with `ack` by saying
+     * `ack` is not strict; W29 gave `ack` a constructor, so it now is.)
+     */
+    detail: z.enum([
+      ERROR_DETAILS.audioTooLarge,
+      ERROR_DETAILS.invalidJson,
+      ERROR_DETAILS.unknownCommand,
+    ]),
+  })
+  .strict();
+export type ErrorFrame = z.infer<typeof ErrorFrameSchema>;
+
+/**
+ * Producer-side constructor — the single function every `error` frame passes
+ * through, which is what makes the schema load-bearing rather than decorative.
+ *
+ * `.parse`, not `.safeParse`: this runs inside `onData`, i.e. a raw socket
+ * `data` handler, where a swallowed parse failure would emit a malformed frame
+ * and a re-thrown one would escape into an EventEmitter listener. It cannot
+ * throw on any call the type admits — `detail` is a member of the enum the
+ * schema checks — so the choice is between failing loudly on an unrepresentable
+ * input and emitting a frame nothing validates. Same posture as
+ * `buildOutputFrame`.
+ *
+ * BYTE-COMPATIBLE WITH THE THREE PRE-W28 LITERALS, and that was measured rather
+ * than assumed: the emitted JSON is `{"type":"error","detail":"<d>"}` with the
+ * keys in that order and no `seq`, `id` or `ok`, exactly as before. `error` is
+ * NOT in the retained resume window and is NOT sequenced, so the renderer's
+ * branch at `ws.ts` (which reads `detail` only and does not advance `lastSeq`)
+ * is unaffected. `detail` is a literal, so no cap or bound can fire on it; the
+ * `z.enum` is the whole bound.
+ */
+export function buildErrorFrame(detail: ErrorDetail): ErrorFrame {
+  return ErrorFrameSchema.parse({ type: ERROR_KIND, detail });
+}
 
 // --- Inventory stream (Phase 2b): level-triggered session snapshot.
 // Shares the server seq space with UiEvent so Last-Seq resume stays ordered.
@@ -962,22 +1236,55 @@ export interface OutputFrameInput {
  * proves nothing about the producer, and a cap the producer can skip is not a
  * cap. `buildOutputFrame` therefore cannot emit a frame the cap would have
  * rejected, and cannot emit an over-cap one either.
+ *
+ * ── REDACTION, AT THIS SINK AND NOT AT THE CALL SITE ──────────────────────
+ *
+ * `output` carries up to 32 KiB (`MAX_OUTPUT_TEXT_BYTES`) of UNBOUNDED shell
+ * stdout, and `command` carries the shell command line. Both are free text off
+ * a subprocess: `cat .env.local`, `env`, a failing `npm config list`, or a
+ * `curl` whose header is echoed in an error all put live credentials into that
+ * string. The frame then goes to the renderer AND into the retained resume
+ * window, so a leak here is both immediate and replayable.
+ *
+ * This was the one frame type with NO redaction anywhere: `notice`, `voice`
+ * and `ack.detail` were each scrubbed, and `protocol.ts` had zero `redact`
+ * matches. The gap is not the call sites — `UiServer.output()` and
+ * `shell-tasks.ts` both build through here — it is that the frame had no sink.
+ *
+ * The sink is HERE, in the one function every `output` frame must pass through,
+ * so a future producer gets redaction for free. Wrapping `UiServer.output()`
+ * instead would leave `buildOutputFrame` reachable unscrubbed, and the barrel
+ * exports it.
+ *
+ * ORDER: redaction runs BEFORE the assembler, and that is load-bearing rather
+ * than stylistic. `[REDACTED]` is 10 bytes, so redacting after the cap could
+ * GROW an already-at-cap string past `MAX_OUTPUT_TEXT_BYTES` and throw inside
+ * `OutputFrameSchema.parse` — a redaction that takes down the producer. The
+ * consequence, stated plainly: `outputBytes` is the byte length of the REDACTED
+ * text, not of the raw stdout. That is also the safer direction to be wrong in,
+ * since reporting the raw length would leak the length of the secret removed.
+ *
+ * `redactString` is idempotent on its own marker, so a producer that
+ * pre-redacts is not double-processed, and a pre-redacted `output` is already
+ * covered by the assembler's byte accounting.
  */
 export function buildOutputFrame(seq: number, input: OutputFrameInput): OutputFrame {
   const asm = new OutputAssembler();
+  const safeOutput = redactString(input.output);
+  const safeCommand = redactString(input.command);
   // `pushPrefixText`, not `pushText`: a single-shot producer already holds the
   // whole string, and all-or-nothing would ship an EMPTY output for every
   // command that printed more than the cap. The single-shot case keeps a
   // prefix; the streaming case (`push`) refuses the fragment. See
   // `OutputAssembler.pushPrefixText` for why both exist.
-  asm.pushPrefixText(input.output);
-  const outputBytes = Buffer.byteLength(input.output, 'utf8');
+  asm.pushPrefixText(safeOutput);
+  const outputBytes = Buffer.byteLength(safeOutput, 'utf8');
   return OutputFrameSchema.parse({
     type: OUTPUT_KIND,
     seq,
     sessionId: input.sessionId,
     commandId: input.commandId,
-    command: input.command,
+    command: safeCommand,
     status: input.status,
     outcome: deriveShellOutcome(input.status, input.exitCode),
     exitCode: input.exitCode,

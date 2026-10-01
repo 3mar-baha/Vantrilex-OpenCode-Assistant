@@ -3,12 +3,13 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { redactString } from '../common/logger.js';
 import {
-  ACK_KIND,
+  buildAckFrame,
   buildAgentFrame,
   buildInventoryFrame,
   encodeBinaryFrame,
   encodeTextFrame,
-  ERROR_KIND,
+  ERROR_DETAILS,
+  type ErrorDetail,
   FrameReassembler,
   HelloFrameSchema,
   IPC_TOKEN_ENV,
@@ -20,6 +21,7 @@ import {
   type OutputFrame,
   type OutputFrameInput,
   buildOutputFrame,
+  buildErrorFrame,
   parseSeq,
   PING_INTERVAL_MS,
   RESUME_BUFFER_CAP,
@@ -27,6 +29,7 @@ import {
   UiCommandSchema,
   UI_SUBPROTOCOL,
   UI_WS_PATH,
+  UiEventSchema,
   VoiceFrameSchema,
   ContextFrameSchema,
   FlowFrameSchema,
@@ -232,7 +235,12 @@ export class UiServer {
   /** Assign the next seq, retain for Last-Seq resume, fan out to all sockets. */
   broadcast(input: Omit<UiEvent, 'type' | 'seq'> & { type?: 'event' }): UiEvent {
     this.seq += 1;
-    const frame: UiEvent = { type: 'event', seq: this.seq, eventId: input.eventId, state: input.state };
+    // W29: the only producer of an `event` frame, and it built the literal inline —
+    // so `UiEventSchema` was declared, exported and applied NOWHERE, the same
+    // defect `ack` had. The parse sits here rather than in a constructor because
+    // this is the only call site: `broadcast()` has no non-test callers, so a
+    // helper would be one more indirection over a single use.
+    const frame: UiEvent = UiEventSchema.parse({ type: 'event', seq: this.seq, eventId: input.eventId, state: input.state });
     this.retainForResume(frame);
     const wire = encodeTextFrame(JSON.stringify(frame));
     for (const conn of this.conns) {
@@ -311,8 +319,8 @@ export class UiServer {
    */
   output(input: OutputFrameInput): OutputFrame {
     this.seq += 1;
-    // The cap runs inside `buildOutputFrame`, on the only production path — a
-    // cap reachable only from a test would not be a cap.
+    // The cap AND the redaction both run inside `buildOutputFrame`, on the only production path — a cap reachable only from a test would not be a cap.
+    // `output` is 32 KiB of shell stdout and `command` is a command line, so both can carry a credential; `buildOutputFrame` is the single function every output frame passes through, which makes it the sink.
     const frame = buildOutputFrame(this.seq, input);
     this.retainForResume(frame);
     const wire = encodeTextFrame(JSON.stringify(frame));
@@ -326,15 +334,15 @@ export class UiServer {
    * Publish a notice to every connected shell.
    *
    * `detail` is REDACTED HERE, at the single sink, rather than at each call
-   * site. Three sites interpolated a raw provider `err.message` into user-facing
-   * Arabic text (daemon.ts:584 STT, :738 brain, :789 TTS), and a provider error
+   * site. Three sites interpolate a raw provider `err.message` into user-facing
+   * Arabic text — `stt-failed` (`daemon.ts:1294`), `brain-failed`
+   * (`daemon.ts:1519`), `tts-failed` (`daemon.ts:1643`) — and a provider error
    * string is untrusted input: it can echo the Authorization header, the key
-   * prefix, or a request URL carrying a credential. The telemetry writer and the
-   * JSON-lines logger were both redacted in Wave 2, but this path was not — so
-   * the one channel that reaches the user's screen was the one that would have
-   * shown a secret. Redacting here covers those three AND any future caller,
-   * which site-by-site wrapping cannot promise.
-   *
+   * prefix, or a request URL carrying a credential. Redacting here covers those
+   * three AND any future caller, which site-by-site wrapping cannot promise.
+   * THOSE THREE `notice` CODES ARE THE ANCHOR, NOT THESE LINE NUMBERS: re-derive
+   * by searching `ui.notice(` for the codes, never by nudging a stale number —
+   * `docs:verify` checks the anchors AGENTS.md cites, not a source comment's.
    * `redactString` is idempotent on its own `[REDACTED]` output, so a caller that
    * pre-redacts is not double-processed.
    */
@@ -646,6 +654,27 @@ export class UiServer {
     this.notice('resume-gap', detail, 'warn');
   }
 
+  /**
+   * W28: the ONE way an `error` frame leaves this server.
+   *
+   * There were three inline literals before, one per rejection, each naming its
+   * own `detail` string — so the shape had no schema, the three copies could
+   * drift, and a typo in any of them was invisible to every gate. They now all
+   * come through `buildErrorFrame`, which `.parse`s `ErrorFrameSchema`, so the
+   * three literals cannot disagree about the frame and the frame cannot be
+   * malformed without the producer throwing.
+   *
+   * The closed `ErrorDetail` parameter is the redaction boundary here, and it is
+   * a STRUCTURAL one rather than a sink: `detail` cannot be free text, so a
+   * provider `err.message` is not merely unredacted on this path, it is not
+   * expressible. Every value in `ERROR_DETAILS` is also pinned by
+   * `error-frame.test.ts` to be `redactString`-identity, so widening the enum is
+   * the moment that has to be argued rather than inherited.
+   */
+  private writeError(conn: Conn, detail: ErrorDetail): void {
+    safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(buildErrorFrame(detail))));
+  }
+
   private onData(conn: Conn, chunk: Buffer): void {
     let frames;
     try {
@@ -686,7 +715,7 @@ export class UiServer {
       if (frame.opcode !== Opcode.Text && frame.opcode !== Opcode.Binary) continue;
       if (frame.opcode === Opcode.Binary) {
         if (frame.payload.byteLength > MAX_AUDIO_BYTES) {
-          safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'audio frame too large' })));
+          this.writeError(conn, ERROR_DETAILS.audioTooLarge);
           continue;
         }
         try {
@@ -700,19 +729,35 @@ export class UiServer {
       try {
         parsed = JSON.parse(Buffer.from(frame.payload).toString('utf8'));
       } catch {
-        safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'invalid JSON' })));
+        this.writeError(conn, ERROR_DETAILS.invalidJson);
         continue;
       }
       const cmd = UiCommandSchema.safeParse(parsed);
       if (!cmd.success) {
-        safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify({ type: ERROR_KIND, detail: 'unknown command' })));
+        this.writeError(conn, ERROR_DETAILS.unknownCommand);
         continue;
       }
       void this.dispatchCommand(conn, cmd.data);
     }
   }
 
-  /** Await the (possibly async) command handler, then ack; never crash the socket. */
+  /**
+   * Await the (possibly async) command handler, then ack; never crash the socket.
+   *
+   * W29: the ack is built by `buildAckFrame`, which is BOTH the schema's only
+   * production parse site and the redaction sink for this frame. It used to be an
+   * inline literal with its own private `redactString(...)`, which meant: no
+   * schema, no length bound, no character bound, and a scrub that covered this
+   * one call site rather than every producer. `AckFrame` is branded, so this
+   * method cannot be bypassed by hand-rolling the literal — that is a compile
+   * error now, which is the whole point of the constructor.
+   *
+   * `detail` stays an OPEN string here, and that is not the same as "unbounded":
+   * `buildAckFrame` bounds and character-filters it. The catch below still
+   * forwards a raw `err.message` on purpose — the sink is where the scrubbing
+   * lives, so a second scrub at the call site would be redundant by construction
+   * and would read as if the sink were optional.
+   */
   private async dispatchCommand(conn: Conn, cmd: UiCommand): Promise<void> {
     let outcome: CommandOutcome = { ok: true };
     try {
@@ -720,18 +765,7 @@ export class UiServer {
     } catch (err) {
       outcome = { ok: false, detail: err instanceof Error ? err.message : 'internal' };
     }
-    const ack = {
-      type: ACK_KIND,
-      id: cmd.id,
-      ok: outcome.ok,
-      // `detail` is an OPEN string, not an `ErrorCode` union: `dispatch` returns
-      // locally generated literals today, but the catch above forwards a raw
-      // `err.message`, so a single throwing `onCommand` reaches the HUD
-      // unredacted. Scrubbing at the sink covers the current callers AND every
-      // future one, which per-caller wrapping cannot promise.
-      ...(outcome.detail !== undefined ? { detail: redactString(outcome.detail) } : {}),
-    };
-    safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(ack)));
+    safeWrite(conn, this.conns, encodeTextFrame(JSON.stringify(buildAckFrame(cmd.id, outcome))));
   }
 
   /** Pong with a correctly-sized header (extended lengths included). */

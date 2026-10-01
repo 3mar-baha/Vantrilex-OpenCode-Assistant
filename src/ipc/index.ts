@@ -1,5 +1,7 @@
 export {
   ACK_KIND,
+  ACK_MAX_DETAIL_CHARS,
+  ACK_MAX_ID_CHARS,
   ERROR_KIND,
   IPC_TOKEN_ENV,
   MISSED_PINGS_LIMIT,
@@ -11,10 +13,14 @@ export {
   UI_WS_PATH,
   UI_WS_PORT,
   AckFrameSchema,
+  buildAckFrame,
   buildAgentFrame,
+  buildErrorFrame,
   buildInventoryFrame,
   decodeFrames,
   encodeTextFrame,
+  ERROR_DETAILS,
+  ErrorFrameSchema,
   HelloFrameSchema,
   AgentEntrySchema,
   AgentFrameSchema,
@@ -23,7 +29,19 @@ export {
   UiCommandSchema,
   UiEventSchema,
 } from './protocol.js';
-export type { AgentEntry, AgentFrame, HelloFrame, InventoryFrame, UiCommand, UiEvent, WsFrame } from './protocol.js';
+export type {
+  AckFrame,
+  AckOutcomeInput,
+  AgentEntry,
+  AgentFrame,
+  ErrorDetail,
+  ErrorFrame,
+  HelloFrame,
+  InventoryFrame,
+  UiCommand,
+  UiEvent,
+  WsFrame,
+} from './protocol.js';
 export {
   AUDIO_DOWNLINK_TYPE,
   MAX_AUDIO_CHUNK,
