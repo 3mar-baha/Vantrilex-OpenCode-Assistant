@@ -362,6 +362,21 @@ function countsLine(c) {
 // entries derived here, so adding a `runIf` without raising the ceiling is a
 // visible failure, and removing one is too. Neither direction is silent.
 //
+// AND THAT CARDINALITY IS PER-PLATFORM, because one of the named entries is a
+// guard that only fires on one platform. `test.skipIf(process.platform ===
+// 'win32')` cannot skip anything on Linux, so a ceiling of 14 that counted it
+// there would permit one skip nobody declared — the exact defect a ceiling
+// exists to prevent, reintroduced by the ceiling itself. Nothing observed that
+// on Linux; it is arithmetic, and it is the kind of arithmetic that cannot be
+// seen from the machine the check was written on.
+//
+// So the derivation is a function of a PLATFORM PREDICATE, and the document
+// states BOTH arms — `14 on win32 / 13 on non-win32` — while the run is
+// compared against the arm the current platform selects. The non-win32 arm is
+// REASONED, not executed: it comes out of the same declared `firesOn` data
+// through the same predicate, and `docs-verify-self-test.mjs` drives both arms
+// against synthetic runs, but no Linux machine has run this gate.
+//
 // WHAT A CEILING IS NOT. It is not a licence to skip. Two checks sit on top of
 // it and both fail the run:
 //
@@ -374,6 +389,66 @@ function countsLine(c) {
 //
 // The report also names which declared entries were ACTIVE, so a reader can
 // tell "13 of 13 permitted" from "13, none of which I can account for".
+
+/**
+ * The platform the document's two ceiling arms are keyed on.
+ *
+ * WHY A CONSTANT AND NOT `process.platform`. The document states two arms —
+ * win32 and everything else — so the derivation has to be able to ask about a
+ * platform OTHER than the one it is running on, or the second arm could not be
+ * checked from any platform at all. Naming the discriminating platform as a
+ * constant is what makes the non-win32 arm a derivable claim rather than an
+ * assertion about the machine.
+ *
+ * WHY "EVERYTHING ELSE" IS A COMPLEMENT AND NOT A PLATFORM. Every declared
+ * guard either fires on win32, fires on every platform, or names some third
+ * platform — and the second arm has to be exhaustive or the pair would not cover
+ * the space. `declaredSkipEntries` FAILS when a guard names a third platform, so
+ * the complement stays exact instead of quietly absorbing a guard into an arm it
+ * does not fire on.
+ */
+const WIN32_PLATFORM = 'win32';
+
+/**
+ * The probe for "every platform that is not win32".
+ *
+ * NOT A REAL PLATFORM, and that is deliberate: `guardFiresOn` compares
+ * `firesOn === platform`, so any string that is not `'win32'` exercises the
+ * complement branch, and a synthetic value cannot collide with a platform Node
+ * might one day report. `declaredSkipEntries` requires every declared guard to
+ * fire on win32 or nowhere, so this one probe is the whole non-win32 arm — there
+ * is no per-platform table to fall out of step with the declaration.
+ */
+const NON_WIN32_PLATFORM = 'non-win32';
+
+/**
+ * Whether a derived entry can produce a skip on `platform`.
+ *
+ * ONE predicate, and it is deliberately total: an entry with no `firesOn` fires
+ * everywhere, so `test.runIf` entries — whose condition is about the disk, not
+ * the OS — need no special case. That is what keeps the filter from becoming a
+ * `kind === 'platform'` test, which would have to be edited the day a
+ * platform-dependent `runIf` appeared.
+ */
+function guardFiresOn(entry, platform) {
+  return entry.firesOn == null || entry.firesOn === platform;
+}
+
+/**
+ * The named entries permitted to skip on `platform`.
+ *
+ * THIS IS WHERE THE CEILING BECOMES A FUNCTION OF THE PLATFORM, and it is a
+ * separate function from `declaredSkipEntries` on purpose. `declaredSkipEntries`
+ * is a derivation OF THE TREE, and the tree does not change with the OS: the
+ * win32 guard is present in a Linux checkout exactly as it is here, and the
+ * self-test asserts its presence unconditionally. Filtering inside the
+ * derivation would turn a tree derivation into a machine measurement and make
+ * every case over it silently Windows-only. So the tree derivation keeps every
+ * entry and the PLATFORM filter is its own, injectable, separately-proven step.
+ */
+function ceilingEntries(entries, platform) {
+  return entries.filter((e) => guardFiresOn(e, platform));
+}
 
 /**
  * The declared (NOT derived) skip guards, each located by a literal condition.
@@ -396,6 +471,22 @@ function countsLine(c) {
  * quietly loses an entry and permits one more unexplained skip, which is the
  * hole the "must fail when the observed skip count exceeds it" requirement is
  * about.
+ *
+ * `firesOn` is what makes the ceiling PER-PLATFORM, and it is deliberately
+ * DECLARED DATA rather than a second scan of the condition. The condition is an
+ * arbitrary expression, and the whole reason it is located by literal is that no
+ * text scan can evaluate it; scanning it again for a platform would reintroduce
+ * exactly the failure the next paragraph describes. So the platform is stated
+ * once, as `firesOn`, and `declaredSkipEntries` then REFUSES a guard whose
+ * `firesOn` is not named in its own literal condition. The declaration is
+ * therefore falsifiable from both sides: rename the literal and the entry goes
+ * unlocatable; rename `firesOn` alone and it stops agreeing with the literal.
+ * Neither drifts silently, which a bare `firesOn` could.
+ *
+ * `firesOn: null` means "not platform-dependent — fires everywhere", and
+ * `declaredSkipEntries` requires a guard whose condition mentions
+ * `process.platform` to declare one. Deleting the field is a change, not a
+ * neutral edit.
  *
  * DECLARING ONE BOUND DOES NOT WEAKEN THE CHECK, and the two-sided pinning is
  * the argument:
@@ -423,6 +514,13 @@ const DECLARED_SKIP_GUARDS = [
     // ceiling, so it is the string worth breaking. Changing it makes the entry
     // unlocatable (nothing matches the literal) rather than silently relocating
     // it, which is the property that lets a stale `file:line` be avoided.
+    //
+    // The SECOND break-prove target is `firesOn`. Pointing it at a platform the
+    // condition does not name is the one edit that would make the derivation
+    // quietly describe the wrong tree, and it is reported as a PROBLEM rather
+    // than only as a red count, because a red count alone sends the reader to go
+    // count `runIf` sites instead of to this declaration.
+    firesOn: WIN32_PLATFORM,
     why: 'permanent by design — ensureIpcToken refuses to generate where a 0600 mode is a Windows no-op, because the Rust supervisor provisions that path with a protected DACL instead',
   },
 ];
@@ -535,6 +633,28 @@ function guardedTestSites(source, guard) {
  * FAILS the claim rather than reducing the count. That is the deliberate
  * direction: a ceiling that shrinks on a parse failure permits skips nobody
  * declared, which is the whole defect class this file is about.
+ *
+ * THE ENTRIES ARE PLATFORM-INDEPENDENT, and `firesOn` is carried on each one
+ * rather than filtered here. See `ceilingEntries`: the platform is the last
+ * filter, not the derivation, so this function stays a property of the tree and
+ * every self-test case over it holds on every OS. Every `test.runIf` entry gets
+ * `firesOn: null`, which `guardFiresOn` reads as "fires everywhere" — a
+ * `runIf` prerequisite is about the disk, never about the OS, and giving it a
+ * null field rather than omitting the field keeps the predicate total.
+ *
+ * TWO PROBLEMS ARE CHECKED ON THE DECLARATION ITSELF, and both exist because
+ * `firesOn` is declared data:
+ *
+ *   1. `firesOn` must agree with the literal condition. A guard whose condition
+ *      names `process.platform` but whose `firesOn` names a different platform —
+ *      or names none — is a ceiling describing a tree that does not exist, and it
+ *      would otherwise show up only as a cardinality mismatch, which reads as a
+ *      document error.
+ *   2. No declared guard may name a third platform. The document has exactly two
+ *      arms and the second is the complement of win32, so a darwin-only guard
+ *      would make "non-win32" a description the tree contradicts. This is the
+ *      invariant that keeps the complement exact, and it is checked on every
+ *      platform rather than only on the one where it would bite.
  */
 function declaredSkipEntries(filesList) {
   const entries = [];
@@ -559,12 +679,47 @@ function declaredSkipEntries(filesList) {
       );
       continue;
     }
+    // The `firesOn`/condition agreement check. It is here and not in the
+    // ceiling claim so that BOTH the diagnostic claim (`skip guards declared`)
+    // and the ceiling claims carry it, which is the same reason an unlocatable
+    // guard is reported from here rather than only from `reportSkipCeiling`.
+    const condNamesPlatform = /process\.platform/.test(d.condition);
+    if (condNamesPlatform && d.firesOn == null) {
+      problems.push(
+        `declared guard: ${d.file} ${d.guard}(${d.condition}) is platform-dependent but declares no firesOn — ` +
+          'the ceiling would count it on every platform',
+      );
+      continue;
+    }
+    if (
+      d.firesOn != null &&
+      !d.condition.includes(`'${d.firesOn}'`) &&
+      !d.condition.includes(`"${d.firesOn}"`)
+    ) {
+      problems.push(
+        `declared guard: ${d.file} declares firesOn=${d.firesOn} but its condition ` +
+          `(${d.condition}) does not name that platform`,
+      );
+      continue;
+    }
+    if (d.firesOn != null && d.firesOn !== WIN32_PLATFORM) {
+      // NOT a `continue`: this is a property of the DECLARATION LIST, not of one
+      // entry, so it is raised once and the entry still counts. Dropping the
+      // entry would shrink the ceiling on the failure path, which is the one
+      // direction that must never happen quietly.
+      problems.push(
+        `declared guard: firesOn=${d.firesOn} names a platform other than ${WIN32_PLATFORM}; ` +
+          'the document states two arms (win32 and everything else), so a third platform makes ' +
+          'the second arm a description the tree contradicts',
+      );
+    }
     entries.push({
       kind: d.kind,
       file: d.file,
       line: sites[0].line,
       title: sites[0].title,
       condition: d.condition,
+      firesOn: d.firesOn ?? null,
       why: d.why,
     });
   }
@@ -577,6 +732,10 @@ function declaredSkipEntries(filesList) {
         line: s.line,
         title: s.title,
         condition: s.condition,
+        // A `runIf` prerequisite is a statement about the DISK, never about the
+        // OS, so it is permitted on every platform. Stated explicitly rather
+        // than left off so that `guardFiresOn` has one rule and no kind test.
+        firesOn: null,
         why: null,
       });
     }
@@ -603,8 +762,20 @@ function declaredSkipEntries(filesList) {
  * `test.skip(...)` lands here — MEASURED, it reports identically to a
  * `runIf`-guarded skip (`status: 'skipped'`, counted in `numPendingTests`) and
  * differs only in that no declared entry matches its (file, title).
+ *
+ * `permitted` is the PLATFORM-SCOPED count, not `entries.length`. This is the
+ * whole of Item 1: a guard that cannot fire on the platform it is being scored
+ * on must not raise the ceiling there, or the ceiling permits one unexplained
+ * skip on exactly the machines that were never measured. The matching
+ * (`permitted`) map is built over EVERY entry rather than only the permitted
+ * ones, so an entry that fires nowhere on this platform is still recognised as
+ * a declared guard when it does show up in `assertionResults` — the accounting
+ * and the bound are deliberately two different questions, and conflating them
+ * would make a stray report from a `test.skipIf` on a platform it does not skip
+ * on look like an undeclared skip.
  */
-function skipCeilingVerdict(entries, counts) {
+function skipCeilingVerdict(entries, counts, platform = process.platform) {
+  const permittedEntries = ceilingEntries(entries, platform);
   const permitted = new Map(entries.map((e) => [`${e.file}\u0000${e.title}`, e]));
   const activeKeys = new Set();
   const unaccounted = [];
@@ -615,13 +786,15 @@ function skipCeilingVerdict(entries, counts) {
   }
   // STANDING RULE, the one that matters here: a set-based "all observed are
   // permitted" is vacuously true over an EMPTY declared set, and an empty
-  // derived set is exactly what a broken scanner produces. `entries.length` is
-  // therefore asserted by the caller and the caller fails on zero, and the
-  // vacuous-true shape is additionally blocked by requiring that a run with
-  // skips has at least one active entry.
+  // derived set is exactly what a broken scanner produces. `permittedEntries
+  // .length` is therefore asserted by the caller and the caller fails on zero,
+  // and the vacuous-true shape is additionally blocked by requiring that a run
+  // with skips has at least one active entry.
   return {
     observed: counts.skipped,
-    permitted: entries.length,
+    platform,
+    derived: entries.length,
+    permitted: permittedEntries.length,
     active: entries.filter((e) => activeKeys.has(`${e.file}\u0000${e.title}`)),
     unaccounted,
   };
@@ -659,6 +832,13 @@ function skipCeilingVerdict(entries, counts) {
 // between a self-test of the arithmetic and a self-test of the claim: the former
 // calls a helper, the latter proves the checker reads a number and compares it.
 // It defaults to the real document, so the production path is unchanged.
+// `platform` is a PARAMETER, defaulting to the running platform, and that is the
+// seam the whole per-platform ceiling is tested through. Production omits it;
+// `docs-verify-self-test` supplies `'linux'` to exercise the arm no Windows
+// machine can reach. It is a parameter rather than a constant read at each use
+// site for the same reason `doc` is: a self-test that could only reach the
+// current platform's arm would be unable to show the derivation is per-platform
+// at all, which is the requirement.
 function reportSuite({
   doc = agents,
   counts,
@@ -672,6 +852,7 @@ function reportSuite({
   skipCheck = 'equality',
   ceilingRe,
   ceilingLabel,
+  platform = process.platform,
 }) {
   if (!counts.ok) {
     // No JSON. If the run also exited non-zero this is a real failure — a crash,
@@ -710,7 +891,7 @@ function reportSuite({
   else fail(testsLabel, doc.match(countRe)[1], String(testsDerived));
 
   if (skipCheck === 'ceiling') {
-    reportSkipCeiling({ doc, counts, ceilingRe, skippedLabel, ceilingLabel });
+    reportSkipCeiling({ doc, counts, ceilingRe, skippedLabel, ceilingLabel, platform });
   } else {
     // Group 2 of the `N passed + M skipped` form. The root suite does not reach
     // this branch — it uses the ceiling — so the index is read from the document
@@ -734,66 +915,148 @@ function reportSuite({
 /**
  * Two claims about the named skip ceiling, and they are not the same claim.
  *
- *   1. `root vitest skipped` — the DOCUMENT's stated ceiling against the number
- *      of entries derived from the tree. This is the checked claim that makes
- *      the maintenance burden intended: adding a `test.runIf` raises the derived
- *      count, the document still says the old number, and the run goes red. The
+ *   1. `root vitest skipped` — the DOCUMENT's stated arms against the arms
+ *      derived from the tree. This is the checked claim that makes the
+ *      maintenance burden intended: adding a `test.runIf` raises the derived
+ *      count, the document still says the old numbers, and the run goes red. The
  *      burden is the point; the alternative is a ceiling nobody reviews.
  *
- *   2. `root vitest skip ceiling` — the RUN against the ceiling. Observed skips
- *      must be within the ceiling, and every one of them must be attributable to
- *      a named entry. This is the claim that bites, and it is separate from (1)
- *      on purpose: a document that restates a stale ceiling and a run that skips
- *      more than the ceiling are different defects, and one message each is
- *      actionable where a merged one is not.
+ *   2. `root vitest skip ceiling` — the RUN against the arm the current platform
+ *      selects. Observed skips must be within it, and every one of them must be
+ *      attributable to a named entry. This is the claim that bites, and it is
+ *      separate from (1) on purpose: a document that restates a stale ceiling and
+ *      a run that skips more than the ceiling are different defects, and one
+ *      message each is actionable where a merged one is not.
+ *
+ * BOTH ARMS ARE DERIVED, and this is the per-platform correction. Claim 1
+ * compares the document's `N on win32 / M on non-win32` against
+ * `derWin32Arm / derElsewhereArm`, each built by running the SAME `guardFiresOn`
+ * predicate over the same entries at a different platform. Claim 2 then scores
+ * the run against whichever arm `platform` selects. So the number is a property
+ * of the TREE plus the platform, on every platform, rather than a property of
+ * the machine the checker happens to be running on.
  *
  * `entries.length === 0` FAILS rather than passing an empty ceiling. A
  * vacuously-true "all observed skips are permitted" over an empty declared set
  * is the standing-rule failure this repository has hit repeatedly, and a broken
- * scanner is exactly how it would be reached here.
+ * scanner is exactly how it would be reached here. The same holds for the
+ * PLATFORM-SCOPED set: a tree whose derived entries all fail to fire on this
+ * platform would otherwise derive a ceiling of 0 and pass every comparison
+ * against a document that also said 0.
  */
-function reportSkipCeiling({ doc, counts, ceilingRe, skippedLabel, ceilingLabel }) {
+function reportSkipCeiling({ doc, counts, ceilingRe, skippedLabel, ceilingLabel, platform = process.platform }) {
   const { entries, problems } = declaredSkipEntries(counts.filesList);
-  const verdict = skipCeilingVerdict(entries, counts);
+  const verdict = skipCeilingVerdict(entries, counts, platform);
+  // Both arms, from one predicate at two platforms. `derWin32Declared` is the
+  // guard half that only applies to the first arm, which is exactly why a single
+  // number could not carry the claim.
+  const derRunIf = entries.filter((e) => e.kind === 'runIf').length;
+  // The ARM is the whole platform-scoped set, and it is taken from
+  // `ceilingEntries` rather than recomputed as `runIf + declared` — summing the
+  // two halves would re-introduce exactly the compensating-error shape the
+  // separate-half checks exist to reject, one level up. The first version summed
+  // them and read 27 for a 14-entry tree, because `derWin32Declared` was
+  // itself derived as a platform-filtered count over ALL entries and so already
+  // contained the 13 `runIf` sites. MEASURED: `27 on win32 / 13 on non-win32`.
+  const derWin32Arm = ceilingEntries(entries, WIN32_PLATFORM).length;
+  const derElsewhereArm = ceilingEntries(entries, NON_WIN32_PLATFORM).length;
+  // The declared half, for the composition message and for the document's guard
+  // count. Derived over the DERIVED entries rather than over
+  // `DECLARED_SKIP_GUARDS`, because the claim is about the tree: a guard that
+  // failed to locate contributes no entry, and counting the declaration instead
+  // would report a half the tree does not have — the same check-one-level-up
+  // mistake as the arm sum above, in the other direction.
+  const derWin32Declared = entries.filter(
+    (e) => e.kind === 'platform' && e.firesOn === WIN32_PLATFORM,
+  ).length;
+  // Which arm the current platform selects, as the DOCUMENT's figure for it.
+  const selectedArm = platform === WIN32_PLATFORM ? derWin32Arm : derElsewhereArm;
   const activeNames = verdict.active.map(
     (e) => `${e.file}:${e.line} ${e.title} (${guardName(e)})`,
   );
   const detail =
-    `${verdict.observed} observed / ${verdict.permitted} permitted · ` +
+    `${verdict.observed} observed / ${verdict.permitted} permitted on ${platform} · ` +
     `${verdict.active.length} of ${verdict.permitted} named entries active`;
 
-  // Claim 1: the document's stated cardinality, as BOTH halves.
+  // Claim 1: the document's stated arms, as FOUR numbers.
   //
-  // `docTotal` is the sum the document asserts and `docRunIf` is the `runIf`
-  // half it names. They are checked SEPARATELY rather than by comparing the sum,
-  // because a sum matches under compensating errors: a document that said
+  // `docWin32`/`docElsewhere` are the two arms, `docWin32Guards` the declared
+  // half that only the first arm carries, and `docRunIf` the half both carry.
+  // They are checked SEPARATELY rather than by comparing a sum, because a sum
+  // matches under compensating errors: a document that said
   // "14 = 1 platform + 12 runIf" while the tree held 13 would pass a sum check
   // and misdescribe the tree in the one place a reader looks to check it. The
   // derived halves are counted from the entries themselves, so the platform
   // entry and the `runIf` entries are separately falsifiable.
+  //
+  // The ORDER is load-bearing. `runIf` first, then the declared half, then the
+  // two arms: the inner numbers are what the outer numbers are made of, so a
+  // mismatch in an inner one is reported as the inner one. A reader who is sent
+  // to fix the win32 arm when the `runIf` count moved would fix the wrong
+  // number and be red again on the next run.
   const m = doc.match(ceilingRe) ?? [];
-  const docTotal = m[1];
-  const docRunIf = m[2];
-  const derRunIf = entries.filter((e) => e.kind === 'runIf').length;
-  const derDeclared = entries.length - derRunIf;
+  const [docWin32, docElsewhere, docWin32Guards, docRunIf] = [m[1], m[2], m[3], m[4]];
+
+  // The arm THIS platform selects, cross-checked against the run's own
+  // `permitted`. Declared AFTER the destructuring above because the message
+  // quotes the document's arms, and quoting a binding before its `const` is a
+  // ReferenceError rather than a verdict — the one failure mode this report
+  // cannot recover from. The first version placed this check above the parse and
+  // MEASURED a crash: exit 1 with a stack trace and no claim output, which reads
+  // as "the guard fired" to anyone not reading the trace.
+  //
+  // WHY THE CROSS-CHECK IS NOT REDUNDANT. `selectedArm` comes from the arm table
+  // and `verdict.permitted` from a direct `ceilingEntries` call, so they are two
+  // readings of the same predicate. A shared derivation would have no independent
+  // second reading and could not disagree with itself — which is exactly how the
+  // half-sum bug reached a green gate.
+  if (selectedArm !== verdict.permitted) {
+    fail(
+      skippedLabel,
+      `${docWin32 ?? 'not stated'}/${docElsewhere ?? 'not stated'}`,
+      `the arm selected on ${platform} is ${selectedArm} but the run was scored against ` +
+        `${verdict.permitted} — the document comparison and the run verdict disagree`,
+    );
+  }
+  const derArms = `${derWin32Arm} on win32 / ${derElsewhereArm} on non-win32`;
+  // The arm the RUN is scored against is derived independently of the arms the
+  // DOCUMENT is compared against, from `verdict.permitted`. Deriving both from
+  // the same expression is what let the half-sum bug read 27 in one place and 14
+  // in another: a shared derivation has no independent second reading, so
+  // nothing can disagree with itself. `selectedArm` is what the document's arm
+  // for THIS platform is compared to, and it is asserted equal to
+  // `verdict.permitted` so the two cannot drift into a claim and a verdict about
+  // different numbers.
   const halves =
-    `derived ${entries.length} = ${derDeclared} declared guard(s) + ${derRunIf} test.runIf site(s)`;
+    `derived ${derArms} = ${derWin32Declared} declared guard(s) firing on win32 ` +
+    `+ ${derRunIf} test.runIf site(s)` +
+    (problems.length > 0 ? ` — ${problems.join('; ')}` : '');
   if (entries.length === 0) {
     // Named explicitly because a zero here would otherwise make BOTH claims
     // pass: the document cannot say 0, and "0 observed <= 0 permitted" is true.
-    fail(skippedLabel, docTotal ?? 'not stated', `0 named entries — the derivation is empty${problems.length > 0 ? ': ' + problems.join('; ') : ''}`);
-  } else if (docTotal == null) {
+    fail(skippedLabel, docWin32 ?? 'not stated', `0 named entries — the derivation is empty${problems.length > 0 ? ': ' + problems.join('; ') : ''}`);
+  } else if (verdict.permitted === 0) {
+    // The per-platform twin of the check above. A tree can derive entries and
+    // still derive a CEILING OF ZERO on a platform none of them fire on, and
+    // against a document that also said 0 every comparison here would be
+    // satisfied. Named rather than assumed because the predicate is new.
+    fail(skippedLabel, docWin32 ?? 'not stated', `0 entries permitted on ${platform} — the ceiling would be vacuous there${problems.length > 0 ? ': ' + problems.join('; ') : ''}`);
+  } else if (docWin32 == null || docElsewhere == null) {
     unverified(skippedLabel, 'not stated', halves);
-  } else if (Number(docTotal) !== entries.length) {
-    fail(skippedLabel, docTotal, halves);
   } else if (Number(docRunIf) !== derRunIf) {
-    // The total is right and the split is wrong. Named separately because the fix
-    // is different: this is a prose correction, not a tree correction, and a
+    // The runIf half is shared by both arms, so it is checked first. The fix is
+    // different: this is a prose correction, not a tree correction, and a
     // message that said only "the ceiling is wrong" would send the reader to
     // count `runIf` sites in the tree.
-    fail(skippedLabel, `${docTotal} (of which ${docRunIf} runIf)`, `${halves} — the total matches, the runIf half does not`);
+    fail(skippedLabel, `${docWin32}/${docElsewhere} (of which ${docRunIf} runIf)`, `${halves} — the runIf half does not match`);
+  } else if (Number(docWin32Guards) !== derWin32Declared) {
+    fail(skippedLabel, `${docWin32}/${docElsewhere} (of which ${docWin32Guards} win32 guard)`, `${halves} — the declared-guard half does not match`);
+  } else if (Number(docWin32) !== derWin32Arm) {
+    fail(skippedLabel, `${docWin32}/${docElsewhere}`, `${halves} — the win32 arm does not match`);
+  } else if (Number(docElsewhere) !== derElsewhereArm) {
+    fail(skippedLabel, `${docWin32}/${docElsewhere}`, `${halves} — the non-win32 arm does not match`);
   } else {
-    pass(skippedLabel, `${docTotal} = ${derDeclared} declared + ${docRunIf} runIf`, halves);
+    pass(skippedLabel, `${docWin32} on win32 / ${docElsewhere} on non-win32`, halves);
   }
 
   // Claim 2: the run against the ceiling.
@@ -817,13 +1080,23 @@ function reportSkipCeiling({ doc, counts, ceilingRe, skippedLabel, ceilingLabel 
     fail(ceilingLabel, '0 observed / 0 permitted', 'no named entries — every ceiling check over an empty set is vacuous');
     return;
   }
+  if (verdict.permitted === 0) {
+    // The per-platform twin, and it is reached by a REAL shape rather than a
+    // hypothetical one: every declared guard in the tree can be platform-gated,
+    // and then a platform none of them fire on derives a ceiling of 0. `0 <= 0`
+    // holds and every skip is "named" by the accounting map, so without this the
+    // run claim would pass with an empty ceiling on a platform it has never been
+    // measured on. Named rather than assumed because the predicate is new.
+    fail(ceilingLabel, '0 observed / 0 permitted', `no named entry fires on ${platform} — the ceiling is empty there and every check over it is vacuous`);
+    return;
+  }
   const overCeiling = verdict.observed > verdict.permitted;
   const unnamed = verdict.unaccounted.length;
   if (overCeiling || unnamed > 0) {
     const parts = [];
     if (overCeiling) {
       parts.push(
-        `${verdict.observed} observed > ${verdict.permitted} permitted — the suite gained ` +
+        `${verdict.observed} observed > ${verdict.permitted} permitted on ${platform} — the suite gained ` +
           `${verdict.observed - verdict.permitted} skip(s) beyond the declared ceiling`,
       );
     }
@@ -1204,6 +1477,7 @@ if (process.argv.includes('--self-test')) {
     ...selfTestSkipCeiling({
       ROOT,
       declaredSkipEntries,
+      ceilingEntries,
       skipCeilingVerdict,
       reportSuite,
       resetResults,
@@ -1293,17 +1567,30 @@ reportSuite({
   filesLabel: 'root vitest files',
   testsMetric: 'total',
   skipCheck: 'ceiling',
-  // The ceiling's cardinality, read out of the SAME sentence that names the
-  // platform skip. `skip ceiling **N** (1 win32 platform skip + M test.runIf
-  // prerequisites)` — both numbers are captured so the claim can name which half
-  // drifted, because "the ceiling is wrong" is not an actionable message and
-  // "13 runIf sites, the document says 12" is.
+  // The ceiling's TWO ARMS, read out of the SAME sentence that names the
+  // platform skip: `skip ceiling **N on win32 / M on non-win32** (1 win32
+  // platform skip + K test.runIf prerequisites)`. Four numbers are captured, so
+  // the claim can name which half drifted — "the ceiling is wrong" is not an
+  // actionable message and "13 runIf sites, the document says 12" is.
   //
-  // The pattern states the two halves rather than a bare `**N**` on purpose: a
+  // WHY TWO ARMS IN THE DOCUMENT RATHER THAN ONE ARM PER MACHINE. A single
+  // number can only be compared against the machine running the check, so a
+  // document carrying one number is a claim that is either red or wrong on every
+  // platform but the one it was written on. Stating both arms keeps the claim a
+  // property of the TREE on every OS, and the `1` in the guard half is captured
+  // rather than assumed so it is checked too.
+  //
+  // The pattern states the composition rather than a bare `**N**` on purpose: a
   // document that says "a named ceiling of 14" without saying what the 14 is
   // cannot be reviewed, which is the whole point of naming the entries. A bare
   // number would be a check that verifies arithmetic.
-  ceilingRe: /skip ceiling \*\*(\d+)\*\* \(1 win32 platform skip \+ (\d+) test\.runIf prerequisites\)/,
+  //
+  // Both arms are REQUIRED to match. An older single-arm form in this file was a
+  // false FAIL generator on any machine that did not match the author's, and the
+  // fix is to require the complete form rather than to make the second arm
+  // optional — an optional arm is an arm nobody maintains.
+  ceilingRe:
+    /skip ceiling \*\*(\d+) on win32 \/ (\d+) on non-win32\*\* \((\d+) win32 platform skip \+ (\d+) test\.runIf prerequisites\)/,
   ceilingLabel: 'root vitest skip ceiling',
 });
 
@@ -1570,6 +1857,13 @@ if (process.argv.includes('--json')) {
       // and ignores this.
       skipCeiling: skipCeilingReport.map((r) => ({
         observed: r.verdict.observed,
+        // `platform` and the `derived`/`permitted` pair are all additive. A
+        // consumer reading `permitted` needs to know WHICH platform it is the
+        // ceiling for, or on a non-win32 machine the number is not the one the
+        // tree supports — the same defect the document arms exist to prevent,
+        // relocated into the machine-readable surface.
+        platform: r.verdict.platform,
+        derived: r.verdict.derived,
         permitted: r.verdict.permitted,
         active: r.activeNames,
         unaccounted: r.verdict.unaccounted.map((u) => `${u.file} :: ${u.title}`),
@@ -1579,7 +1873,9 @@ if (process.argv.includes('--json')) {
           line: e.line,
           title: e.title,
           condition: e.condition,
+          firesOn: e.firesOn,
           active: r.activeNames.some((n) => n.startsWith(`${e.file}:${e.line} `)),
+          permittedHere: guardFiresOn(e, r.verdict.platform),
         })),
       })),
     }),
@@ -1623,15 +1919,27 @@ console.log('');
 // Every suite that ran a ceiling check is reported, not just the first: the loop
 // is over the collected reports so a second suite cannot be silently omitted by
 // this block being written for one shape.
+// `verdict.derived` is the count the TREE declares and `verdict.permitted` the
+// count the PLATFORM allows, and the line states both whenever they differ —
+// which on a non-win32 machine is every run, and a line reading "1 observed /
+// 14 permitted" there would be a figure the tree does not support.
 for (const r of skipCeilingReport) {
   const { verdict } = r;
+  const scope = verdict.derived === verdict.permitted
+    ? ''
+    : ` (${verdict.derived} declared in the tree, ${verdict.permitted} of them fire on ${verdict.platform})`;
   console.log(
-    `skip ceiling — ${verdict.observed} observed / ${verdict.permitted} permitted, ` +
+    `skip ceiling — ${verdict.observed} observed / ${verdict.permitted} permitted on ${verdict.platform}${scope}, ` +
       `${verdict.active.length} of ${verdict.permitted} named entries active in this run:`,
   );
   for (const e of r.entries) {
     const on = r.activeNames.some((n) => n.startsWith(`${e.file}:${e.line} `));
-    console.log(`  ${on ? 'ACTIVE  ' : 'inactive'} ${e.file}:${e.line} · ${guardName(e)} · "${e.title}"`);
+    // A third state for an entry that exists, is named, and cannot fire here.
+    // Collapsing it into `inactive` would read as "declared and dormant", which
+    // is a different and wrong statement on a platform its condition excludes.
+    const mark = on ? 'ACTIVE  ' : e.firesOn == null || e.firesOn === verdict.platform ? 'inactive' : 'other   ';
+    const note = mark === 'other   ' ? ` — does not fire on ${verdict.platform}` : '';
+    console.log(`  ${mark} ${e.file}:${e.line} · ${guardName(e)} · "${e.title}"${note}`);
   }
   for (const u of verdict.unaccounted) {
     console.log(`  UNNAMED  ${u.file} · "${u.title}" — within the ceiling, attributable to no declared guard`);

@@ -1215,6 +1215,137 @@ a named failure, or reports **NO VALID EVIDENCE**.
 
 ---
 
+## 2026-10-01 — the skip ceiling becomes per-platform, and two figures were stale
+
+A documentation-and-checker wave. **No production file changed**, but one test
+**was** added — the registration guard in `src/policy/docs-verify-coverage.test.ts`
+described below — so the root total moved **1596 → 1597**. That is stated up front
+because it is the honest summary of this wave: the entry is mostly about figures
+that were *about* the tree and had stopped being true of it, plus one claim that
+was wrong on every platform but one, and the wave's own new test moved the
+headline figure it documents.
+
+### Ledger rows changed, and why
+
+| Row | Was | Now | Why |
+|---|---|---|---|
+| "Gates at this entry" (`npm run test`) | root **1594 passed + 1 skipped** (97 files) — a **sum**, and 1594 + 1 = 1595 against a tree at 1596 | root **1595 passed + 1 skipped** (**1596** total, 97 files), as measured that day | the row recorded a sum rather than the TOTAL. The TOTAL is the only one of the three figures that is a function of the tree rather than of which gitignored artifacts exist on the disk. **Corrected as of that wave, and itself overtaken by this one** — the tree is now at 1597 because the registration guard added a test, which is recorded in the gate table below. |
+| "Gates at this entry" (`npm run test`) | root **1596 passed + 1 skipped** (**1596** total, 97 files) | root **1596 passed + 1 skipped** (**1597** total, 97 files) | the row recorded the TOTAL as 1596 one wave after this wave's own gate table; the wave below added one test to `src/policy/docs-verify-coverage.test.ts`, which moves the very figure the gate re-derives. **A documentation wave that adds a test moves the count it documents** — the same rule "keep these moving up, never down" applies in reverse. |
+| "Gates at this entry" (`npm run docs:verify`) | **35/35** | **37/37** | the row stated the claim count of a checker whose claim set had grown twice since; it is re-derived on every run and this row is a point-in-time copy of it. |
+
+**Nothing else was rewritten.** The `§§10.1–10.6` FR-10 specification is
+untouched, as are the 182/220/491/498/509/572 historical rows and every section
+that predates v0.8.2 — a ledger that overwrites its past is worse than one that
+disagrees with itself. `docs:verify` reads **only `AGENTS.md`**, so the count
+of record for every figure here continues to live there; this file records what
+each release measured and when.
+
+### The skip ceiling was a single number, and that is a per-platform defect
+
+`AGENTS.md` stated one ceiling: **14**, derived as *1 declared `win32` platform
+skip + 13 `test.runIf` prerequisites*. The declared guard is
+`test.skipIf(process.platform === 'win32')`, and **it cannot fire on any other
+platform** — so on Linux the derivation was 13 while the document said 14, and
+the claim would have been **red on every non-Windows machine**. Nothing observed
+that: it is arithmetic, and it is the class of arithmetic that is invisible from
+the machine the check was written on.
+
+The ceiling is now **per-platform, and derived per-platform**: the document
+states **`14 on win32 / 13 on non-win32`**, and `docs:verify` derives BOTH arms
+by running one platform predicate (`guardFiresOn`) over the same derived entries
+at each platform, then scores the run against the arm the current platform
+selects. Three things make it a property of the tree rather than of the host:
+
+- the platform is **declared data** (`firesOn`), not a second scan of the
+  guard's condition — the condition is an arbitrary expression and the whole
+  reason it is located by literal is that no text scan can evaluate it;
+- `declaredSkipEntries` **refuses** a guard whose `firesOn` disagrees with its own
+  literal condition, or names a third platform, so the declaration cannot drift
+  silently in either direction;
+- `declaredSkipEntries` stays **platform-independent** and the filter is a
+  separate function, so the tree derivation is not turned into a machine
+  measurement and its self-test cases do not become Windows-only.
+
+**THE LINUX BRANCH IS REASONED, NOT EXECUTED.** No Linux machine has run this
+gate. What *was* done is that `docs-verify-self-test.mjs` drives `reportSuite` at
+an explicit foreign platform and asserts the derived value moves from 14 to 13,
+that the document arm selected changes with it, and that a document carrying
+only the wrong arm is rejected on the platform where it is wrong. That proves the
+derivation is a function of the predicate; it does not prove a Linux run.
+
+### A fourth green-break: the coverage guard was satisfied by a COMMENT
+
+Worth its own section, because it is the same defect class as the three this
+session already found, and it was found by break-testing rather than by reading.
+
+MEASURED: deleting the `ceilingLabel: 'root vitest skip ceiling',` registration
+from `docs-verify.mjs` left **every test in
+`src/policy/docs-verify-coverage.test.ts` passing**. The reason is that
+`hasClaimIn` accepts a label that is QUOTED and BOUND, and the JSDoc above
+`reportSkipCeiling` names the same label in backticks —
+
+```js
+ *   2. `root vitest skip ceiling` — the RUN against the arm the current platform
+```
+
+— which satisfies the matcher exactly as a registration does. **The guard was
+satisfied by a comment ABOUT a claim while the claim itself was gone.** That is
+"coverage that reads as present while being absent" reproduced by the guard
+written to prevent it, and it is the fourth instance of the shape in this session.
+
+The fix is a `stripComments()` helper in the test, applied before the matcher:
+a claim is registered in **code**, and a file that only talks about a claim has
+not registered it. The matcher itself is **not** changed —
+`claim-matcher.ts` is deliberately property-based rather than shape-based, its
+header argues explicitly against a list of spellings, and it is outside this
+wave's write set; making it prose-aware would have to know what prose is, which
+is the shape-list by another name.
+
+**The stripper is itself break-tested**, because a stripper that removes
+everything would make the whole assertion vacuously true: neutering it to
+`return src` is caught by a measurement of how much it removed, and deleting
+every entry from its call-site table is caught by a `toBeGreaterThan(0)`.
+
+### Gates at this entry
+
+Measured on this tree, 2026-10-01, serial and unpiped. `docs:verify` is
+executed, not re-read. **The root figure moved during this wave**, because the
+registration guard above added a test; the working tree and a clean clone both
+read **1597** total, which is the only figure common to them.
+
+| Stage | Result |
+|---|---|
+| `npm run docs:verify` | exit 0 — **37/37** claims match |
+| `npm run docs:verify:self-test` | exit 0 — **31 behavioural check(s)** (was 24) |
+| `npm run test` | root **1596 passed + 1 skipped** (**1597** total, 97 files) |
+| `cd apps/desktop && npm run test` | **506 passed + 0 skipped** (36 files) |
+| `lint` · `lint:ox` · `typecheck` · `typecheck:tests` | exit 0 |
+| `cargo test` | **54** (`#[test]` count in `main.rs`; **not executed** — MSVC env not loaded and out of scope) |
+| E2E | **47 across 19 specs** (static count, **not executed** — port-bound and out of scope) |
+
+### Not verified this wave
+
+- **No Linux or macOS run.** The non-win32 arm is derived from the same
+  predicate and self-tested at a foreign platform, but no gate has executed on a
+  platform other than win32. Stated as unverified rather than as working.
+- **No `cargo test`, no `npm run test:e2e`** (MSVC environment and ports
+  respectively; both out of scope). The Rust and E2E figures above are the
+  `#[test]` and `test(` counts, which is what `docs:verify` checks.
+- **The clean-clone figure was measured on Windows only.** The clone was verified
+  with `git clone --local --no-hardlinks` and `node_modules` **junctioned** on both
+  sides (root and `apps/desktop` — the desktop suite has its own install, and
+  without the second junction the desktop claim fails with "wrote no parsable
+  JSON"). Both environments read 1597 total, 37/37 claims and 31 self-test cases;
+  what that establishes is that the two agree on **this** platform, not that the
+  non-win32 arm has been executed anywhere.
+- **The root `package-lock.json` version drift is still open.** Root
+  `package.json` reads **0.8.2**; `package-lock.json:3` and `:9` both read
+  **0.8.0**. This wave made it **detectable** — `AGENTS.md` release step 2 now
+  carries a one-line probe that prints `LOCK OK` or `LOCK DRIFT` and names the
+  disagreeing slot, verified against a repaired lock and against one-slot drift
+  in either slot — but **not fixed**, because bumping the version is a release
+  action rather than a documentation one.
+
 ## 2026-10-01 — W14/W15: the audit surface audited, and Triad A re-opened
 
 The close-out wave. Its finding is mostly about this file and its siblings, not

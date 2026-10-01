@@ -176,17 +176,37 @@ function oneAnchorResolves(citedAnchors, name, line) {
 // why `reportSuite` takes `doc` as a parameter instead of closing over the real
 // AGENTS.md.
 
-/** A `root **N total** (F files)` sentence plus a ceiling sentence. */
-function docFor({ total, files, ceiling, runIf }) {
+/**
+ * A `root **N total** (F files)` sentence plus a ceiling sentence.
+ *
+ * `win32Ceiling`/`otherCeiling` are the document's TWO arms and are separate
+ * parameters rather than one `ceiling`, because a single number could not express
+ * the cases that matter: a document stating only the win32 arm, or stating an arm
+ * the current platform does not select. Deriving them from `runIf` by default
+ * keeps every existing case writing what it means ("the tree, restated") instead
+ * of repeating `runIf + 1` at two dozen call sites.
+ */
+function docFor({ total, files, runIf, win32Guards = 1, win32Ceiling, otherCeiling }) {
+  const w32 = win32Ceiling ?? runIf + win32Guards;
+  const other = otherCeiling ?? runIf;
   return [
     `root **${total} total** (${files} files)`,
-    `The skip is a NAMED CEILING, skip ceiling **${ceiling}** (1 win32 platform skip + ${runIf} test.runIf prerequisites)`,
+    `The skip is a NAMED CEILING, skip ceiling **${w32} on win32 / ${other} on non-win32** (${win32Guards} win32 platform skip + ${runIf} test.runIf prerequisites)`,
   ].join('\n');
 }
 
 const COUNT_RE = /root \*\*(\d+) total(?: [^**]*)?\*\*/;
 const FILES_RE = /root \*\*\d+ total(?: [^**]*)?\*\* \((\d+) files\)/;
-const CEILING_RE = /skip ceiling \*\*(\d+)\*\* \(1 win32 platform skip \+ (\d+) test\.runIf prerequisites\)/;
+const CEILING_RE =
+  /skip ceiling \*\*(\d+) on win32 \/ (\d+) on non-win32\*\* \((\d+) win32 platform skip \+ (\d+) test\.runIf prerequisites\)/;
+
+// THE FOREIGN PLATFORM. Every per-platform case is driven against a platform
+// that is NOT `process.platform`, so the case is meaningful on every machine. A
+// self-test that used the running platform would pass on Windows and assert
+// nothing on Linux — which is the exact asymmetry this whole item exists to
+// remove. `…pth` keeps it off any real `process.platform` value, and
+// `FOREIGN_PLATFORM !== process.platform` is asserted below as a count.
+const FOREIGN_PLATFORM = 'not-win32';
 
 /**
  * A synthetic run: the four counts, a file count, the COLLECTED file list, and
@@ -219,8 +239,14 @@ function countsFor({ tests, passed, failed = 0, skipped = 0, files = 1, filesLis
   };
 }
 
-/** Drive one root-suite claim against a synthetic document and run. */
-function ceilingRun({ deps, doc, counts }) {
+/**
+ * Drive one root-suite claim against a synthetic document and run.
+ *
+ * `platform` defaults to the RUNNING platform, because most cases are about
+ * cardinalities that are the same on either. The per-platform cases pass it
+ * explicitly and are the only ones that do.
+ */
+function ceilingRun({ deps, doc, counts, platform }) {
   const { reportSuite, resetResults, readResults } = deps;
   resetResults();
   reportSuite({
@@ -236,6 +262,7 @@ function ceilingRun({ deps, doc, counts }) {
     skipCheck: 'ceiling',
     ceilingRe: CEILING_RE,
     ceilingLabel: 'root vitest skip ceiling',
+    platform,
   });
   const rows = readResults();
   return {
@@ -249,7 +276,7 @@ function statusOf(run, name) {
   return run.byName.get(name)?.status ?? 'ABSENT';
 }
 
-export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerdict, ...deps }) {
+export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, ceilingEntries, skipCeilingVerdict, ...deps }) {
   // `declaredSkipEntries` is handed a file list, so these cases control the
   // ceiling's size exactly by choosing which files to scan. The real
   // `test/release-verify-boot.test.ts` carries two `test.runIf` sites and no
@@ -288,6 +315,39 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
   const namedCounts = (skipped, skips) =>
     countsFor({ tests: 100, passed: 100 - skipped, skipped, files: 1, filesList: [twoEntryFile], skips });
 
+  // ── the per-platform cases ────────────────────────────────────────────────
+  //
+  // WHY THESE EXIST AND WHY THEY CANNOT BE WRITTEN ANY OTHER WAY. The ceiling's
+  // one declared guard is `test.skipIf(process.platform === 'win32')`, so it
+  // contributes to the ceiling on Windows and on nothing else. A document that
+  // stated one number would therefore be red on every non-Windows machine —
+  // including, on the evidence of the previous revision, every machine the
+  // author never ran. These cases assert the property that fixes it, and they
+  // assert it on BOTH sides of the predicate rather than only the side the test
+  // host happens to be on.
+  //
+  // WHAT IS DERIVED HERE RATHER THAN ASSUMED. `win32Arm` and `otherArm` come from
+  // `ceilingEntries` over the REAL derived entries, so a case cannot pass by
+  // restating a number this file made up. `otherArm` is asserted to be exactly
+  // `runIfCount`, which is what makes the difference falsifiable: if the declared
+  // guard were no longer the only platform entry, or if `firesOn` were dropped,
+  // the two arms would coincide and every case below would stop discriminating.
+  const realEntries = realTwo;
+  const win32Arm = ceilingEntries(realEntries, 'win32').length;
+  const otherArm = ceilingEntries(realEntries, FOREIGN_PLATFORM).length;
+  // STANDING RULE, applied to the fixture rather than to the tree: a predicate
+  // that is trivially true on the host is a case that asserts nothing. Asserted
+  // as a count/fact, and `otherArm < win32Arm` is the non-vacuity condition —
+  // without it the two arms could be equal and the "wrong arm rejected" cases
+  // would be rejecting a document that states the right number.
+  const armsDiscriminate =
+    FOREIGN_PLATFORM !== process.platform &&
+    win32Arm > 0 &&
+    otherArm > 0 &&
+    otherArm < win32Arm &&
+    win32Arm === runIfCount + platformCount &&
+    otherArm === runIfCount;
+
   return [
     // 1. The document's cardinality matching the tree passes, and that is the
     //    ONLY way the cardinality claim passes.
@@ -299,7 +359,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           counts: namedCounts(0, []),
         }),
         'root vitest skipped',
@@ -313,20 +373,20 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount - 1, runIf: runIfCount - 1 }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount - 1 }),
           counts: namedCounts(0, []),
         }),
         'root vitest skipped',
       ) === 'FAIL',
     ],
     [
-      // The compensating-error guard: the TOTAL is right and the `runIf` half is
+      // The compensating-error guard: the arms are right and the `runIf` half is
       // wrong. A bare-sum check would pass this.
-      'a correct ceiling total with a wrong runIf half is rejected',
+      'correct ceiling arms with a wrong runIf half are rejected',
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount + 1 }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount + 1 }),
           counts: namedCounts(0, []),
         }),
         'root vitest skipped',
@@ -345,7 +405,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           counts: namedCounts(ceilingCount + 1, [
             ...named,
             { file: named[0].file, title: 'an extra skip nobody declared' },
@@ -379,7 +439,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
           statusOf(
             ceilingRun({
               deps,
-              doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+              doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
               counts: namedCounts(repeated.length, repeated),
             }),
             'root vitest skip ceiling',
@@ -397,7 +457,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           counts: namedCounts(2, [
             named[0],
             { file: named[0].file, title: 'a skip nobody declared' },
@@ -418,7 +478,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           counts: namedCounts(ceilingCount, named),
         }),
         'root vitest skip ceiling',
@@ -451,7 +511,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           // `filesList: []` → the derived ceiling is 1 (the platform guard only),
           // while the document claims ceilingCount, so the CARDINALITY claim is
           // red too. The run-check is what this case is about, and it is red for
@@ -547,7 +607,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount })
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount })
             .replace('root **100 total**', 'root **99 total**'),
           counts: namedCounts(0, []),
         }),
@@ -561,7 +621,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           counts: countsFor({ tests: 100, passed: 87, files: 1 }),
         }),
         'root vitest tests',
@@ -575,7 +635,7 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           counts: countsFor({ tests: 99, passed: 87, files: 1 }),
         }),
         'root vitest tests',
@@ -638,11 +698,192 @@ export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerd
       statusOf(
         ceilingRun({
           deps,
-          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
           counts: countsFor({ tests: 100, passed: 86, failed: 1, files: 1 }),
         }),
         'root vitest (no failures)',
       ) === 'FAIL',
+    ],
+
+    // 6. THE PER-PLATFORM CASES. This is what the ruling asked for, and it is
+    //    the section that cannot be written as a single-arm case.
+    //
+    //    Each case is driven at an EXPLICIT platform, and `FOREIGN_PLATFORM` is
+    //    chosen so it differs from the running one, which is asserted by
+    //    `armsDiscriminate`. Together that means these cases are the same case on
+    //    Windows and on Linux: nothing here reads `process.platform` to decide
+    //    what it expects.
+    [
+      // The non-vacuity precondition, as its own case. Every case below is
+      // conjoined with it so none of them can pass on a tree where the two arms
+      // coincide — which is what a deleted `firesOn` would produce, and a
+      // coincidence would make "the wrong arm is rejected" reject a correct
+      // document for the wrong reason. A count/fact assertion rather than a
+      // truthiness one, per the standing rule.
+      'the two platform arms differ, and the foreign platform is not this one',
+      armsDiscriminate,
+    ],
+    [
+      // The arm SELECTED follows the platform. On win32 the document must state
+      // `runIf + 1`; on a foreign platform it must state `runIf`. Both are
+      // asserted against a document whose arms are derived from the tree, so a
+      // pass means "the checker compared the number for THIS platform".
+      //
+      // Note what is NOT claimed: this does not execute on Linux. It drives the
+      // checker's platform parameter with a non-win32 value, which is proof the
+      // derivation is a function of the predicate and not a property of the host.
+      'the ceiling cardinality claim compares the arm the platform selects',
+      statusOf(
+        ceilingRun({
+          deps,
+          platform: 'win32',
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
+          counts: namedCounts(0, []),
+        }),
+        'root vitest skipped',
+      ) === 'ok' &&
+        statusOf(
+          ceilingRun({
+            deps,
+            platform: FOREIGN_PLATFORM,
+            doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
+            counts: namedCounts(0, []),
+          }),
+          'root vitest skipped',
+        ) === 'ok' &&
+        armsDiscriminate,
+    ],
+    [
+      // THE CASE THE RULING EXISTS FOR, and the one a single-arm document could
+      // not express: a document carrying only the win32 number is RED on the
+      // foreign platform, because the ceiling there is one lower. This is the
+      // exact failure of the previous revision — correct on Windows, wrong
+      // everywhere else — driven from the wrong-platform side.
+      'a document stating only the win32 ceiling is rejected on a non-win32 platform',
+      statusOf(
+        ceilingRun({
+          deps,
+          platform: FOREIGN_PLATFORM,
+          // Both arms carry the win32 figure: the composition is self-consistent
+          // and the `runIf` half is right, so ONLY the non-win32 arm can be what
+          // rejects it. A check that simply compared the win32 arm would pass
+          // this document, which is why it is built this way.
+          doc: docFor({
+            total: 100,
+            files: 1,
+            runIf: runIfCount,
+            win32Ceiling: win32Arm,
+            otherCeiling: win32Arm,
+          }),
+          counts: namedCounts(0, []),
+        }),
+        'root vitest skipped',
+      ) === 'FAIL' && armsDiscriminate,
+    ],
+    [
+      // And the mirror: a document carrying only the non-win32 figure is RED on
+      // win32. Together the two cases are what stop the checker from having
+      // quietly become "compare the non-win32 arm" — a regression that every
+      // Windows run would report green.
+      'a document stating only the non-win32 ceiling is rejected on win32',
+      statusOf(
+        ceilingRun({
+          deps,
+          platform: 'win32',
+          doc: docFor({
+            total: 100,
+            files: 1,
+            runIf: runIfCount,
+            win32Ceiling: otherArm,
+            otherCeiling: otherArm,
+          }),
+          counts: namedCounts(0, []),
+        }),
+        'root vitest skipped',
+      ) === 'FAIL' && armsDiscriminate,
+    ],
+    [
+      // The 27-arm arithmetic bug, pinned. The first per-platform version derived
+      // each arm as `runIf + declared` where `declared` was itself a
+      // platform-filtered count over ALL entries — so the win32 arm double-counted
+      // the 13 `runIf` sites and read 27 for a 14-entry tree. MEASURED against a
+      // document stating 14, which is the only thing that caught it.
+      //
+      // Pinned as a case because it is the shape of mistake that survives every
+      // other ceiling assertion: the two arms still DIFFER, both are wrong in the
+      // same direction, and the wrong-document cases still reject the right
+      // documents. This asserts each arm equals `ceilingEntries` at its own
+      // platform and that the full set is the win32 arm — the only formulation a
+      // half-sum cannot satisfy.
+      'each ceiling arm equals the platform-scoped entry count, not a sum of halves',
+      win32Arm === ceilingEntries(realEntries, 'win32').length &&
+        otherArm === ceilingEntries(realEntries, FOREIGN_PLATFORM).length &&
+        win32Arm === realEntries.length &&
+        otherArm < realEntries.length,
+    ],
+    [
+      // The RUN claim moves with the platform too, not just the cardinality
+      // claim. A suite on a foreign platform observing `runIfCount` skips, all of
+      // them named, is within the foreign ceiling; the same suite observing one
+      // more, every skip still attributable, is NOT. This is the per-platform twin
+      // of the "beyond the ceiling but all named" case, and it is the one that
+      // matters operationally — the cardinality claim describes the document
+      // while this one binds the run.
+      //
+      // The shape is a repeated title, because that is the only shape where the
+      // bound and the accounting disagree (a `test.each` under one `runIf`).
+      'the run ceiling drops on a platform the declared guard cannot fire on',
+      (() => {
+        const dup = [named[1], named[2]].filter(Boolean).map((s) => ({ ...s }));
+        const observed = win32Arm;
+        const allNamed = new Set(dup.map((s) => `${s.file}\u0000${s.title}`)).size === dup.length;
+        const tooManyHere =
+          statusOf(
+            ceilingRun({
+              deps,
+              platform: 'win32',
+              doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
+              counts: namedCounts(observed, [...named, ...dup.slice(0, observed - runIfCount)]),
+            }),
+            'root vitest skip ceiling',
+          ) === 'ok';
+        const tooManyThere =
+          statusOf(
+            ceilingRun({
+              deps,
+              platform: FOREIGN_PLATFORM,
+              doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
+              counts: namedCounts(observed, [...named, ...dup.slice(0, observed - runIfCount)]),
+            }),
+            'root vitest skip ceiling',
+          ) === 'FAIL';
+        return observed > otherArm && allNamed && tooManyHere && tooManyThere && armsDiscriminate;
+      })(),
+    ],
+    [
+      // The ZERO-permitted guard, and it is asserted as a case because it is
+      // reachable: forcing a platform that no entry fires on derives a ceiling of
+      // 0, where `0 <= 0` holds and every skip is still attributable, so without
+      // the check the run claim would report green on a vacuous ceiling. The
+      // fixture uses an empty file list so the ceiling is exactly the declared
+      // platform guard, then drives a platform it does not fire on.
+      'a ceiling with no entry firing on the platform is rejected rather than vacuous',
+      statusOf(
+        ceilingRun({
+          deps,
+          platform: FOREIGN_PLATFORM,
+          doc: docFor({ total: 100, files: 1, runIf: runIfCount }),
+          counts: countsFor({
+            tests: 100,
+            passed: 100,
+            skipped: 0,
+            files: 1,
+            filesList: [],
+            skips: [],
+          }),
+        }),
+        'root vitest skip ceiling',
+      ) === 'FAIL' && platformCount === 1 && FOREIGN_PLATFORM !== 'win32',
     ],
   ];
 }

@@ -138,6 +138,151 @@ describe('docs:verify keeps its claim set', () => {
     // is the whole obligation; a third suite brings its own label with it.
   });
 
+  /**
+   * `src` with every comment removed — line comments and block comments.
+   *
+   * THIS EXISTS BECAUSE A BREAK-PROBE CAME BACK GREEN, and the reason is
+   * instructive enough to be worth its own function. MEASURED: deleting the
+   * `ceilingLabel: 'root vitest skip ceiling',` registration from
+   * `docs-verify.mjs` left every test in this file PASSING. The reason is that
+   * `hasClaimIn` accepts a label that is QUOTED and BOUND, and the JSDoc above
+   * `reportSkipCeiling` names the same label in backticks:
+   *
+   *     2. `root vitest skip ceiling` — the RUN against the arm ...
+   *
+   * which satisfies the matcher exactly as a registration does. So the guard
+   * was satisfied by a COMMENT ABOUT a claim while the claim was gone — the
+   * "coverage that reads as present while being absent" shape this file exists
+   * to prevent, reproduced by the guard that exists to prevent it.
+   *
+   * WHY THE MATCHER ITSELF IS NOT CHANGED. `claim-matcher.ts` is deliberately
+   * property-based rather than shape-based, its header argues explicitly against
+   * a list of spellings, and it is outside this wave's write set. Making it
+   * prose-aware would have to know what prose is, which is the shape-list by
+   * another name. Stripping comments here instead is a STATEMENT about this one
+   * relationship: a claim is registered in CODE, and a file that only talks about
+   * a claim has not registered it.
+   *
+   * The string-literal case is handled rather than ignored: a `'//'` or `'/*'`
+   * INSIDE a string must not start a comment, so a claim label containing either
+   * would otherwise swallow the rest of the file and make every later check
+   * vacuously true — the exact failure mode of a naive strip, and the reason this
+   * walks the source character by character.
+   */
+  function stripComments(src: string): string {
+    let out = '';
+    let i = 0;
+    const n = src.length;
+    while (i < n) {
+      const ch = src[i];
+      const next = src[i + 1];
+      if (ch === '/' && next === '/') {
+        const nl = src.indexOf('\n', i);
+        i = nl < 0 ? n : nl;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        const end = src.indexOf('*/', i + 2);
+        i = end < 0 ? n : end + 2;
+        // Keep a newline so line numbers stay meaningful in failure messages.
+        out += '\n';
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === '`') {
+        // Copy the literal verbatim, so a `//` inside it is not a comment start.
+        out += ch;
+        i += 1;
+        while (i < n) {
+          if (src[i] === '\\') { out += src[i] + (src[i + 1] ?? ''); i += 2; continue; }
+          out += src[i];
+          if (src[i] === ch) { i += 1; break; }
+          i += 1;
+        }
+        continue;
+      }
+      out += ch;
+      i += 1;
+    }
+    return out;
+  }
+
+  test('each numeric label is REGISTERED IN CODE, not merely mentioned in prose', () => {
+    // Direction 2 for `hasClaim`: the label must survive comment-stripping, and
+    // it must reach a claim CALL. Both are required, because each alone is
+    // satisfiable by the wrong thing:
+    //
+    //   - label present in prose only  → survives the matcher, fails this test
+    //   - label bound, call site deleted → survives the matcher, fails this test
+    //   - label passed to a call, but never bound
+    //                                    → survives `REGISTRATIONS`, fails this test
+    //
+    // And the stripper is itself exercised, because a stripper that removes
+    // everything would make the whole assertion vacuously true. MEASURED below.
+    // The stripper's own anti-vacuity bounds, and they are stated as BOUNDS on a
+    // measurement rather than as magic numbers. MEASURED on this file: the
+    // comments are ~22% of `docs-verify.mjs`, so the stripper removes about a
+    // fifth of it. The bounds are deliberately wide — "some comments went, most
+    // of the file stayed" — because the point is only to catch the two degenerate
+    // strippers (one that removes nothing, one that removes everything); the
+    // assertions below are what actually establish correctness.
+    const CODE = stripComments(SRC);
+    const removed = SRC.length - CODE.length;
+    expect(removed, 'the stripper removed nothing — this file has comments').toBeGreaterThan(SRC.length * 0.01);
+    expect(CODE.length, 'the stripper removed the entire file').toBeGreaterThan(SRC.length * 0.25);
+    // Prose that must be GONE, and code that must SURVIVE.
+    expect(CODE, 'a line comment survived stripping').not.toMatch(/^\s*\/\/ /m);
+    expect(CODE, 'a JSDoc line survived stripping').not.toMatch(/^\s*\* /m);
+    expect(CODE, 'the comment-stripping removed real code').toContain('function reportSkipCeiling');
+
+    const CALL_SITES: Record<string, string> = {
+      // Each label must still reach a claim call. The four that arrive through a
+      // destructured parameter are named by that parameter's use, and the
+      // registration binding for those is checked below.
+      'root vitest tests': 'pass(testsLabel',
+      'root vitest files': 'pass(filesLabel',
+      'root vitest skipped': 'fail(skippedLabel',
+      'root vitest skip ceiling': 'fail(ceilingLabel',
+      'skip guards declared': "'skip guards declared',",
+      // The desktop suite reaches its claims through the SAME destructured
+      // parameters as the root one, so these three pin the same call sites. They
+      // are listed separately rather than collapsed into the root entries
+      // because the labels are distinct claims, and a collapsed table would let a
+      // desktop label lose its call site unnoticed.
+      'desktop vitest tests': 'pass(testsLabel',
+      'desktop vitest files': 'pass(filesLabel',
+      'desktop vitest skipped': 'pass(skippedLabel',
+      'cargo tests': "pass('cargo tests'",
+      'e2e tests (static count)': "pass('e2e tests (static count)'",
+      'e2e specs': "pass('e2e specs'",
+      'live modules': 'pass(label, doc, String(der))',
+      'dead modules': 'pass(label, doc, String(der))',
+      'live source lines': 'pass(label, doc, String(der))',
+      'gate stage count': "pass('gate stage count'",
+    };
+    // STANDING RULE: a loop over an empty map asserts nothing. Asserted as a
+    // COUNT, and cross-checked against the pinned list so the two cannot drift
+    // into covering different sets.
+    const callLabels = Object.keys(CALL_SITES);
+    expect(callLabels.length, 'the call-site table emptied itself').toBeGreaterThan(0);
+    expect(callLabels.length, 'the call-site table lost a label the pinned list still claims').toBe(
+      NUMERIC_CLAIMS.length,
+    );
+
+    for (const label of NUMERIC_CLAIMS) {
+      // (a) bound as a label in CODE — not in a comment.
+      expect(
+        hasClaimIn(CODE, label),
+        `"${label}" survives only in prose: the claim it names is no longer registered in code`,
+      ).toBe(true);
+      // (b) reaches a claim call.
+      const site = CALL_SITES[label];
+      expect(site, `no call site is pinned for the numeric claim "${label}"`).toBeDefined();
+      expect(CODE, `"${label}" no longer reaches a claim call`).toContain(site as string);
+      // (c) and against the RAW source too, so the original guard still holds.
+      expect(hasClaim(label), `docs-verify no longer checks "${label}"`).toBe(true);
+    }
+  });
+
   test('the script still derives from the document and the tree', () => {
     // The design rule that makes the harness trustworthy: documented figures are
     // PARSED out of the markdown, derived figures computed from the tree. A
