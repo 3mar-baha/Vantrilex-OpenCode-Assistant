@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { containsSecret, REDACTION_MARKER } from '../common/logger.js';
 import {
@@ -30,6 +30,26 @@ import {
 // real credential (so a leak from this suite is not a leak at all).
 
 const NOW = 1_759_000_000_000; // 2025-10-01T12:26:40Z — fixed, so daysSince* is stable.
+
+/**
+ * This repository's root, derived from THIS FILE's own location at runtime.
+ *
+ * It used to be a hardcoded absolute path into one developer's checkout. That
+ * made the suite location-DEPENDENT: `bundle.ts:851` resolves `docsVerifyScript`
+ * from its own `import.meta.url`, so the resolved value follows wherever the tree
+ * is checked out, while the literal did not. MEASURED from a `--no-hardlinks`
+ * clone of `d67e751` at a temp path — the expected value was the clone's path
+ * and the received value was the literal, so the two disagreed by directory and
+ * nothing else:
+ *
+ * It passed in the working tree purely because the working tree happened to be
+ * that directory. `resolve(import.meta.dirname, '..', '..')` is the same two
+ * levels up that `bundle.ts` walks from `src/diag/`, derived independently from
+ * the test module rather than copied out of the production expression — so this
+ * still fails if the production derivation drifts, which is what the assertion
+ * is for.
+ */
+const REPO_ROOT = resolve(import.meta.dirname, '..', '..');
 const FAKE_GROQ = 'gsk_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const FAKE_OR = 'sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const FAKE_FISH = 'sk-fish-AAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -913,7 +933,12 @@ describe('docsVerify runs live, or is labelled skipped', () => {
     // broke nothing, which is the vacuity this closes.
     expect(insideTestRun({ VITEST: 'true' }, ['node', 'x'])).toBe(true);
     expect(insideTestRun({}, ['node', 'C:\\x\\node_modules\\vitest\\vitest.mjs'])).toBe(true);
-    expect(insideTestRun({}, ['node', 'O:\\opencode-Vantrilex\\dist\\cli.js'])).toBe(false);
+    // The negative arm used to name one developer's checkout literally. It is
+    // derived here instead, which is both location-independent AND a stronger
+    // claim: the real `dist/cli.js` of the tree actually running this test is
+    // not a vitest entrypoint, so the guard cannot be satisfied by the argv of
+    // the very process asserting it.
+    expect(insideTestRun({}, ['node', join(REPO_ROOT, 'dist', 'cli.js')])).toBe(false);
   });
 
   test('the resolved docs-verify script is the repository one, and it is NOT spawned', async () => {
@@ -926,7 +951,13 @@ describe('docsVerify runs live, or is labelled skipped', () => {
       home: mkdtempSync(join(tmpdir(), 'voxaura-home-')),
       readTextFile: () => null,
     });
-    expect(s.docsVerifyScript).toBe(join('O:\\opencode-Vantrilex', 'scripts', 'docs-verify.mjs'));
+    expect(s.docsVerifyScript).toBe(join(REPO_ROOT, 'scripts', 'docs-verify.mjs'));
+    // A string comparison alone would also pass if BOTH sides were wrong in the
+    // same way, so the resolved path is held to the filesystem: it must be the
+    // repository's own committed script, and it must be inside the root derived
+    // above rather than somewhere else on this machine.
+    expect(existsSync(s.docsVerifyScript)).toBe(true);
+    expect(resolve(s.docsVerifyScript)).toBe(resolve(join(REPO_ROOT, 'scripts', 'docs-verify.mjs')));
     const { bundle } = await collectBundle(s);
     expect(bundle.docsVerify?.status).toBe('skipped');
     expect(bundle.docsVerify?.reason).toContain('test run');

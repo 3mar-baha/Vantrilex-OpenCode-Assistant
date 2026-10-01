@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import {
   fetchWithTimeout,
@@ -20,6 +21,21 @@ import {
 import type { FishTransport } from './tts.js';
 import type { VoiceId } from '../common/brands.js';
 import type { AudioCacheConfig } from './cache.js';
+
+/**
+ * A fresh, unique scratch directory under the OS temp dir.
+ *
+ * The cache and sweep tests below used to hardcode
+ * `C:/Users/<one developer's account>/AppData/Local/Temp/opencode/tts-*`. Those
+ * are not inert fixture strings: they are `rmSync`'d, `mkdirSync`'d and written
+ * to — `AudioCache` itself does `mkdir(this.cfg.dir, { recursive: true })` at
+ * cache.ts:81 — so every one of them was a real filesystem operation against a
+ * single developer's home directory. On another account the suite would build a
+ * foreign directory tree, and two concurrent runs of this file fought over the
+ * same paths. `mkdtempSync` is derived from the module's own runtime, so the
+ * suite carries no machine-specific literal at all.
+ */
+const scratchDir = (tag: string): string => fs.mkdtempSync(path.join(tmpdir(), `voxaura-${tag}-`));
 
 // Directive 5 TDD: sentence-level streaming. The first sentence must be
 // dispatched to Fish Audio immediately — never buffered behind the full
@@ -436,7 +452,7 @@ describe('Fish request policy (D3)', () => {
 // a single cache entry, so peak memory equalled the whole reply with no ceiling.
 describe('TtsEngine cache ceiling (L2)', () => {
   const cfg: AudioCacheConfig = {
-    dir: 'C:/Users/omarb/AppData/Local/Temp/opencode/tts-l2-cache',
+    dir: scratchDir('tts-l2-cache'),
     maxEntries: 50,
     maxBytes: 1_000_000,
     maxEntryBytes: 500_000,
@@ -473,26 +489,34 @@ describe('TtsEngine cache ceiling (L2)', () => {
 // L3 — FileAudioOut wrote an MP3 to %TEMP% per reply and nothing ever pruned it.
 describe('FileAudioOut pruning (L3)', () => {
   test('prunes old files and leaves recent ones', () => {
-    const dir = 'C:/Users/omarb/AppData/Local/Temp/opencode/tts-l3-sweep';
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
-    const old = path.join(dir, 'old.mp3');
-    const fresh = path.join(dir, 'fresh.mp3');
-    fs.writeFileSync(old, 'x');
-    fs.writeFileSync(fresh, 'x');
-    const now = Date.now();
-    fs.utimesSync(old, new Date(now - 10 * 60_000), new Date(now - 10 * 60_000));
+    // `mkdtempSync` is already fresh, so the old `rmSync` + `mkdirSync` dance to
+    // guarantee a clean directory is no longer needed here.
+    const dir = scratchDir('tts-l3-sweep');
+    try {
+      const old = path.join(dir, 'old.mp3');
+      const fresh = path.join(dir, 'fresh.mp3');
+      fs.writeFileSync(old, 'x');
+      fs.writeFileSync(fresh, 'x');
+      const now = Date.now();
+      fs.utimesSync(old, new Date(now - 10 * 60_000), new Date(now - 10 * 60_000));
 
-    const removed = sweepOldPlaybackFiles(dir, 5 * 60_000, now);
+      const removed = sweepOldPlaybackFiles(dir, 5 * 60_000, now);
 
-    expect(removed).toBe(1);
-    expect(fs.existsSync(old)).toBe(false);
-    expect(fs.existsSync(fresh)).toBe(true);
-    fs.rmSync(dir, { recursive: true, force: true });
+      expect(removed).toBe(1);
+      expect(fs.existsSync(old)).toBe(false);
+      expect(fs.existsSync(fresh)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('a missing directory is not an error', () => {
-    expect(sweepOldPlaybackFiles('C:/Users/omarb/AppData/Local/Temp/opencode/tts-l3-absent', 60_000, Date.now())).toBe(0);
+    // A path that genuinely does not exist: a child of a fresh mkdtemp, never
+    // created. The point of the case is that `sweepOldPlaybackFiles` tolerates
+    // absence, so the directory must really be absent.
+    const absent = path.join(scratchDir('tts-l3-absent'), 'not-created');
+    expect(fs.existsSync(absent)).toBe(false);
+    expect(sweepOldPlaybackFiles(absent, 60_000, Date.now())).toBe(0);
   });
 
   test('the default retention is bounded', () => {
@@ -503,7 +527,7 @@ describe('FileAudioOut pruning (L3)', () => {
 
 describe('TtsEngine sanitisation (D2 integration)', () => {
   const cfg: AudioCacheConfig = {
-    dir: 'C:/Users/omarb/AppData/Local/Temp/opencode/tts-d2-cache',
+    dir: scratchDir('tts-d2-cache'),
     // AudioCacheConfig types maxEntries as the literal `50` (cache.ts:32) and
     // AudioCache hardcodes `max: 50` (cache.ts:55) — the field is never read,
     // so the value is not load-bearing here. See the report: that is a

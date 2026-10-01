@@ -149,7 +149,23 @@ const PRUNED_SUBTREES = [
   },
 ];
 
-if (!existsSync(join(distSrc, 'cli.js'))) {
+// This precondition is a precondition of the CLI, not of the module. It was
+// unguarded, which made `RUNNING_AS_CLI` incomplete: the guard above exists
+// precisely so that importing this file for `diffTrees` is side-effect-free, and
+// then this line killed the importer outright.
+//
+// MEASURED from a `--no-hardlinks` clone of d67e751, where `dist/` is gitignored
+// and therefore absent: `test/sidecar-payload.test.ts` failed AT COLLECTION with
+// `Error: process.exit unexpectedly called with "1"`, taking all 60-odd tests in
+// that file with it. It passed in the working tree only because that tree had a
+// stale `dist/` lying around — the same "green because of undeclared local state"
+// class as the other two, one level deeper: not an assertion that was wrong but
+// an import that could not be performed.
+//
+// Behaviour for the CLI is unchanged: run as the script with no `dist/`, and this
+// still prints the same message and still exits 1. `RUNNING_AS_CLI &&` only
+// removes the side effect from an import.
+if (RUNNING_AS_CLI && !existsSync(join(distSrc, 'cli.js'))) {
   console.error('missing dist/cli.js — run `npm run build` first');
   process.exit(1);
 }

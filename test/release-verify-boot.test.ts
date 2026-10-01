@@ -84,11 +84,35 @@ describe('W17 · stage 6 reads the stream the daemon banner is actually on', () 
     // The premise both halves of this fix rest on. If a future refactor moves the
     // banner to stderr, this fails and the comments in release-verify.mjs get
     // revisited rather than silently becoming wrong.
-    expect(read(join(REPO_ROOT, 'dist/cli.js'))).toMatch(/console\.log\(`ok {3}daemon:/);
+    //
+    // TARGET CORRECTED, not loosened. This read `dist/cli.js`, which is
+    // gitignored (.gitignore:3 `dist/`), so the premise the entire W17 fix
+    // rests on was verifiable only on a machine that had already run
+    // `npm run build`. MEASURED from a `--no-hardlinks` clone of d67e751:
+    //
+    //   ENOENT: no such file or directory, open '<clone>\dist\cli.js'
+    //
+    // The claim is about the daemon printing to stdout, and the TRACKED source
+    // of that claim is `src/cli.ts` — `console.log(\`ok   daemon: ws=…\`)`. That
+    // is what is asserted here, so the premise is checked in every clean
+    // checkout. The compiled artifact carries the same line and is asserted
+    // separately below, under its own name and its own stated prerequisite,
+    // rather than being what the premise silently depends on.
+    expect(read(join(REPO_ROOT, 'src/cli.ts'))).toMatch(/console\.log\(`ok {3}daemon:/);
     const rust = read(join(REPO_ROOT, 'apps/desktop/src-tauri/src/main.rs'));
     expect(rust).toMatch(/format!\("\{stem\}-stdout\.log"\)/);
     expect(rust).toMatch(/fn open_child_stdout[\s\S]{0,400}open_append/);
   });
+
+  // HONEST GATE — not a silent `return`, which would report PASS and read as
+  // coverage while being absent. Vitest lists this as SKIPPED when `dist/` is
+  // absent, and the name states the prerequisite that produces it.
+  test.runIf(existsSync(join(REPO_ROOT, 'dist/cli.js')))(
+    'the BUILT dist/cli.js carries the same stdout banner [skipped unless `npm run build` has produced dist/cli.js]',
+    () => {
+      expect(read(join(REPO_ROOT, 'dist/cli.js'))).toMatch(/console\.log\(`ok {3}daemon:/);
+    },
+  );
 
   test('a CLEAN boot passes, and the notes are real observations', () => {
     const dir = cleanBootDir();
@@ -283,14 +307,26 @@ describe('W17 · stage 6 reads the stream the daemon banner is actually on', () 
 });
 
 describe('W17 · the runtime dir is reset so secret CREATION is exercised', () => {
-  test('MEASURED: the real runtime dir has both daemon streams, stdout holding the banner', () => {
-    if (!existsSync(RUNTIME)) return; // not provisioned on this machine
-    const files = daemonLogFiles(RUNTIME);
-    expect(files).toContain('daemon-stdout.log');
-    expect(files).toContain('daemon.log');
-    expect(readFileSync(join(RUNTIME, 'daemon-stdout.log')).length).toBeGreaterThan(0);
-    expect(read(join(RUNTIME, 'daemon-stdout.log'))).toMatch(/daemon: ws=127\.0\.0\.1:4097/);
-  });
+  // HONEST GATE. This asserts a fact about the LOCAL machine: that a real,
+  // installed build put the banner on stdout and left stderr empty. That is
+  // only observable where such a build has run.
+  //
+  // It was `if (!existsSync(RUNTIME)) return;` — a silent skip. A bare `return`
+  // inside a test body reports PASS, so on any machine without the runtime dir
+  // this read as four passing assertions while asserting none. That is the
+  // defect class this whole milestone exists to remove, sitting inside the file
+  // written to remove it. `test.runIf` reports SKIPPED instead, which is
+  // visible, and the name names the prerequisite.
+  test.runIf(existsSync(RUNTIME))(
+    'MEASURED: the real runtime dir has both daemon streams, stdout holding the banner [skipped unless the app has been installed and run once]',
+    () => {
+      const files = daemonLogFiles(RUNTIME);
+      expect(files).toContain('daemon-stdout.log');
+      expect(files).toContain('daemon.log');
+      expect(readFileSync(join(RUNTIME, 'daemon-stdout.log')).length).toBeGreaterThan(0);
+      expect(read(join(RUNTIME, 'daemon-stdout.log'))).toMatch(/daemon: ws=127\.0\.0\.1:4097/);
+    },
+  );
 
   test('archiving moves the dir aside and leaves a fresh, empty one', () => {
     // This is what makes an upgrade run exercise secret CREATION rather than

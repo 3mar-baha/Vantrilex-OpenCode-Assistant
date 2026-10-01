@@ -366,14 +366,22 @@ describe('W19 · the real shipped payload', () => {
     expect(existsSync(join(SIDECAR, 'node_modules/onnxruntime-node'))).toBe(false);
   });
 
-  test('the payload does not statically import the VAD module', () => {
-    // The source-side twin of the allowlist entry. If this fails, the
-    // `DYNAMIC_MISSING_OK` reason in the audit is no longer true and the entry
-    // must be re-classified rather than left to vouch for a stale claim.
-    const src = readFileSync('apps/desktop/src-tauri/sidecar/dist/daemon.js', 'utf8');
-    expect(src).toMatch(/import\(\s*['"][^'"]*runtime\/vad\.js['"]\s*\)/);
-    expect(src).not.toMatch(/^\s*import\s[^\n]*from\s+['"][^'"]*runtime\/vad\.js['"]/m);
-  });
+  // HONEST GATE. This used to be an unguarded read of a gitignored artifact, so
+  // on a clean checkout it threw ENOENT — a FOURTH clean-clone failure that the
+  // module-load `process.exit` above was hiding, because the file died at
+  // collection before this test ever ran. The working tree only passed it
+  // because a provisioned `sidecar/` happened to be sitting there.
+  test.runIf(provisioned)(
+    'the payload does not statically import the VAD module [skipped unless `npm run sidecar:provision` has run]',
+    () => {
+      // The source-side twin of the allowlist entry. If this fails, the
+      // `DYNAMIC_MISSING_OK` reason in the audit is no longer true and the entry
+      // must be re-classified rather than left to vouch for a stale claim.
+      const src = readFileSync('apps/desktop/src-tauri/sidecar/dist/daemon.js', 'utf8');
+      expect(src).toMatch(/import\(\s*['"][^'"]*runtime\/vad\.js['"]\s*\)/);
+      expect(src).not.toMatch(/^\s*import\s[^\n]*from\s+['"][^'"]*runtime\/vad\.js['"]/m);
+    },
+  );
 });
 
 describe('W16 · the freshness check detects a stale payload', () => {
@@ -515,48 +523,56 @@ describe('W19 · the prune refuses to delete live code', () => {
     expect(prunedModulesFor(LAYA, unreachable)).toEqual(['runtime/laya/index.js']);
   });
 
-  test('the REAL prune declaration is still valid — laya really is unreachable', () => {
-    const sid = resolve('apps/desktop/src-tauri/sidecar');
-    if (!existsSync(join(sid, 'dist/cli.js'))) return; // not provisioned here
-    // Audited against `dist/`, not the payload: laya is pruned FROM the payload,
-    // so walking the already-pruned tree would find nothing under the path and
-    // the refusal below would be satisfied for the wrong reason — by the file
-    // being absent rather than by the graph proving it dead.
-    const r = auditPayload({ payloadDir: sid, distDir: resolve('dist') }) as Audit;
-    const layaModules = r.modules > 0 ? r.unreachable.filter((m) => m.startsWith('runtime/laya/')) : [];
-    // The dist/ tree does carry laya; if it did not, the prune declaration is
-    // stale and this test must say so rather than pass vacuously.
-    expect(layaModules.length, 'dist/ no longer contains runtime/laya/ — PRUNED_SUBTREES is stale').toBeGreaterThan(0);
-    expect(pruneRefusal(LAYA, r.unreachable)).toBeNull();
-    expect(prunedModulesFor(LAYA, r.unreachable).length).toBeGreaterThan(0);
-  });
+  // HONEST GATE — was `if (!existsSync(join(sid, 'dist/cli.js'))) return;`, a
+  // silent skip that reports PASS on a machine with no payload.
+  test.runIf(existsSync(join(resolve('apps/desktop/src-tauri/sidecar'), 'dist/cli.js')))(
+    'the REAL prune declaration is still valid — laya really is unreachable [skipped unless `npm run sidecar:provision` has run]',
+    () => {
+      const sid = resolve('apps/desktop/src-tauri/sidecar');
+      // Audited against `dist/`, not the payload: laya is pruned FROM the payload,
+      // so walking the already-pruned tree would find nothing under the path and
+      // the refusal below would be satisfied for the wrong reason — by the file
+      // being absent rather than by the graph proving it dead.
+      const r = auditPayload({ payloadDir: sid, distDir: resolve('dist') }) as Audit;
+      const layaModules = r.modules > 0 ? r.unreachable.filter((m) => m.startsWith('runtime/laya/')) : [];
+      // The dist/ tree does carry laya; if it did not, the prune declaration is
+      // stale and this test must say so rather than pass vacuously.
+      expect(layaModules.length, 'dist/ no longer contains runtime/laya/ — PRUNED_SUBTREES is stale').toBeGreaterThan(0);
+      expect(pruneRefusal(LAYA, r.unreachable)).toBeNull();
+      expect(prunedModulesFor(LAYA, r.unreachable).length).toBeGreaterThan(0);
+    },
+  );
 
-  test('the REAL payload matches the real dist/ right now', () => {
-    const dist = resolve('dist');
-    const payloadDist = resolve('apps/desktop/src-tauri/sidecar/dist');
-    if (!existsSync(join(payloadDist, 'cli.js'))) return; // not provisioned here
-    const laya = readdirSync(dist).includes('runtime')
-      ? (() => {
-        const walk = (d: string, out: string[] = []): string[] => {
-          for (const e of readdirSync(d, { withFileTypes: true })) {
-            const p = join(d, e.name);
-            if (e.isDirectory()) walk(p, out);
-            else out.push(p.slice(dist.length + 1).replace(/\\/g, '/'));
-          }
-          return out;
-        };
-        return walk(dist).filter((f) => f.startsWith('runtime/laya/'));
-      })()
-      : [];
-    expect(laya.length).toBeGreaterThan(0);
-    const problems = diffTrees(dist, payloadDist, { expectedAbsent: laya });
-    expect(
-      problems,
-      'the shipped sidecar does not match dist/. Run `npm run sidecar:provision`. ' +
-      'This is W16: build:tauri no longer re-provisions on its own, so a stale payload here ' +
-      'means someone built the payload by hand.',
-    ).toEqual([]);
-  });
+  // HONEST GATE — was `if (!existsSync(join(payloadDist, 'cli.js'))) return;`, a
+  // silent skip that reported PASS on a machine with no payload.
+  test.runIf(existsSync(join(resolve('apps/desktop/src-tauri/sidecar/dist'), 'cli.js')))(
+    'the REAL payload matches the real dist/ right now [skipped unless `npm run sidecar:provision` has run]',
+    () => {
+      const dist = resolve('dist');
+      const payloadDist = resolve('apps/desktop/src-tauri/sidecar/dist');
+      const laya = readdirSync(dist).includes('runtime')
+        ? (() => {
+          const walk = (d: string, out: string[] = []): string[] => {
+            for (const e of readdirSync(d, { withFileTypes: true })) {
+              const p = join(d, e.name);
+              if (e.isDirectory()) walk(p, out);
+              else out.push(p.slice(dist.length + 1).replace(/\\/g, '/'));
+            }
+            return out;
+          };
+          return walk(dist).filter((f) => f.startsWith('runtime/laya/'));
+        })()
+        : [];
+      expect(laya.length).toBeGreaterThan(0);
+      const problems = diffTrees(dist, payloadDist, { expectedAbsent: laya });
+      expect(
+        problems,
+        'the shipped sidecar does not match dist/. Run `npm run sidecar:provision`. ' +
+        'This is W16: build:tauri no longer re-provisions on its own, so a stale payload here ' +
+        'means someone built the payload by hand.',
+      ).toEqual([]);
+    },
+  );
 });
 
 describe('W18 · the sidecar manifest is pinned and locked', () => {
@@ -610,56 +626,68 @@ describe('W18 · the sidecar manifest is pinned and locked', () => {
     }
   });
 
-  test('BREAK: the payload manifest matches the committed manifest exactly', () => {
-    // If the payload was provisioned from a hand-edited manifest, the installed
-    // tree is not the committed one. `--check` compares them; this asserts the
-    // tree in the repo agrees with the file in the repo.
-    const payloadManifest = join(resolve('apps/desktop/src-tauri/sidecar'), 'package.json');
-    if (!existsSync(payloadManifest)) return;
-    const installed = JSON.parse(readFileSync(payloadManifest, 'utf8')) as { dependencies: Record<string, string> };
-    expect(installed.dependencies).toEqual(manifest.dependencies);
-  });
+  // HONEST GATE — was `if (!existsSync(payloadManifest)) return;`.
+  test.runIf(existsSync(join(resolve('apps/desktop/src-tauri/sidecar'), 'package.json')))(
+    'BREAK: the payload manifest matches the committed manifest exactly [skipped unless `npm run sidecar:provision` has run]',
+    () => {
+      // If the payload was provisioned from a hand-edited manifest, the installed
+      // tree is not the committed one. `--check` compares them; this asserts the
+      // tree in the repo agrees with the file in the repo.
+      const payloadManifest = join(resolve('apps/desktop/src-tauri/sidecar'), 'package.json');
+      const installed = JSON.parse(readFileSync(payloadManifest, 'utf8')) as { dependencies: Record<string, string> };
+      expect(installed.dependencies).toEqual(manifest.dependencies);
+    },
+  );
 
-  test('the payload node_modules versions match the committed lock', () => {
-    // The end of the chain: what actually shipped equals what is committed. This
-    // is the assertion that would have caught "the installer's tree is a function
-    // of registry state".
-    const nm = join(resolve('apps/desktop/src-tauri/sidecar'), 'node_modules');
-    if (!existsSync(nm)) return;
-    let checked = 0;
-    for (const [key, v] of Object.entries(lock.packages)) {
-      if (key === '') continue;
-      const name = key.replace(/^node_modules\//, '');
-      const pj = join(nm, ...name.split('/'), 'package.json');
-      if (!existsSync(pj)) continue;
-      const installed = JSON.parse(readFileSync(pj, 'utf8')) as { version: string };
-      expect(installed.version, `${name}: lock says ${v.version}, payload has ${installed.version}`).toBe(v.version);
-      checked += 1;
-    }
-    // Not zero, or the loop above proved nothing.
-    expect(checked).toBeGreaterThan(0);
-  });
-
-  test('the payload ships nothing that is not in the lock', () => {
-    const nm = join(resolve('apps/desktop/src-tauri/sidecar'), 'node_modules');
-    if (!existsSync(nm)) return;
-    const locked = new Set(Object.keys(lock.packages).filter((k) => k !== '').map((k) => k.replace(/^node_modules\//, '')));
-    const installed: string[] = [];
-    const walk = (dir: string, prefix = '') => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        if (!e.isDirectory() && !e.isSymbolicLink()) continue;
-        if (e.name === '.bin') continue;
-        if (e.name.startsWith('@')) { walk(join(dir, e.name), e.name + '/'); continue; }
-        const name = prefix + e.name;
-        if (existsSync(join(dir, e.name, 'package.json'))) installed.push(name);
-        const nested = join(dir, e.name, 'node_modules');
-        if (existsSync(nested)) walk(nested, name + '/');
+  // HONEST GATE — was `if (!existsSync(nm)) return;`.
+  test.runIf(existsSync(join(resolve('apps/desktop/src-tauri/sidecar'), 'node_modules')))(
+    'the payload node_modules versions match the committed lock [skipped unless `npm run sidecar:provision` has run]',
+    () => {
+      // The end of the chain: what actually shipped equals what is committed. This
+      // is the assertion that would have caught "the installer's tree is a function
+      // of registry state".
+      const nm = join(resolve('apps/desktop/src-tauri/sidecar'), 'node_modules');
+      let checked = 0;
+      for (const [key, v] of Object.entries(lock.packages)) {
+        if (key === '') continue;
+        const name = key.replace(/^node_modules\//, '');
+        const pj = join(nm, ...name.split('/'), 'package.json');
+        if (!existsSync(pj)) continue;
+        const installed = JSON.parse(readFileSync(pj, 'utf8')) as { version: string };
+        expect(installed.version, `${name}: lock says ${v.version}, payload has ${installed.version}`).toBe(v.version);
+        checked += 1;
       }
-    };
-    walk(nm);
-    const extra = installed.filter((n) => !locked.has(n));
-    expect(extra, `installed but absent from the committed lock: ${extra.join(', ')}`).toEqual([]);
-  });
+      // STANDING RULE: not zero, or the loop above proved nothing.
+      expect(checked).toBeGreaterThan(0);
+    },
+  );
+
+  // HONEST GATE — was `if (!existsSync(nm)) return;`.
+  test.runIf(existsSync(join(resolve('apps/desktop/src-tauri/sidecar'), 'node_modules')))(
+    'the payload ships nothing that is not in the lock [skipped unless `npm run sidecar:provision` has run]',
+    () => {
+      const nm = join(resolve('apps/desktop/src-tauri/sidecar'), 'node_modules');
+      const locked = new Set(Object.keys(lock.packages).filter((k) => k !== '').map((k) => k.replace(/^node_modules\//, '')));
+      const installed: string[] = [];
+      const walk = (dir: string, prefix = '') => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          if (!e.isDirectory() && !e.isSymbolicLink()) continue;
+          if (e.name === '.bin') continue;
+          if (e.name.startsWith('@')) { walk(join(dir, e.name), e.name + '/'); continue; }
+          const name = prefix + e.name;
+          if (existsSync(join(dir, e.name, 'package.json'))) installed.push(name);
+          const nested = join(dir, e.name, 'node_modules');
+          if (existsSync(nested)) walk(nested, name + '/');
+        }
+      };
+      walk(nm);
+      const extra = installed.filter((n) => !locked.has(n));
+      expect(extra, `installed but absent from the committed lock: ${extra.join(', ')}`).toEqual([]);
+      // STANDING RULE: the walk above must have seen something, or "nothing
+      // extra" is vacuously true over an empty set.
+      expect(installed.length, 'the payload walk found no packages at all').toBeGreaterThan(0);
+    },
+  );
 
   test('the manifest does NOT inherit the root dependency list', () => {
     // `onnxruntime-node` is a root dependency and is deliberately NOT in the
@@ -809,11 +837,14 @@ describe('W18 · the sidecar manifest is pinned and locked', () => {
   }
 });
 
-  test('the REAL payload node.exe passes all three checks', () => {
-    const nx = join(resolve('apps/desktop/src-tauri/sidecar'), 'node.exe');
-    if (!existsSync(nx)) return; // not provisioned here
-    expect(nodeExeProblem(nx, process.version)).toBeNull();
-  });
+  // HONEST GATE — was `if (!existsSync(nx)) return;`.
+  test.runIf(existsSync(join(resolve('apps/desktop/src-tauri/sidecar'), 'node.exe')))(
+    'the REAL payload node.exe passes all three checks [skipped unless `npm run sidecar:provision` has run]',
+    () => {
+      const nx = join(resolve('apps/desktop/src-tauri/sidecar'), 'node.exe');
+      expect(nodeExeProblem(nx, process.version)).toBeNull();
+    },
+  );
 
   test('the root manifest exposes the provision and check scripts', () => {
     const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { scripts: Record<string, string> };
