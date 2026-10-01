@@ -1,8 +1,18 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    // `rootDir: src` comes from tsconfig.json and governs the EMIT layout, which
+    // this project disables with noEmit. It has to be widened anyway or TS6059
+    // rejects every `test/**` file as "not under rootDir" — the option is about
+    // where output would go, not about what may be typechecked.
+    "rootDir": "."
   },
-  "include": ["src/**/*.ts"],
+  // `test/**/*.ts` is included for the same reason `src/**/*.ts` is: the packaging
+  // guards live there (test/sidecar-payload.test.ts, test/release-verify-boot.test.ts)
+  // and Vitest transpiles without checking types, so an excluded test file is
+  // compiled under no type checker at all. That gap previously hid 62 real type
+  // errors across 9 src test files; the same trap applies to a new directory.
+  "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
