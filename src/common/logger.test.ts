@@ -123,6 +123,134 @@ describe('secret redaction (I-2)', () => {
     expect(LIVE_PREFIXES).toEqual(CREDENTIAL_FAMILIES.map((f) => f.prefix));
   });
 
+  // ── PROPERTY 2: the samples are unreadable to a CREDENTIAL SCANNER ─────────
+  //
+  // Property 1 — each sample still matches its OWN family's pattern — is
+  // asserted above, family by family. That is the half that protects coverage:
+  // a sample that stopped matching would mean the family's test was exercising
+  // nothing. This is the other half, and it is the reason the samples are
+  // written as `SAMPLE('prefix', 'body')` fragments rather than plain literals.
+  //
+  // GitHub push protection rejected a push over three synthetic samples in this
+  // file (Stripe `sk_live_`, Stripe restricted `rk_live_`, Mailgun `key-`). The
+  // exposure audit had already established that no live credential was tracked,
+  // so the finding was a false positive — but a false positive here is not
+  // grounds to weaken the detector, and the samples are the part that can
+  // change. Splitting the literal at the prefix boundary keeps the RUNTIME value
+  // byte-identical (so property 1 is untouched) while ensuring no
+  // scanner-shaped run appears CONTIGUOUS in any tracked file.
+  //
+  // The provider regexes below are the real formats, not the family's own
+  // patterns: a test that reused `CREDENTIAL_FAMILIES[].pattern` would be
+  // asserting that the redactor agrees with itself.
+  describe('no tracked file contains a contiguous provider-scanner credential', () => {
+    const SCANNER_PATTERNS: readonly (readonly [string, RegExp])[] = [
+      ['stripe_api_key', /(?:r|s)k_(?:test|live)_[0-9a-zA-Z]{24,}/],
+      ['stripe_live_restricted_key', /rk_(?:test|live)_[0-9a-zA-Z]{24,}/],
+      ['mailgun_api_key', /key-[0-9a-fA-F]{32}/],
+      ['mailgun_signing_key', /key-[0-9a-fA-F]{32}-[0-9a-zA-Z]{8}-[0-9a-zA-Z]{8}/],
+      ['openrouter_api_key', /sk-or-v1-[0-9a-f]{64}/],
+      ['groq_api_key', /gsk_[a-zA-Z0-9]{52}/],
+      ['anthropic_api_key', /sk-ant-api\d{2}-[a-zA-Z0-9\-_]{93}/],
+      ['openai_project_key', /sk-proj-[A-Za-z0-9_-]{20,}/],
+      ['google_api_key', /AIza[0-9A-Za-z_-]{35}/],
+      ['github_pat', /gh[pousr]_[A-Za-z0-9]{36}/],
+      ['github_fine_pat', /github_pat_[A-Za-z0-9_]{22,}/],
+      ['slack_token', /xox[baprs]-[A-Za-z0-9-]{10,}/],
+      ['npm_token', /npm_[a-zA-Z0-9]{36}/],
+      ['hf_token', /hf_[a-zA-Z]{34}/],
+      ['sendgrid_api_key', /SG\.[\w-]{16,32}\.[\w-]{16,64}/],
+      ['aws_access_key_id', /(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|AIDA|AROA|AGPA)[A-Z0-9]{16}/],
+      ['azure_storage_key', /AccountKey=[A-Za-z0-9+/=]{40,}/],
+      ['jwt', /ey[A-Za-z0-9_-]{17,}\.ey[A-Za-z0-9_-]{17,}\.[A-Za-z0-9_-]{10,}/],
+    ];
+
+    // WHAT THIS GUARD COVERS, AND WHY NOT EVERYTHING.
+    //
+    // Scope is the files that DECLARE credential samples, i.e. the ones a
+    // scanner match would be attributable to. Today that is `logger.ts` and
+    // this file. Scoped deliberately rather than "every tracked file", because
+    // a guard that is red for a reason nobody can act on stops being read: two
+    // `src/ipc/**` test files carry Google/GitHub-shaped literals that predate
+    // this change, are already published on `origin/main` (introduced by
+    // `63e6695`), and are outside this change's write set. Widening to them
+    // would make the assertion permanently red and therefore vacuous in
+    // practice — the reader learns to skip it. They are reported here instead.
+    const SAMPLE_DECLARING_FILES = ['src/common/logger.ts', 'src/common/logger.test.ts'];
+
+    function repoRoot(): string {
+      // vitest.config.ts runs this suite from any cwd (a clean clone uses a
+      // different path), so the root is derived from this module's URL, never
+      // from `process.cwd()`.
+      const here = new URL('../../', import.meta.url);
+      return decodeURIComponent(here.pathname).replace(/^\//, '').replace(/\/$/, '');
+    }
+
+    test('the scanner corpus is non-empty and every pattern fires on a real-format probe', () => {
+      // Anti-vacuity. A SCANNER_PATTERNS list that was empty, or a regex that
+      // matches nothing, would make the guard below pass for the wrong reason —
+      // the same failure mode as `every()` over an empty set. Every declared
+      // pattern is therefore proved live against a string of ITS OWN format,
+      // built from fragments so this file does not itself trip the guard.
+      expect(SCANNER_PATTERNS.length).toBeGreaterThan(10);
+      const probe = (prefix: string, body: string): string => `${prefix}${body}`;
+      const probes = new Map<string, string>([
+        ['stripe_api_key', probe('sk_live_', 'A'.repeat(24))],
+        ['stripe_live_restricted_key', probe('rk_live_', 'A'.repeat(24))],
+        ['mailgun_api_key', probe('key-', 'a'.repeat(32))],
+        ['mailgun_signing_key', probe('key-', `${'a'.repeat(32)}-${'b'.repeat(8)}-${'c'.repeat(8)}`)],
+        ['openrouter_api_key', probe('sk-or-v1-', 'a'.repeat(64))],
+        ['groq_api_key', probe('gsk_', 'A'.repeat(52))],
+        ['anthropic_api_key', probe('sk-ant-api03-', 'A'.repeat(93))],
+        ['openai_project_key', probe('sk-proj-', 'A'.repeat(20))],
+        ['google_api_key', probe('AIza', 'A'.repeat(35))],
+        ['github_pat', probe('ghp_', 'a'.repeat(36))],
+        ['github_fine_pat', probe('github_pat_', 'a'.repeat(30))],
+        ['slack_token', probe('xoxb-', 'A'.repeat(12))],
+        ['npm_token', probe('npm_', 'a'.repeat(36))],
+        ['hf_token', probe('hf_', 'a'.repeat(34))],
+        ['sendgrid_api_key', probe('SG.', `${'a'.repeat(22)}.${'b'.repeat(22)}`)],
+        ['aws_access_key_id', probe('AKIA', 'A'.repeat(16))],
+        ['azure_storage_key', probe('AccountKey=', 'A'.repeat(44))],
+        // A JWT's SECOND segment also opens `ey` — base64 of `{"` — which is
+        // what the scanner pattern keys on. A probe that omits it would fail
+        // to match and read as a broken pattern rather than a wrong probe.
+        ['jwt', probe('eyJ', `${'A'.repeat(20)}.eyJ${'B'.repeat(20)}.${'C'.repeat(12)}`)],
+      ]);
+      // Every declared pattern has a probe — otherwise the loop below proves
+      // nothing about the un-probed ones and the count would drift silently.
+      expect(probes.size).toBe(SCANNER_PATTERNS.length);
+      for (const [name, re] of SCANNER_PATTERNS) {
+        const pv = probes.get(name);
+        expect(pv, `${name} has no real-format probe`).toBeDefined();
+        expect(re.test(pv as string), `${name} must match its real-format probe`).toBe(true);
+      }
+    });
+
+    test('the sample-declaring files contain no contiguous scanner-shaped literal', () => {
+      const root = repoRoot();
+      expect(SAMPLE_DECLARING_FILES.length, 'guard scope emptied — it would pass vacuously').toBeGreaterThan(0);
+      // The scope must name the file that declares the table, or the guard is
+      // pointed at nothing. Asserted rather than trusted.
+      expect(SAMPLE_DECLARING_FILES).toContain('src/common/logger.ts');
+
+      const findings: string[] = [];
+      for (const rel of SAMPLE_DECLARING_FILES) {
+        const bytes = readFileSync(new URL(rel, new URL(`file:///${root}/`)));
+        const text = bytes.toString('utf8');
+        for (const [name, re] of SCANNER_PATTERNS) {
+          re.lastIndex = 0;
+          const m = re.exec(text);
+          if (m) {
+            const line = text.slice(0, m.index).split('\n').length;
+            findings.push(`${rel}:${line} [${name}] ${JSON.stringify(m[0].slice(0, 60))}`);
+          }
+        }
+      }
+      expect(findings, findings.join('\n')).toEqual([]);
+    });
+  });
+
   // Anti-vacuity for the generic long-tail `sk-` fallback: it must skip every
   // NAMED `sk-` family, which is what keeps the per-family tests honest.
   test('the generic sk- fallback does not shadow a specific prefix', () => {
