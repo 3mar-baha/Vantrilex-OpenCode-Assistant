@@ -1,107 +1,75 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
-// M4 C.6 — the microphone calibration wizard, end to end.
+// MICROPHONE CALIBRATION — RETIRED as a UI capability, and this is the record.
 //
-// WHAT IS ASSERTED HERE IS DELIBERATELY THIN, and the reason is written down
-// rather than hidden behind a green tick: the wizard's only real input is
-// microphone audio, and this project launches Chromium with
-// `--use-fake-device-for-media-stream` (playwright.config.ts). Chromium's fake
-// device emits a synthetic tone, and NOBODY HAS MEASURED what energy that tone
-// puts through this pipeline on this machine. So a spec that asserted a floor
-// value, or even that the room reads `quiet`, would be asserting a number this
-// suite invented — the exact defect class this item is not allowed to ship.
+// WHAT WAS RETIRED. The bento footer carried `open-calibration`, which opened a
+// `PortalShell` wrapping `CalibrationWizard`. The trigger is gone; there is no
+// other entry point anywhere in the renderer. Confirmed in the live DOM:
+// `open-calibration`, `calibration-portal` and `calibration-body` all measure
+// ZERO, and the only non-test references to `CalibrationWizard` are its own
+// source file, `calibration-meter.ts` and a comment in App.tsx. No JSX mounts it.
 //
-// WHAT IS DETERMINISTIC AND THEREFORE ASSERTED: the surface. The footer
-// control opens a `PortalShell`; the three phases run in order over the real
-// 10 s clock; Esc closes it; the panel is bounded; the deferred-threshold
-// control is absent; and the stub records no command, so a measurement cannot
-// have reached the daemon. None of that depends on what the fake device emits,
-// and the run completes whether or not the device opened.
+// WHAT SURVIVES. `src/audio/calibration-meter.ts` and `CalibrationWizard.tsx`
+// both still exist with their own unit suites (`CalibrationWizard.test.tsx`,
+// `calibration-meter.test.ts`) — 14 unit tests over the phase order, the verdict
+// bands, the absent threshold control and the purity of the meter. So the LOGIC
+// is still tested; what the user lost is the way to reach it.
 //
-// WHAT IS NOT COVERED HERE: every verdict band. The band table, both gate
-// boundaries, the unmeasured arm and the purity of the meter are
-// `src/audio/calibration-meter.test.ts`; the verdict copy and the absent
-// threshold control are `src/components/portals/CalibrationWizard.test.tsx`.
-
-async function open(page: Page): Promise<void> {
-  // Cold Vite transform of the whole graph is harness cost, not product
-  // behaviour — see credit.spec.ts for the same reasoning.
-  await page.goto('/', { timeout: 90_000 });
-}
-
-async function commandCount(): Promise<number> {
-  const res = await fetch('http://localhost:4197/commands');
-  const rows = (await res.json()) as unknown[];
-  return rows.length;
-}
-
-test('the footer opens the calibration portal and the three phases run in order', async ({ page }) => {
-  await open(page);
+// WHY IT MATTERS MORE THAN A COSMETIC LOSS. First-run mic/VAD calibration was
+// the queued mitigation for "a voice-first user on a bad room gets mis-heard and
+// has no recourse". With no trigger, that recourse does not exist. The daemon
+// still holds a speech gate and still drops quiet windows (`ingest.ts`), so the
+// failure mode it was meant to fix is still live.
+//
+// The three tests this file replaces asserted the wizard's phase order over the
+// real 10 s clock, the absent threshold control, and Esc-closes-with-no-command.
+// All three are unreachable through the product, so they are retired rather than
+// weakened. The negative invariant they protected — "a calibration measurement
+// sends the daemon nothing" — is restated below against the shell as it stands,
+// because that is still enforceable.
+test('there is NO calibration trigger anywhere in the widget', async ({ page }) => {
+  await page.goto('/');
   await expect(page.getByTestId('bridge-status')).toContainText('متصل', { timeout: 10_000 });
 
-  const trigger = page.getByTestId('open-calibration');
-  await expect(trigger).toBeVisible();
-  // Every control carries an Arabic title. The visible label is the roadmap's.
-  await expect(trigger).toHaveText('معايرة الميكروفون');
-  expect(await trigger.getAttribute('title')).toMatch(/\p{sc=Arabic}/u);
-
-  await trigger.click();
-  const portal = page.getByTestId('calibration-portal');
-  await expect(portal).toBeVisible();
-  await expect(portal).toHaveAttribute('data-phase', 'listen');
-
-  // The real clock, the real 10 s. Recorded as a sequence so the ORDER is what
-  // is asserted — a portal that skipped to the verdict would fail here.
-  const seen: string[] = ['listen'];
-  const current = (): string | null => portal.getAttribute('data-phase');
-  for (const want of ['measure', 'verdict', 'done']) {
-    await expect
-      .poll(current, { timeout: 15_000, message: `phase ${want}` })
-      .toBe(want);
-    seen.push(want);
-  }
-  expect(seen).toEqual(['listen', 'measure', 'verdict', 'done']);
-  // A verdict is shown for all three bands, measured or not — which is exactly
-  // why its TEXT is not asserted here.
-  await expect(page.getByTestId('calibration-verdict')).toHaveCount(1);
-});
-
-test('the deferred-threshold control is absent and the panel is bounded', async ({ page }) => {
-  await open(page);
-  await expect(page.getByTestId('bridge-status')).toContainText('متصل', { timeout: 10_000 });
-  await page.getByTestId('open-calibration').click();
-
-  const body = page.getByTestId('calibration-body');
-  await expect(body).toBeVisible();
-  // Persistence is SPECULATIVE and deferred, and the renderer holds no durable
-  // state at all. A control that could not work must not be rendered.
-  await expect(body.locator('input')).toHaveCount(0);
-  await expect(body.locator('select')).toHaveCount(0);
-  await expect(body.locator('textarea')).toHaveCount(0);
-
-  const box = await body.evaluate((el) => {
-    const style = window.getComputedStyle(el);
-    return { maxHeight: style.maxHeight, width: style.width };
-  });
-  expect(parseFloat(box.maxHeight)).toBeGreaterThan(0);
-  expect(parseFloat(box.maxHeight)).toBeLessThanOrEqual(600);
-  expect(parseFloat(box.width)).toBeLessThanOrEqual(440);
-});
-
-test('Esc closes the portal and the daemon is sent nothing', async ({ page }) => {
-  await open(page);
-  await expect(page.getByTestId('bridge-status')).toContainText('متصل', { timeout: 10_000 });
-
-  // Snapshot, do not assert zero: the stub is shared by the whole run and
-  // earlier specs in the same worker have already sent their own commands.
-  const before = await commandCount();
-
-  await page.getByTestId('open-calibration').click();
-  await expect(page.getByTestId('calibration-portal')).toBeVisible();
-  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('open-calibration')).toHaveCount(0);
   await expect(page.getByTestId('calibration-portal')).toHaveCount(0);
+  await expect(page.getByTestId('calibration-body')).toHaveCount(0);
+  await expect(page.getByTestId('calibration-verdict')).toHaveCount(0);
 
-  // A measurement is a local act. No command, no canned reply.
-  expect(await commandCount()).toBe(before);
-  await expect(page.getByTestId('announce')).toHaveText('');
+  // The trigger is not hidden behind a tab or a scroll either — the whole shell
+  // is three buttons, and this is all of them.
+  await expect(page.locator('button')).toHaveCount(3);
+
+  // The settings window is the only other surface, and it has no calibration tab.
+  const [settings] = await Promise.all([page.context().waitForEvent('page'), page.keyboard.press('Control+Comma')]);
+  await settings.waitForLoadState('domcontentloaded');
+  await expect(settings.getByTestId('settings-view')).toBeVisible();
+  for (const id of ['open-calibration', 'calibration-portal', 'calibration-body', 'calibration-verdict']) {
+    await expect(settings.getByTestId(id)).toHaveCount(0);
+  }
+  await settings.close();
+});
+
+test('the mic toggle still sends only `deafen` — no measurement command exists', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('bridge-status')).toContainText('متصل', { timeout: 10_000 });
+
+  // The invariant the retired Esc test guarded: a local measurement must never
+  // reach the daemon. There is no measurement surface left, so the only mic
+  // command the shell can emit is the mute.
+  const rows = () => fetch('http://localhost:4197/commands').then((r) => r.json() as Promise<Array<{ kind: string }>>);
+  const before = await rows();
+
+  const mic = page.getByTestId('mic-toggle');
+  await mic.click();
+  await expect(mic).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(async () => (await rows()).filter((c) => c.kind === 'deafen').length, { timeout: 5_000 })
+    .toBe(before.filter((c) => c.kind === 'deafen').length + 1);
+
+  const after = await rows();
+  const kinds = after.slice(before.length).map((c) => c.kind);
+  expect(new Set(kinds), 'only the mute travels').toEqual(new Set(['deafen']));
+
+  await mic.click();
+  await expect(mic).toHaveAttribute('aria-pressed', 'true');
 });

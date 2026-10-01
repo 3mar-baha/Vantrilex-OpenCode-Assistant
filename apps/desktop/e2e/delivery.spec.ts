@@ -11,8 +11,14 @@ import { expect, test } from '@playwright/test';
 //
 // It needs NO new stub route: the stub already records every command the real
 // `UiServer` parsed and serves them from `/commands` (this is how
-// `bargein.spec.ts` asserts `stopSpeech`). Adding `/playback-started` would have
-// been a second, redundant way to observe the same thing.
+// `bargein.spec.ts` asserts `stopSpeech`).
+//
+// bd103b2: this file's second test clicked `abort-button` twice — once for the
+// latch-clearing precondition and once for its subject. That button is gone, and
+// with it the turn-cancel capability it measured (see `abort.spec.ts`). The
+// latch is cleared by anything that calls `stop()` on the player, and the mute
+// is one of them (`AudioPlayer.setMuted(true)` → `stop()`), so the re-point is a
+// real control rather than a stubbed one.
 
 async function post(path: string, body: unknown): Promise<unknown> {
   const res = await fetch(`http://localhost:4197${path}`, {
@@ -28,19 +34,20 @@ async function commands(): Promise<Array<{ kind: string; playbackId?: string }>>
   return (await res.json()) as Array<{ kind: string; playbackId?: string }>;
 }
 
+const FAKE_MP3 = [0xff, 0xfb, 0x90, 0x00, 1, 2, 3, 4];
+
 test('the player tells the daemon playback started, with a bounded correlation id', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
+  await expect(page.getByTestId('bridge-status')).toContainText('متصل', { timeout: 10_000 });
 
   // NOTE: the stub's /commands log is GLOBAL across the whole Playwright run
-  // (one stub process), so earlier specs (e.g. bargein) may already have left
-  // playbackStarted rows. Assert the DELTA this spec produces, never an
-  // absolute zero — the zero-assumption failed the M2 close gate.
+  // (one stub process), so earlier specs may already have left playbackStarted
+  // rows. Assert the DELTA this spec produces, never an absolute zero.
   const before = (await commands()).filter((c) => c.kind === 'playbackStarted').length;
 
   // A fake MP3 payload: decode fails in the player, but `enqueue` → `onStart` is
   // exactly the path under test (the same trick `downlink.spec.ts` uses).
-  const payload = [0xff, 0xfb, 0x90, 0x00, 1, 2, 3, 4];
+  const payload = FAKE_MP3;
   await post('/audio-down', { bytes: payload });
   await expect
     .poll(async () => (await commands()).filter((c) => c.kind === 'playbackStarted').length, { timeout: 10_000 })
@@ -53,12 +60,11 @@ test('the player tells the daemon playback started, with a bounded correlation i
   expect(String(first?.playbackId).length).toBeLessThanOrEqual(64);
   expect(String(first?.playbackId)).not.toMatch(/^ses_/);
 
-  // LATCH HONESTY (M2 close-gate fix): whether three back-to-back posts are
-  // one run or three depends on decode timing — the fake payload fails decode
-  // fast, so the queue may drain between posts and each legitimately reports.
-  // The per-run latch itself is unit-pinned in playback.test.ts; here we pin
-  // the deterministic part: every emitted row carries a bounded,
-  // non-session correlation id, however many rows there are.
+  // LATCH HONESTY: whether three back-to-back posts are one run or three depends
+  // on decode timing — the fake payload fails decode fast, so the queue may drain
+  // between posts and each legitimately reports. The per-run latch itself is
+  // unit-pinned in playback.test.ts; here we pin the deterministic part: every
+  // emitted row carries a bounded, non-session correlation id, however many.
   await post('/audio-down', { bytes: payload });
   await post('/audio-down', { bytes: payload });
   await post('/audio-down', { bytes: payload });
@@ -71,41 +77,62 @@ test('the player tells the daemon playback started, with a bounded correlation i
   }
   const after = rows.length;
 
-  // A barge ends the run, so the NEXT utterance reports again — that is the
-  // latch clearing, not the signal being one-shot forever.
-  await page.getByTestId('abort-button').click();
+  // A stop ends the run, so the NEXT utterance reports again — that is the latch
+  // clearing, not the signal being one-shot forever.
+  //
+  // Re-pointed from `abort-button` to `bot-toggle`. A mute calls
+  // `AudioPlayer.setMuted(true)`, which calls `stop()`, which clears `started` —
+  // the same latch-clearing edge the abort button used to exercise. The mute is
+  // a control that still exists AND it sends no command to the daemon, so this
+  // also re-proves the W6 property from the delivery side.
+  const bot = page.getByTestId('bot-toggle');
+  await expect(bot).toHaveAttribute('aria-pressed', 'false');
+  const cmdsBefore = (await commands()).length;
+  await bot.click();
+  await expect(bot).toHaveAttribute('aria-pressed', 'true');
+  expect((await commands()).length, 'the mute reports nothing to the daemon').toBe(cmdsBefore);
+
+  await bot.click();
+  await expect(bot).toHaveAttribute('aria-pressed', 'false');
+
   await post('/audio-down', { bytes: payload });
   await expect
     .poll(async () => (await commands()).filter((c) => c.kind === 'playbackStarted').length, { timeout: 10_000 })
     .toBeGreaterThan(after);
 });
 
-test('the barge-in button still aborts the turn — playbackStarted is not a control path', async ({ page }) => {
+test('a muted assistant reports playback as INACTIVE — delivery honesty under a mute', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
+  await expect(page.getByTestId('bridge-status')).toContainText('متصل', { timeout: 10_000 });
 
-  // Determinism precondition (M2 close-gate fix): the abort button sends
-  // 'abort' only while `live` (matrix !== 0), and a fresh page has matrix 0
-  // (which sends 'arm' instead). Drive a lifecycle event through the stub's
-  // existing /fire route first — without this the test asserts whatever the
-  // ambient matrix happens to be, and it failed exactly that way in isolation
-  // while passing in full runs by accident of ordering.
-  await post('/fire', { state: 'running' });
-  await expect(page.getByTestId('abort-button')).toContainText('إيقاف التوليد', { timeout: 10_000 });
+  // W6 in the delivery domain. `enqueue` returns immediately when muted, so a
+  // muted assistant must NOT claim to have started playing: the daemon's
+  // "delivery" signal has to mean audio, and a mute is silence.
+  const bot = page.getByTestId('bot-toggle');
+  await bot.click();
+  await expect(bot).toHaveAttribute('aria-pressed', 'true');
 
-  const abortsBefore = (await commands()).filter((c) => c.kind === 'abort').length;
-  await page.getByTestId('abort-button').click();
+  const before = (await commands()).filter((c) => c.kind === 'playbackStarted').length;
+  for (let i = 0; i < 3; i += 1) await post('/audio-down', { bytes: FAKE_MP3 });
+  await page.waitForTimeout(2_000);
+  const after = (await commands()).filter((c) => c.kind === 'playbackStarted').length;
+  expect(after, 'a muted assistant reports no playback').toBe(before);
+
+  // The orb agrees: muted, the shell holds `thinking` rather than `speaking`, so
+  // the widget never claims to be audible while it is not.
+  await post('/voice', { phase: 'speaking' });
+  await expect(page.getByTestId('orb')).toHaveAttribute('data-phase', 'thinking', { timeout: 5_000 });
+
+  // Unmute and the claim comes back with the audio.
+  await bot.click();
+  await expect(bot).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('orb')).toHaveAttribute('data-phase', 'speaking', { timeout: 5_000 });
+  await post('/audio-down', { bytes: FAKE_MP3 });
   await expect
-    .poll(async () => (await commands()).filter((c) => c.kind === 'abort').length, { timeout: 10_000 })
-    .toBe(abortsBefore + 1);
+    .poll(async () => (await commands()).filter((c) => c.kind === 'playbackStarted').length, { timeout: 10_000 })
+    .toBeGreaterThan(after);
 
-  // Leave the campsite clean (M2 close-gate fix): the /fire event above is
-  // RETAINED in the stub's resume buffer, and the next spec's fresh page
-  // connects with ?lastSeq=0 — so it replays our stale `running` event,
-  // lands matrix=2, and reads "processing" instead of "ready". An `idle`
-  // close-out restores the shared stub for whoever runs next. (This is the
-  // B.2c resume-gap hole, confirmed live: silence vs missed-everything are
-  // indistinguishable without it. Product fix is M3 scope.)
-  await post('/fire', { state: 'idle' });
-  await expect(page.getByTestId('bridge-status')).toContainText('متصل وبانتظار الأوامر', { timeout: 10_000 });
+  // Leave the shared stub on `idle` for whoever runs next.
+  await post('/voice', { phase: 'idle' });
+  await expect(page.getByTestId('bridge-status')).toContainText('متصل', { timeout: 5_000 });
 });

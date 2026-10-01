@@ -14,8 +14,33 @@ interface SpawnOptions {
   readonly query?: string;
 }
 
+/**
+ * The window URL for a launcher query.
+ *
+ * `query` is the COMPLETE query string (e.g. `view=settings&persona=kareem`), so
+ * it is appended exactly once. It previously read `?${query}${suffix}` where
+ * `suffix` was `&${query}` — producing `?view=keys&view=keys` on EVERY call,
+ * in both the Tauri and the web path (present since 7d3bc68, 2026-09-25).
+ *
+ * WHY IT SURVIVED: every consumer here reads the query with
+ * `search.includes('view=keys')`, and `'?view=keys&view=keys'.includes('view=keys')`
+ * is true. A duplicated parameter is indistinguishable from a correct one under
+ * a substring test, so the bug was invisible to every caller and to the E2E
+ * suite, which asserts `url()).toContain('view=keys')`.
+ *
+ * The `includes()` predicates are left alone: they are lenient, not wrong, and
+ * the values they match are caller-supplied and controlled. The test that now
+ * pins this counts OCCURRENCES, which is what a substring assertion cannot do.
+ *
+ * A bare `?` is avoided when there is no query, so the result stays a
+ * well-formed `index.html` rather than `index.html?`.
+ */
+function windowUrl(query: string): string {
+  return query.length > 0 ? `index.html?${query}` : 'index.html';
+}
+
 async function spawn({ label, title, query = '' }: SpawnOptions): Promise<string> {
-  const suffix = query.length > 0 ? `&${query}` : '';
+  const url = windowUrl(query);
   if (isTauriHost()) {
     const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
     const existing = await WebviewWindow.getByLabel(label);
@@ -24,7 +49,7 @@ async function spawn({ label, title, query = '' }: SpawnOptions): Promise<string
       return label;
     }
     const win = new WebviewWindow(label, {
-      url: `index.html?${query}${suffix}`,
+      url,
       title,
       width: 720,
       height: 600,
@@ -36,7 +61,7 @@ async function spawn({ label, title, query = '' }: SpawnOptions): Promise<string
     });
     return win.label;
   }
-  window.open(`index.html?${query}${suffix}`, `voxaura-${label}`, 'width=720,height=600,menubar=no,toolbar=no');
+  window.open(url, `voxaura-${label}`, 'width=720,height=600,menubar=no,toolbar=no');
   return label;
 }
 

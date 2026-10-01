@@ -8,8 +8,8 @@ import { useEffect, type RefObject } from 'react';
 // `enabled: true`. That is a behaviour change with a dated cause:
 //
 //   The window stopped being content-driven. `tauri.conf.json` now sets
-//   `resizable: true` with `minWidth: 440` / `minHeight: 600` so the
-//   collapsible terminal drawer can expand without shrinking the base HUD.
+//   `resizable: true` with `minWidth: 380` / `minHeight: 380` — a fixed square
+//   edge — so nothing can expand without the user's own drag.
 //   A minimum-bounds window and a content-driven window are mutually
 //   exclusive instruments: this hook pushes `scrollHeight` into
 //   `setSize()`, which fights the minimum on every frame (the clamp in
@@ -55,7 +55,7 @@ async function defaultSetWindowSize(width: number, height: number): Promise<void
  * still standing.
  */
 export const AUTO_SIZE_STAND_DOWN =
-  'window is min-bounded (440x600) and user-resizable; content must not drive the OS frame';
+  'window is min-bounded (380x380) and user-resizable; content must not drive the OS frame';
 
 export interface AutoSizeOptions {
   /**

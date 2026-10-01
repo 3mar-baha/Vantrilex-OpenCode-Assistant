@@ -9,6 +9,12 @@ import { fillKeys, installVaultDaclShim, openKeysWindow, shimLog } from './keys-
 // and one-directional: a "probably fine" default would render a lock line that
 // looks identical to the confirmed one, and no positive-path assertion in the
 // suite can catch it. Hence count 0, asserted on both lines.
+//
+// SAFETY-RELEVANT, DO NOT RETIRE. The `Err` arm below covers the fail-closed
+// path where `restrict_vault_file` DELETES `keyring.dat`; asserting the error
+// state, the absent green receipt and the re-prompt is what stops a user being
+// told their keys are saved when the host just destroyed them. The Orb rewrite
+// changed only the trigger that opens this window.
 
 test('C.1 — no Tauri host renders NO dacl line: an unverified lock must never read as a confirmed one', async ({
   page,

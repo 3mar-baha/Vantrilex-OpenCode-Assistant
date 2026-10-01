@@ -47,13 +47,14 @@ test('an exhausted-credit notice renders the warn banner with the daemon wording
   await expect(banner).toHaveAttribute('aria-live', 'assertive');
   // The generic strip must NOT ALSO carry this sentence — one sentence, one
   // surface. Assert the SENTENCE, not the strip's emptiness: the stub is one
-  // process for the whole run, and an earlier spec (`abort`) fires a lifecycle
-  // event that the real UiServer retains, so this page legitimately receives
-  // the B.2c `resume-gap` notice in the generic strip. A `toHaveCount(0)` there
-  // failed for a correct, unrelated notice — the same shared-state trap
-  // `delivery.spec` hit, and the fix is the same shape.
-  const generic = page.getByTestId('notice-banner');
-  await expect(generic).not.toContainText(EXHAUSTED);
+  // process for the whole run and replays retained frames to a fresh page, so
+  // this page can legitimately hold an unrelated notice (the B.2c `resume-gap`
+  // one). `not.toContainText` on a possibly-absent strip FAILS with "element(s)
+  // not found" rather than passing, which is how this line broke when a
+  // reordering stopped manufacturing that residue. `filter({hasText})` matches
+  // zero whether or not the strip exists, which is the property actually meant.
+  const generic = page.getByTestId('notice-banner').filter({ hasText: EXHAUSTED });
+  await expect(generic).toHaveCount(0);
   await expect(page.getByText(EXHAUSTED)).toHaveCount(1);
 
   await page.getByTestId('credit-banner-dismiss').click();

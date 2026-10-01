@@ -4,6 +4,11 @@ import { fillKeys, installVaultDaclShim, openKeysWindow, shimLog } from './keys-
 // 3-key intake lives in the dedicated keys window. The form gates on all three
 // fields (fail-closed) and the daemon records a saveApiKeys command with all
 // three values — never echoing them back into the page.
+//
+// bd103b2 renamed only the TRIGGER (`open-apikeys` → `open-keys`, see
+// `keys-window.ts`). The window, the form and the DACL receipt below are all
+// still live product code, so none of these three tests is weakened by the Orb
+// rewrite — they were failing purely on the stale selector.
 async function commands(): Promise<Array<Record<string, unknown>>> {
   const res = await fetch('http://localhost:4197/commands');
   return (await res.json()) as Array<Record<string, unknown>>;
