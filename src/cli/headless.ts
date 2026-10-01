@@ -67,7 +67,6 @@ const VALUE_OPTIONS: ReadonlySet<string> = new Set([
   'agent',
   'case',
   'source',
-  'envelope',
   'timeout',
   'message',
 ]);
@@ -96,45 +95,32 @@ function positionals(args: readonly string[]): string[] {
   return out;
 }
 
-/**
- * `--envelope`, validated.
- *
- * An unrecognised value is a USAGE ERROR rather than a silent fallback to the
- * default: this option exists to settle which body shape a running serve accepts,
- * and quietly substituting `flat` for a typo would answer the question with the
- * answer the caller was trying to avoid.
- */
-function envelopeOption(args: readonly string[]): { readonly ok: true; readonly value: 'flat' | 'nested' } | { readonly ok: false; readonly raw: string } {
-  const raw = option(args, 'envelope');
-  if (raw === null) return { ok: true, value: 'flat' };
-  if (raw !== 'flat' && raw !== 'nested') return { ok: false, raw };
-  return { ok: true, value: raw };
-}
-
 function usage(): string {
   return [
     `usage: opencode-voice <headless command> [args]   (${HEADLESS_COMMANDS.length} commands)`,
     '',
-    '  reason <text> [--approve] [--session <id>] [--replay] [--envelope flat|nested]',
+    '  reason <text> [--approve] [--session <id>] [--replay]',
     '        Full chain: intake → permission gate → plan → dispatch → reply.',
     '        Prints the structural invariant counted from coordinator.ts source.',
     '  intents [--live] [--case <id>]',
-    '        Intent table through the real gate; expected vs actual + accuracy.',
+    '        Intent table through the real gate; expected vs actual. Offline it',
+    '        REPLAYS recorded replies, so its figure is a parser agreement and',
+    '        NOT a model measurement. Only --live measures the model.',
     '  sessions                       session list through ServeClient',
     '  mcp [--directory <dir>]        MCP server status (directory-scoped, no /api)',
     '  lsp [--directory <dir>]        LSP diagnostics (directory-scoped, no /api)',
     '  skills                         installed skills through ServeClient',
     '  create-session [--directory <dir>] [--model <provider/id>]',
-    '  prompt <sessionId> <text> [--envelope flat|nested]',
+    '  prompt <sessionId> <text>',
     '                                send one prompt through ServeClient',
     '  shell <sessionId> <command> [--agent <name>]',
     '                                run a command in a session (v1 route)',
     '  spec                           the real OpenAPI document at /doc',
     '  gate [--source <file>]          the structural invariant, counted from source',
-    '  agent <sessionId> <name> [--no-reply] [--envelope flat|nested]',
+    '  agent <sessionId> <name> [--no-reply]',
     '                                switch a session agent; proven from info.agent,',
     '                                never from what was requested',
-    '  wait <sessionId> <messageId> [--timeout <ms>] [--envelope flat|nested]',
+    '  wait <sessionId> <messageId> [--timeout <ms>]',
     '                                poll a turn to completion; reports which of the',
     '                                four: text / empty / running / errored',
     '',
@@ -212,10 +198,16 @@ async function intentsCommand(args: readonly string[]): Promise<number> {
     if (row.failure !== null) out.note(`     transport failure: ${row.failure}`);
     out.note(`     reason_en: ${out.clip(row.reasonEn, 120)}`);
   }
-  out.heading('ACCURACY');
+  out.heading(source === 'model' ? 'ACCURACY — live model' : 'REPLAY AGREEMENT — NOT a model measurement');
   out.field('correct', `${report.correct} / ${report.total}`);
-  out.field('accuracy', report.accuracy === null ? 'not computed (no cases)' : `${(report.accuracy * 100).toFixed(1)}%`);
+  // `agreement`, not `accuracy`: on a replay run the answer key sits in the same
+  // object literal as the answer, so calling the figure an accuracy named a
+  // number that was 1 before any call was made. `measured against` below is the
+  // provenance, and it is now redundant with the heading rather than the only
+  // thing carrying it.
+  out.field(source === 'model' ? 'accuracy' : 'agreement', report.agreement === null ? 'not computed (no cases)' : `${(report.agreement * 100).toFixed(1)}%`);
   out.field('measured against', source === 'model' ? 'the live model, via the product\'s openRouterChat' : 'recorded replies, via the product\'s parseAddressee');
+  out.field('what this measures', report.measures);
   out.field('wall clock', `${report.ms} ms`);
   out.heading('confusion (expected vs actual, per decision)');
   for (const c of report.confusion) out.note(`${c.decision.padEnd(16)} expected=${c.expected} actual=${c.actual}`);
@@ -250,18 +242,11 @@ export async function runHeadless(command: HeadlessCommand, argv: readonly strin
         out.fail('no text — `opencode-voice reason "شوف لي الجلسات اللي فشلت"`');
         return 2;
       }
-      const env = envelopeOption(args);
-      if (!env.ok) {
-        out.heading('reason');
-        out.fail(`--envelope must be flat or nested, got "${env.raw}"`);
-        return 2;
-      }
       return reasonCommand({
         text,
         approve: flag(args, 'approve'),
         sessionId: option(args, 'session'),
         replay: flag(args, 'replay'),
-        envelope: env.value,
       });
     }
     case 'intents':
@@ -287,16 +272,10 @@ export async function runHeadless(command: HeadlessCommand, argv: readonly strin
       const text = pos.slice(1).join(' ');
       if (sessionId === undefined || text.length === 0) {
         out.heading('prompt');
-        out.fail('usage: opencode-voice prompt <sessionId> <text> [--envelope flat|nested]');
+        out.fail('usage: opencode-voice prompt <sessionId> <text>');
         return 2;
       }
-      const env = envelopeOption(args);
-      if (!env.ok) {
-        out.heading('prompt');
-        out.fail(`--envelope must be flat or nested, got "${env.raw}"`);
-        return 2;
-      }
-      return promptCommand(sessionId, text, env.value);
+      return promptCommand(sessionId, text);
     }
     case 'shell': {
       const pos = positionals(args);
@@ -324,13 +303,7 @@ export async function runHeadless(command: HeadlessCommand, argv: readonly strin
         out.fail('usage: opencode-voice agent <sessionId> <agentName> [--no-reply]');
         return 2;
       }
-      const env = envelopeOption(args);
-      if (!env.ok) {
-        out.heading('agent');
-        out.fail(`--envelope must be flat or nested, got "${env.raw}"`);
-        return 2;
-      }
-      return agentCommand(sessionId, agent, flag(args, 'no-reply'), env.value);
+      return agentCommand(sessionId, agent, flag(args, 'no-reply'));
     }
     case 'wait': {
       const pos = positionals(args);
@@ -339,12 +312,6 @@ export async function runHeadless(command: HeadlessCommand, argv: readonly strin
       if (sessionId === undefined || messageId === undefined) {
         out.heading('wait');
         out.fail('usage: opencode-voice wait <sessionId> <messageId> [--timeout <ms>]');
-        return 2;
-      }
-      const env = envelopeOption(args);
-      if (!env.ok) {
-        out.heading('wait');
-        out.fail(`--envelope must be flat or nested, got "${env.raw}"`);
         return 2;
       }
       // A bad `--timeout` is a usage error rather than a silent default: this
@@ -361,7 +328,7 @@ export async function runHeadless(command: HeadlessCommand, argv: readonly strin
         }
         timeoutMs = parsed;
       }
-      return waitCommand(sessionId, messageId, timeoutMs, env.value);
+      return waitCommand(sessionId, messageId, timeoutMs);
     }
     default: {
       out.heading('headless');

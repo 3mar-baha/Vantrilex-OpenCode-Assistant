@@ -8,8 +8,8 @@ import {
   type ChatFn,
   type ChatOptions,
 } from '../orchestrator/coordinator.js';
-import { ADDRESSEE_CHAT_OPTIONS, ADDRESSEE_RESPONSE_FORMAT, PERMISSION_TTL_MS, addresseeSystem } from '../orchestrator/permission.js';
-import { INTENT_CASES, probePermissionSlot, replayGateChat, runIntentTable, structuralFaultsOf, type IntentRow } from './intents.js';
+import { ADDRESSEE_CHAT_OPTIONS, ADDRESSEE_RESPONSE_FORMAT, PERMISSION_TTL_MS, addresseeSystem, parseAddressee } from '../orchestrator/permission.js';
+import { INTENT_CASES, measurementOf, probePermissionSlot, replayGateChat, runIntentTable, structuralFaultsOf, type IntentRow } from './intents.js';
 
 // THE INTENT TABLE — the gate, through its real entry point.
 //
@@ -17,6 +17,23 @@ import { INTENT_CASES, probePermissionSlot, replayGateChat, runIntentTable, stru
 // `Coordinator.gate()` calls on the same reply shape. What the table measures is
 // stated per source, and the structural assertions are the ones that must hold
 // regardless of which model answered.
+//
+// ── WHAT THE OFFLINE FIGURE IS, STATED BEFORE ANY NUMBER APPEARS ─────────────
+//
+// There are two numbers in this file and they are not the same kind of thing.
+//
+//   replay  — no network. Every reply is a recorded completion from
+//            `INTENT_CASES`, and each of those rows carries `expected` IN THE
+//            SAME OBJECT LITERAL. So the figure is the parser agreeing with a key
+//            that was written beside the text it is parsing. It is 1 by
+//            construction. It is reported here as `agreement` and the report
+//            carries `measures`, and the describe block below MEASURES the
+//            circularity instead of asserting it in prose.
+//   model   — `opencode-voice intents --live`, in no gate, quota-dependent, and
+//            the only source whose figure is evidence about the model.
+//
+// NO OFFLINE NUMBER IN THIS FILE MEASURES THE MODEL, and none is presented as
+// though it did. The load-bearing offline checks are the STRUCTURAL ones.
 
 /** The replay lookup, keyed exactly as `runIntentTable` composes the user text. */
 function replayFor(cases: readonly (typeof INTENT_CASES)[number][]): ChatFn {
@@ -25,14 +42,18 @@ function replayFor(cases: readonly (typeof INTENT_CASES)[number][]): ChatFn {
 }
 
 describe('the table, replayed through parseAddressee', () => {
-  test('every case classifies to its written expectation', async () => {
+  test('every case parses to its written expectation — a ROUND TRIP, not accuracy', async () => {
     const report = await runIntentTable(INTENT_CASES, replayFor(INTENT_CASES), 'replay');
     const got = report.rows.map((r) => `${r.id}: expected=${r.expected} actual=${r.actual}`);
     expect(got).toEqual(
       INTENT_CASES.map((c) => `${c.id}: expected=${c.expected} actual=${c.expected}`),
     );
-    expect(report.accuracy, got.join(' | ')).toBe(1);
+    // Named `agreement`, and the report says what it measures. The value being 1
+    // here is NOT evidence that the model is right — see the next describe block,
+    // which measures exactly that.
+    expect(report.agreement, got.join(' | ')).toBe(1);
     expect(report.source).toBe('replay');
+    expect(report.measures).toBe('parseAddressee against recorded replies — NOT the model');
   });
 
   test('the chat is called with the coordinator\'s model and the gate\'s own option bundle', async () => {
@@ -201,11 +222,166 @@ describe('structural properties, independent of which model answered', () => {
     expect(structuralFaultsOf([{ ...row, actual: 'approve' }])).toEqual([]);
   });
 
-  test('an empty table reports no accuracy rather than 0/0 as a rate', async () => {
+  test('an empty table reports no rate rather than 0/0 as one', async () => {
     const report = await runIntentTable([], async () => '{}', 'replay');
-    expect(report.accuracy).toBeNull();
+    expect(report.agreement).toBeNull();
     expect(report.total).toBe(0);
     expect(report.correct).toBe(0);
+    // The provenance label survives the empty case, which is when a reader is most
+    // likely to be handed a bare number.
+    expect(report.measures).toBe(measurementOf('replay'));
+  });
+});
+
+// ── WHY THE OFFLINE FIGURE IS NOT ACCURACY — MEASURED, NOT ASSERTED ───────────
+//
+// The finding was that this file reported `accuracy === 1` by replaying fixtures
+// where the answer key sits in the same object literal as the answer. The fix
+// could have been a comment. It is not, because a comment is exactly the
+// instrument that let the number be wrong in the first place: the number read as
+// a model measurement, the comment said otherwise, and a reader six lines from
+// the source believed the number.
+//
+// So the claim is MEASURED here. The only offline number is a replay figure. This
+// block shows what that figure is actually sensitive to, which turns "this number
+// does not measure the model" from a promise into a demonstration.
+describe('the replay figure is a REPLAY, and this is what that means', () => {
+  test('a replay report names what it measures, and it is not the model', async () => {
+    const report = await runIntentTable(INTENT_CASES, replayFor(INTENT_CASES), 'replay');
+    expect(report.measures).toBe('parseAddressee against recorded replies — NOT the model');
+    expect(report.measures).toContain('NOT the model');
+    // A report over recorded replies can never claim to measure the model,
+    // whatever the rows contain.
+    expect(report.measures).not.toContain('the live model');
+
+    // RUNTIME PRESENCE, NOT JUST A TYPE. Break-verified: deleting `measures` from
+    // the `IntentReport` interface leaves all 18 tests GREEN, because the value is
+    // still assigned in `runIntentTable` and a type-only removal is invisible to a
+    // runtime assertion. An interface member is documentation; a property that is
+    // present on the object a caller prints is the contract. This asserts the
+    // latter, so dropping the field now fails here rather than in a reader's
+    // terminal six lines from the number.
+    expect(Object.keys(report)).toContain('measures');
+    expect(Object.getOwnPropertyNames(report)).toContain('agreement');
+    // THE SURFACE IS AN ALLOWLIST, NOT AN ABSENCE CHECK. Break-verified: adding
+    // `accuracy` back as a second property beside `agreement` left all 18 tests
+    // GREEN, because "the report does not contain `accuracy`" is a test about a
+    // name someone has to remember to write down. Enumerating the keys instead
+    // means a future field that overclaims what the number is cannot be added
+    // without this failing and forcing a decision about its name. Deliberately
+    // exact: this breaks when a field is added, which is the point.
+    expect(Object.keys(report).sort()).toEqual(
+      ['agreement', 'confusion', 'correct', 'measures', 'ms', 'rows', 'source', 'total'].sort(),
+    );
+    // Both sources must carry a NON-EMPTY label. An empty string renders as a
+    // blank row in the report and reads as "nothing to say", which is the failure
+    // mode the field exists to prevent.
+    for (const source of ['model', 'replay'] as const) {
+      const one = await runIntentTable([INTENT_CASES[0]!], replayFor([INTENT_CASES[0]!]), source);
+      expect(one.measures.length, `the ${source} label must not be empty`).toBeGreaterThan(0);
+    }
+  });
+
+  test('a `model` report is the only source labelled as measuring the model', () => {
+    expect(measurementOf('model')).toBe('the live model');
+    expect(measurementOf('replay')).not.toBe(measurementOf('model'));
+    // The labels are distinct strings, so a report cannot carry both claims.
+    expect(measurementOf('replay')).not.toContain(measurementOf('model'));
+  });
+
+  test('BREAK: the replay figure is 1 even when every reply is the WRONG decision', async () => {
+    // THE CIRCULARITY, DEMONSTRATED. Every reply is replaced with the opposite
+    // verdict — a question answered as a task, a task answered as a question, a
+    // third-person note answered as a question — and `expected` is DERIVED from
+    // the reply by running the product's own parser, which is the tightest form
+    // of "the answer key is the answer".
+    //
+    // The result is what makes the number meaningless as a model measurement: the
+    // figure stays 1.0 while every judgement in the table is inverted. An
+    // `accuracy` of 100% on a table in which the model is wrong six times out of
+    // six is not a small error in labelling; it is a number describing nothing at
+    // all. That is why the field is `agreement` and the report carries `measures`.
+    const opposite: Record<string, string> = {
+      answer: 'ask_permission',
+      ask_permission: 'answer',
+      not_addressed: 'answer',
+      undecided: 'approve',
+      approve: 'deny',
+    };
+    const inverted = INTENT_CASES.map((c) => {
+      const wrong = opposite[c.expected] ?? 'answer';
+      return {
+        ...c,
+        reply: JSON.stringify({
+          addressed: true,
+          needs_opencode: wrong === 'ask_permission' || wrong === 'approve',
+          decision: wrong,
+          ask_ar: wrong === 'ask_permission' ? 'نمشي؟' : '',
+          approves_id: wrong === 'approve' ? 'a0000000-0000-4000-8000-000000000000' : '',
+          reason_en: 'deliberately the wrong decision',
+        }),
+        // The key is TAKEN FROM the reply, so the row is internally consistent
+        // and the round trip is exact. The Arabic is now misclassified.
+        expected: parseAddressee(
+          JSON.stringify({
+            addressed: true,
+            needs_opencode: wrong === 'ask_permission' || wrong === 'approve',
+            decision: wrong,
+            ask_ar: wrong === 'ask_permission' ? 'نمشي؟' : '',
+            approves_id: wrong === 'approve' ? 'a0000000-0000-4000-8000-000000000000' : '',
+            reason_en: 'deliberately the wrong decision',
+          }),
+        ).decision,
+      };
+    });
+
+    // Precondition: the inversion really did change what the table now says.
+    const flipped = inverted.filter((c, i) => c.expected !== INTENT_CASES[i]?.expected);
+    expect(flipped.length, 'every case now carries a different expected decision').toBeGreaterThan(0);
+
+    const report = await runIntentTable(inverted, replayFor(inverted), 'replay');
+    // The figure the old code would have printed as `accuracy: 100%`.
+    expect(report.agreement).toBe(1);
+    // …and the label is what stops that from being read as a model result.
+    expect(report.measures).toBe('parseAddressee against recorded replies — NOT the model');
+  });
+
+  test('BREAK: a `model` run with a DEAD transport still reports 2/6, and that is a floor', async () => {
+    // The contrast that gives the label its meaning, and a finding I did not
+    // expect: a `model` figure CAN move on its own, because the reply comes from
+    // outside the fixture — a transport failure is recorded as `undecided` and
+    // counts against the number. But it does not fall to ZERO.
+    //
+    // Two of the six fixtures EXPECT `undecided` (`undecided-garbage`,
+    // `undecided-truncated`), because they exist to pin the fail-closed path. So
+    // a model that answered NOTHING AT ALL scores 2/6 = 33%, not 0%. The
+    // fail-closed rows are indistinguishable, in the score, from a model that got
+    // the malformed cases right on purpose.
+    //
+    // This is why the live figure must be read with its `confusion` block and not
+    // as a bare rate, and it is asserted here as the number it is rather than the
+    // number I assumed: a 0% claim would have been false, and a test asserting
+    // either value without this comment would be pinning whichever one I guessed.
+    const boom: ChatFn = async () => {
+      throw new Error('BRAIN_TIMEOUT');
+    };
+    const report = await runIntentTable(INTENT_CASES, boom, 'model');
+    expect(report.measures).toBe('the live model');
+    expect(report.correct).toBe(2);
+    expect(report.agreement).toBe(2 / INTENT_CASES.length);
+    // The two rows that "matched" are the two that EXPECTED the fail-closed value.
+    const credited = report.rows.filter((r) => r.match);
+    expect(credited.map((r) => r.id).sort()).toEqual(['undecided-garbage', 'undecided-truncated']);
+    // And every row carries its own failure, so a `model` run cannot quietly
+    // report a rate that came from anywhere else. This is the check that
+    // separates a real measurement from a replay: on a replay the replies are
+    // local, so `failure` is null and the number cannot move at all.
+    for (const row of report.rows) {
+      expect(row.actual).toBe('undecided');
+      expect(row.failure).toContain('BRAIN_TIMEOUT');
+    }
+    const replayed = await runIntentTable(INTENT_CASES, replayFor(INTENT_CASES), 'replay');
+    for (const row of replayed.rows) expect(row.failure).toBeNull();
   });
 });
 

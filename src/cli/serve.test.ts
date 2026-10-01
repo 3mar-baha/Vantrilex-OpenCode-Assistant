@@ -4,7 +4,27 @@ import { OrchestratorError } from '../common/errors.js';
 import type { SessionId } from '../common/brands.js';
 import { ServeClient, basicAuth, DEFAULT_SHELL_AGENT } from '../runtime/client.js';
 import { openServeTarget, probeRoute, readSpec, requestPathOf, resolveServePassword, spaFallbackContentType } from './serve.js';
-import { probeHealth } from '../launcher/index.js';
+
+// HERMETIC. Nothing in this file opens a socket on purpose and nothing in it
+// reads the operator's credential.
+//
+// The live form of the SPA-fallback claim used to live here, as
+// `describe.skipIf(!liveServeUp)` over two tests, and it was the wrong shape for
+// a gate — see `serve.live.test.ts` for the measurement and the reasoning. It is
+// now a separate file, collected only by `vitest.live.config.ts` under
+// `VOXAURA_LIVE_SERVE=1`.
+//
+// What moved and what stayed, so the move is not mistaken for a deletion:
+//
+//   MOVED — byte-identity of the fallback page for two unknown paths, and the
+//     `/mcp` JSON vs `/api/mcp` HTML negative control, against a real serve.
+//
+//   STAYED — every hermetic equivalent. The two claims above are asserted here
+//     against a fake `Response` carrying the content-type and body shapes
+//     measured on 1.18.32, which is what keeps the gate honest about the RULE
+//     the live tier confirms against the real thing. `probeRoute`'s decision
+//     table, `requestPathOf`'s no-second-HTTP-client contract and the content
+//     type agreement test with the product's own guard are all unchanged.
 
 // THE TRANSPORT — proving this runner cannot lie about serve.
 //
@@ -58,42 +78,6 @@ describe('spaFallbackContentType — the rule, restated', () => {
     expect(a.exists).toBe('no');
     expect(b.exists).toBe('no');
     expect(a.bytes).toBe(b.bytes);
-  });
-});
-
-// The live form of the same claim. Skipped rather than faked when there is no
-// credential OR no serve answering, so the summary shows a skip instead of a pass.
-// `opencode-voice spec` prints the live numbers.
-//
-// The LIVENESS half matters and was learned the hard way: gating the skip on the
-// credential alone left a test that failed with `expected 0 to be greater than 0`
-// the moment a serve on 4096 stopped answering — a red suite for an environment
-// change, which is how a real failure gets learned to be ignored. The probe is the
-// product's own `probeHealth` from `src/launcher/`.
-const livePassword = resolveServePassword().password;
-const liveServeUp = livePassword.length > 0 && (await probeHealth(4096, livePassword));
-describe.skipIf(!liveServeUp)('live serve (needs a serve on 4096 and a credential)', () => {
-  test('the SPA fallback is byte-identical for two different unknown paths', async () => {
-    const client = new ServeClient('http://127.0.0.1:4096', livePassword);
-    const a = await probeRoute(client, '/api/definitely-not-a-route-a');
-    const b = await probeRoute(client, '/api/definitely-not-a-route-b');
-    expect(a.exists).toBe('no');
-    expect(a.bytes).toBeGreaterThan(0);
-    expect(a.bytes, 'the fallback is the same page for any unknown path').toBe(b.bytes);
-  });
-
-  test('BREAK: a real route is NOT the fallback, on the same live serve', async () => {
-    // The negative control for the test above, and the reason the runner's
-    // availability claims are worth anything. `/mcp` has no `/api` prefix and
-    // answers JSON; `/api/mcp` answers the page. If either stopped being true the
-    // whole `probeRoute` contract would need re-deriving, and this is where it
-    // would be noticed.
-    const client = new ServeClient('http://127.0.0.1:4096', livePassword);
-    const real = await probeRoute(client, `/mcp?directory=${encodeURIComponent(process.cwd())}`);
-    const prefixed = await probeRoute(client, `/api/mcp?directory=${encodeURIComponent(process.cwd())}`);
-    expect(real.exists, '/mcp must answer with JSON').toBe('yes');
-    expect(prefixed.exists, '/api/mcp must be the SPA fallback').toBe('no');
-    expect(prefixed.spaFallback).toBe(true);
   });
 });
 

@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { dispatchTruth } from './report.js';
 import { promptBody } from './serve.js';
@@ -87,33 +89,37 @@ describe('dispatchTruth — three states, no fourth', () => {
   });
 });
 
-describe('promptBody mirrors the two shapes ServeClient sends', () => {
+describe('promptBody is the body ServeClient ACTUALLY sends (W26)', () => {
   // The diagnostic re-read has to put the SAME bytes on the wire as the request
-  // that failed. The first version hardcoded the flat shape, so a `nested` attempt
-  // reported a 400 complaining about a missing `prompt` key — the flat shape's
-  // error, printed under a nested heading. This pins the distinction.
-  test('flat is the bare object', () => {
-    expect(promptBody('t', 'flat', { origin: 'cli', actor: 'a' })).toEqual({
-      text: 't',
-      metadata: { origin: 'cli', actor: 'a' },
-      delivery: 'steer',
-    });
+  // that failed, or its answer describes a different request. That mistake was made
+  // twice: first by hardcoding one shape, then by parameterising a `flat|nested`
+  // flag that `promptWithKey` never read — so the re-read described a request that
+  // could not have been sent, under either flag value.
+  //
+  // The shape below is DERIVED from `ServeClient.promptWithKey`, not typed here:
+  // the guard reads the client source and asserts the two agree. A future edit to
+  // the egress that changes the body fails this file instead of silently making
+  // the diagnostic describe a request that never happened.
+  test('it is the v2 body, with no `metadata` and no envelope flag', () => {
+    expect(promptBody('t')).toEqual({ prompt: { text: 't' }, delivery: 'steer' });
   });
 
-  test('nested wraps it in `prompt`', () => {
-    expect(promptBody('t', 'nested', { origin: 'cli', actor: 'a' })).toEqual({
-      prompt: { text: 't', metadata: { origin: 'cli', actor: 'a' }, delivery: 'steer' },
-    });
-  });
-
-  test('BREAK: the two shapes are genuinely different on the wire', () => {
-    const flat = JSON.stringify(promptBody('t', 'flat', { origin: 'cli', actor: 'a' }));
-    const nested = JSON.stringify(promptBody('t', 'nested', { origin: 'cli', actor: 'a' }));
-    expect(flat).not.toBe(nested);
-    // And the difference is the one serve names in its 400: `Missing key at
-    // ["prompt"]` (measured live 2026-09-30 through this runner's own diagnostic).
-    expect(Object.keys(JSON.parse(flat) as object)).not.toContain('prompt');
-    expect(Object.keys(JSON.parse(nested) as object)).toContain('prompt');
+  test('BREAK: the body ServeClient builds is byte-identical to this one', () => {
+    // Read the production serialiser out of the client source rather than
+    // restating it, so the two cannot drift apart silently. This is the load-
+    // bearing half: the equality above could be satisfied by any stable body.
+    const CLIENT = readFileSync(join(process.cwd(), 'src/runtime/client.ts'), 'utf8');
+    const bodies = CLIENT.match(/body: JSON\.stringify\((\{[^\n]*\})\)/g) ?? [];
+    expect(bodies.length, 'the prompt egress must still serialise inline bodies').toBeGreaterThan(0);
+    expect(bodies.some((b) => b.includes('{ prompt: { text }, delivery: \'steer\' }'))).toBe(true);
+    // `metadata` has no home in `PromptInput` (additionalProperties:false) and
+    // putting it there measured 400/500 — so its absence is the contract.
+    expect(CLIENT).not.toMatch(/body: JSON\.stringify\(\{[^}]*metadata/);
+    // The absence of the removed option is asserted in ONE place, not two:
+    // `prompt-envelope-removed.test.ts` owns that claim and scans code with a
+    // comment stripper. Repeating it here would mean a raw-text grep, which
+    // fails on the explanatory comments this very removal left behind — the guard
+    // would report its own documentation as a live capability.
   });
 });
 

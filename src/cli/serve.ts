@@ -31,8 +31,6 @@ export interface ServeTarget {
   readonly directory: string;
   /** Where the serve password came from, so a reader can see it was not invented. */
   readonly passwordSource: 'env:OPENCODE_SERVER_PASSWORD' | 'file:serve.pass' | 'none';
-  /** The prompt body shape this client will send. Printed on every prompt. */
-  readonly promptEnvelope: PromptEnvelope;
   readonly healthy: boolean;
 }
 
@@ -66,33 +64,22 @@ export function resolveServePassword(
 }
 
 /**
- * The prompt body shape. `ServeClient` takes this as a constructor option and
- * defaults it to `'flat'` (`runtime/client.ts:461-463`).
- *
- * WHY THE RUNNER MAKES IT EXPLICIT. The two shapes were never MEASURED against a
- * running server — the comment records that 1.18.x wants `{ prompt: { text } }`
- * and 2.0.x wants `{ text }`, and defaults to the second. This serve is 1.18.32
- * and answers the flat default with **HTTP 400**, so the default is a live
- * finding rather than a detail. `--envelope nested` reaches the other shape
- * through the product's own option; nothing is reimplemented to do it, and the
- * chosen shape is printed on every prompt so a report can never be read as
- * evidence about the other one.
- */
-export type PromptEnvelope = 'flat' | 'nested';
-
-/**
  * Build the serve surface. Does not require the daemon on 4097, does not require
  * vault keys, and does not require a healthy serve — it reports health instead of
  * throwing, because "serve is down" is a finding a verification run exists to
  * print, not an error that should stop the report from being written.
+ *
+ * NO `promptEnvelope` option (W26). It used to be plumbed through here into a
+ * `ServeClient` option that nothing read, and then printed as `prompt envelope`
+ * — a report asserting a body-shape capability the request path did not have.
+ * The prompt egress picks its ROUTE by status code inside `promptWithKey`
+ * (v2, then v1 `prompt_async` on a 5xx); there is no shape left to select. The
+ * reasoning for not reinstating it is on the `ServeClient` constructor.
  */
-export async function openServeTarget(
-  options: { readonly directory?: string; readonly promptEnvelope?: PromptEnvelope } = {},
-): Promise<ServeTarget> {
+export async function openServeTarget(options: { readonly directory?: string } = {}): Promise<ServeTarget> {
   const cfg = loadConfig();
   const { password, source } = resolveServePassword();
-  const envelope = options.promptEnvelope ?? 'flat';
-  const client = new ServeClient(`http://${cfg.serve.hostname}:${cfg.serve.port}`, password, { promptEnvelope: envelope });
+  const client = new ServeClient(`http://${cfg.serve.hostname}:${cfg.serve.port}`, password);
   const directory = options.directory ?? process.cwd();
   return {
     client,
@@ -101,7 +88,6 @@ export async function openServeTarget(
     port: cfg.serve.port,
     directory,
     passwordSource: source,
-    promptEnvelope: envelope,
     healthy: password.length > 0 ? await probeHealth(cfg.serve.port, password) : false,
   };
 }
@@ -272,24 +258,29 @@ export async function probeRoute(client: ServeClient, path: string): Promise<Rou
 }
 
 /**
- * The prompt body, in both shapes `ServeClient` can send.
+ * The v2 prompt body — the exact payload `promptWithKey` puts on the wire.
  *
- * This MIRRORS `promptWithKey`'s two payloads (`runtime/client.ts:556-558`) and is
- * used for exactly one thing: the diagnostic re-read below, which has to put the
- * same bytes on the wire as the request that failed or its answer describes a
- * different request. That mistake was made and caught: the first version of the
- * diagnostic hardcoded the flat shape, so a `nested` attempt reported a 400
- * complaining about a missing `prompt` key — the FLAT shape's error, printed under
- * a `nested` heading. A reader would have concluded the nested body was wrong in a
- * way it was not.
+ * USED FOR ONE THING: the diagnostic re-read in `promptCommand`, which has to put
+ * the SAME bytes up as the request that failed, or its answer describes a
+ * different request. That mistake was made twice. The first version hardcoded one
+ * shape, so a run under the other printed a 400 about a missing `prompt` key — the
+ * wrong shape's error under the right shape's heading.
+ *
+ * IT USED TO BE WORSE, AND THE FIX IS THE POINT (W26). This function took a
+ * `PromptEnvelope` and produced `{text, metadata, delivery}` or
+ * `{prompt:{text, metadata, delivery}}` — claiming to mirror "the two shapes
+ * ServeClient sends". `ServeClient` sends NEITHER. `promptWithKey` sends
+ * `{prompt:{text}, delivery:'steer'}` and falls back to
+ * `{messageID, parts:[…]}` on a 5xx; `metadata` is not a member of `PromptInput`
+ * at all. So the diagnostic was guaranteed to describe a request that never
+ * happened, for every value of the flag.
  *
  * It is not a second HTTP client. The transport, the auth header, the 30 s abort
  * and the `SERVE_UNREACHABLE` mapping are all still `ServeClient`'s; this is a
  * serialiser, and the exact bytes it produces are printed next to the result.
  */
-export function promptBody(text: string, envelope: PromptEnvelope, provenance: { origin: 'cli'; actor: string }): unknown {
-  const inner = { text, metadata: provenance, delivery: 'steer' };
-  return envelope === 'flat' ? inner : { prompt: inner };
+export function promptBody(text: string): unknown {
+  return { prompt: { text }, delivery: 'steer' };
 }
 
 /**

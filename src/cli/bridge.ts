@@ -203,15 +203,18 @@ export async function createSessionCommand(directory: string, model?: string): P
 }
 
 /** `prompt` — through `ServeClient.promptSession()`. 409 is a busy answer. */
-export async function promptCommand(sessionId: string, text: string, envelope: 'flat' | 'nested'): Promise<number> {
+export async function promptCommand(sessionId: string, text: string): Promise<number> {
   out.heading('prompt — src/runtime/client.ts ServeClient.promptSession()');
-  const target = await openServeTarget({ promptEnvelope: envelope });
+  const target = await openServeTarget();
   requirePassword(target);
   out.field('session', sessionId);
   out.field('text', out.clip(text, 200));
-  // Printed on every run: a 400 from one envelope is not evidence about the other,
-  // and this command exists to settle which one the running serve accepts.
-  out.field('prompt envelope', `${target.promptEnvelope} (ServeClient default is flat; 1.18.x is documented to want nested)`);
+  // NO `prompt envelope` field here (W26). It used to print one on every run,
+  // fed by a `--envelope flat|nested` flag whose value reached a `ServeClient`
+  // option that nothing read — so the report claimed a body-shape capability
+  // the request path did not have. The egress is fixed and route-selected
+  // (v2, then v1 `prompt_async` on a 5xx); there is nothing to select here,
+  // and a field that names a shape the code cannot send is the defect itself.
   if (!target.healthy) {
     out.fail('serve unreachable — nothing was sent');
     return 1;
@@ -243,7 +246,7 @@ export async function promptCommand(sessionId: string, text: string, envelope: '
     // SPA rule, and the SAME body shape that just failed — rather than through a
     // second HTTP client. The prompt is not being re-sent for effect: the first
     // attempt was rejected, and a rejected prompt was not applied.
-    const body = promptBody(text, envelope, { origin: 'cli', actor: 'headless-prompt-diagnostic' });
+    const body = promptBody(text);
     try {
       const raw = await postProbe(target.client, `/api/session/${sessionId}/prompt`, body);
       out.heading('what serve said (read through ServeClient\'s own request path, same body)');

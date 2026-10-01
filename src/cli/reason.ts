@@ -33,8 +33,6 @@ export interface ReasonOptions {
   readonly sessionId: string | null;
   /** `--replay`: skip the network and the vault; the gate replays a fixture. */
   readonly replay: boolean;
-  /** `--envelope flat|nested`: the prompt body shape, via `ServeClient`'s own option. */
-  readonly envelope: 'flat' | 'nested';
 }
 
 /** The chat function, from the vault pool, through the product's keyring. */
@@ -258,10 +256,9 @@ export async function reasonCommand(opts: ReasonOptions): Promise<number> {
 
   // ── Transport ───────────────────────────────────────────────────────────
   out.heading('TRANSPORT');
-  const target = await openServeTarget({ promptEnvelope: opts.envelope });
+  const target = await openServeTarget();
   out.field('serve', `${target.baseUrl} (password from ${target.passwordSource})`);
   out.field('serve healthy', String(target.healthy));
-  out.field('prompt envelope', `${target.promptEnvelope} (ServeClient's own option; this serve is 1.18.32)`);
   out.field('daemon on 4097', 'not required — this runner never opens the WS control plane');
   out.field('audio', 'disabled — no microphone, no STT, no TTS, no voice pipeline');
   if (!target.healthy) {

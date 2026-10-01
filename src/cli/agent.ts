@@ -2,7 +2,7 @@ import type { SessionId } from '../common/brands.js';
 import { OrchestratorError } from '../common/errors.js';
 import type { SessionActivity, ServeClient, TurnError, TurnRow } from '../runtime/client.js';
 import { DEFAULT_SHELL_AGENT } from '../runtime/client.js';
-import { openServeTarget, requirePassword, probeRoute, type PromptEnvelope } from './serve.js';
+import { openServeTarget, requirePassword, probeRoute } from './serve.js';
 import * as out from './report.js';
 
 // THE THREE THINGS A TURN NEEDS — switch, wait, speak.
@@ -274,11 +274,11 @@ export function assistantText(row: TurnRow | null): string {
 // ── THE COMMANDS ─────────────────────────────────────────────────────────────
 
 /** `agent` — switch a session's agent and prove it from serve's envelope. */
-export async function agentCommand(sessionId: string, agent: string, noReply: boolean, envelope: PromptEnvelope): Promise<number> {
+export async function agentCommand(sessionId: string, agent: string, noReply: boolean): Promise<number> {
   out.heading('agent — the v1 envelope `agent` field, proven from serve\'s own row');
   out.source('src/runtime/client.ts', 'promptTurn() → POST /session/{id}/prompt_async, then readTurn()');
   out.source('src/cli/agent.ts', 'agentSwitchConfirmed() — compares info.agent, never the request');
-  const target = await openServeTarget({ promptEnvelope: envelope });
+  const target = await openServeTarget();
   requirePassword(target);
   out.field('session', sessionId);
   out.field('requested agent', agent);
@@ -329,11 +329,11 @@ export async function agentCommand(sessionId: string, agent: string, noReply: bo
 }
 
 /** `wait` — poll one turn to completion and report which of the four it was. */
-export async function waitCommand(sessionId: string, messageId: string, timeoutMs: number, envelope: PromptEnvelope): Promise<number> {
+export async function waitCommand(sessionId: string, messageId: string, timeoutMs: number): Promise<number> {
   out.heading('wait — poll a turn on time.completed, not on row-presence');
   out.source('src/runtime/client.ts', 'readTurn() → GET /session/{id}/message (v1), sessionStatus() → /session/status');
   out.source('src/cli/agent.ts', 'classifyTurn() — the four outcomes');
-  const target = await openServeTarget({ promptEnvelope: envelope });
+  const target = await openServeTarget();
   requirePassword(target);
   out.field('session', sessionId);
   out.field('messageID', messageId);

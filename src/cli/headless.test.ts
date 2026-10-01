@@ -1,3 +1,5 @@
+import { connect } from 'node:net';
+
 import { describe, expect, test } from 'vitest';
 
 import { isHeadlessCommand } from './commands.js';
@@ -9,6 +11,82 @@ import { runHeadless } from './headless.js';
 // convincing report: an option parser that swallows the utterance reports "no
 // text" with exit 2, which reads exactly like correct argument handling. The two
 // `BREAK:` cases below are the failures that were observed and fixed.
+//
+// ── HERMETICITY, AND WHY THE TWO `not.toBe(2)` CASES NEEDED A SEAM ────────────
+//
+// Those two cases establish one thing: the invocation got PAST argument
+// validation. They used to establish it by reaching serve, which meant the
+// result depended on machine state this repository does not own:
+//
+//   1. `resolveServePassword` reads `OPENCODE_SERVER_PASSWORD`, then the
+//      supervisor's `serve.pass` in the runtime directory. With neither — which
+//      is a FRESH CLONE, and what `VOICE_RUNTIME_DIR` pointed at an empty
+//      directory reproduces — `requirePassword` THROWS
+//      (`serve.ts:112`). The throw escaped `runHeadless` and both tests failed
+//      with `OrchestratorError: no serve password`. The suite was not
+//      hermetic; it was a measurement of whoever last ran the installer.
+//   2. Even with a password, the exit code past this point is a function of
+//      whether serve happens to be listening. On the machine this was fixed on,
+//      4096 was LIVE, so any literal exit code would have been an assertion
+//      about that machine.
+//
+// The fix sets both values the product itself reads, in the test, for the
+// duration of the call, and restores them. That is not a mock of `ServeClient`:
+// the real `openServeTarget` → `requirePassword` → health-probe path runs, so the
+// assertion still describes the shipped wiring.
+
+// A TEST FIXTURE, not a credential. It is never logged, never printed and never
+// leaves the process; its only job is to be non-empty so `requirePassword` is
+// satisfied. It is spelled out rather than sourced from the environment so a run
+// can never pick up a real key by accident.
+const FIXTURE_SERVE_PASSWORD = 'hermetic-fixture-not-a-credential';
+
+/**
+ * A port nothing is listening on, so the health probe is deterministically
+ * `false` and the command takes its documented "serve unreachable" branch.
+ *
+ * PROVEN IN THE TEST, NOT ASSUMED. An assumed-dead port is the same class of
+ * machine-state dependency this file just had. If something is listening here the
+ * test says so and fails, instead of comparing against an exit code that would
+ * have been wrong for an unrelated reason.
+ */
+const DEAD_SERVE_PORT = 1;
+
+function isClosed(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port });
+    socket.setTimeout(1_500);
+    const settle = (closed: boolean) => {
+      socket.destroy();
+      resolve(closed);
+    };
+    socket.once('connect', () => settle(false));
+    socket.once('timeout', () => settle(true));
+    socket.once('error', () => settle(true));
+  });
+}
+
+/**
+ * Run `fn` with a serve surface that exists entirely in this file, then put the
+ * environment back exactly as it was. A leaked `OPENCODE_PORT` would silently
+ * repoint every later test in the run, so the restore is in a `finally`.
+ */
+async function withHermeticServe<T>(fn: () => Promise<T>): Promise<T> {
+  const before = {
+    password: process.env['OPENCODE_SERVER_PASSWORD'],
+    port: process.env['OPENCODE_PORT'],
+  };
+  process.env['OPENCODE_SERVER_PASSWORD'] = FIXTURE_SERVE_PASSWORD;
+  process.env['OPENCODE_PORT'] = String(DEAD_SERVE_PORT);
+  try {
+    return await fn();
+  } finally {
+    if (before.password === undefined) delete process.env['OPENCODE_SERVER_PASSWORD'];
+    else process.env['OPENCODE_SERVER_PASSWORD'] = before.password;
+    if (before.port === undefined) delete process.env['OPENCODE_PORT'];
+    else process.env['OPENCODE_PORT'] = before.port;
+  }
+}
 
 /** The command surface `cli.ts` routes to, and the usage it can print. */
 async function run(args: string[]): Promise<number> {
@@ -72,19 +150,40 @@ describe('positional extraction', () => {
   });
 
   test('`--name=value` does not consume the next token', async () => {
+    // With `=` the value is inline, so `ses_y` is the TEXT and the parse is
+    // complete — the call proceeds past argument validation and fails later, on
+    // serve, not on usage.
+    //
+    // WHAT IS ASSERTED, AND WHY IT IS NOT `not.toBe(2)`. `not.toBe(2)` asserts
+    // the ABSENCE of one value: `0`, `1`, `3` and `NaN` all satisfy it, so the
+    // test never established that the command ran at all. What the test's own
+    // name claims is a claim about the PARSE, and the parse has a positive
+    // observable: `promptCommand` prints the session and the text it received
+    // (`bridge.ts:210-211`) before the health check, so those two lines ARE the
+    // parse result. If `--session` had consumed `ses_y`, the text would be
+    // missing and the usage branch would have answered instead.
+    //
+    // The exit code is pinned too, and pinned POSITIVELY, because the serve
+    // surface is hermetic here: nothing listens on `DEAD_SERVE_PORT`, so
+    // `bridge.ts:215-218` is the branch that runs and `1` is what it returns.
+    expect(await isClosed(DEAD_SERVE_PORT), `port ${DEAD_SERVE_PORT} answered — this run would not be hermetic`).toBe(true);
     const lines: string[] = [];
     const original = console.log;
     console.log = (line?: unknown) => {
       lines.push(String(line));
     };
     try {
-      // With `=` the value is inline, so `ses_y` is the TEXT and the parse is
-      // complete — the call proceeds past argument validation and fails later,
-      // on serve, not on usage. What is asserted here is that it is not a usage
-      // error, which is the observable difference.
-      const code = await runHeadless('prompt', ['prompt', 'ses_x', '--session=ses_y', 'do the thing']);
-      expect(lines.join('\n')).not.toContain('usage: opencode-voice prompt');
-      expect(code).not.toBe(2);
+      const code = await withHermeticServe(() =>
+        runHeadless('prompt', ['prompt', 'ses_x', '--session=ses_y', 'do the thing']),
+      );
+      const printed = lines.join('\n');
+      expect(printed, 'the first positional is the session').toContain('ses_x');
+      expect(printed, 'the inline value was not consumed, so the text survived').toContain('do the thing');
+      expect(printed, 'and it was not a usage error').not.toContain('usage: opencode-voice prompt');
+      expect(printed, 'the documented serve-unreachable branch is the one that ran').toContain(
+        'serve unreachable — nothing was sent',
+      );
+      expect(code).toBe(1);
     } finally {
       console.log = original;
     }
@@ -139,17 +238,36 @@ describe('`agent` and `wait` — the two new verbs, at the argv surface', () => 
     // `agent ses_x --no-reply plan` would consume `plan` as the flag's value and
     // report "no agent name" — a correct-looking usage error for a command that
     // was fully specified.
+    //
+    // The same two-part assertion as the `--name=value` case, for the same two
+    // reasons: the OPERANDS are the positive observable (`agentCommand` prints
+    // the session, the agent it was handed and the form it chose, at
+    // `agent.ts:283-285`, before the health check), and the exit code is pinned
+    // to the documented serve-unreachable branch rather than merely "not 2".
+    // `requested agent: plan` is the assertion that discriminates: a swallowing
+    // parser leaves it absent, because it reports a usage error instead.
+    expect(await isClosed(DEAD_SERVE_PORT), `port ${DEAD_SERVE_PORT} answered — this run would not be hermetic`).toBe(true);
     const lines: string[] = [];
     const original = console.log;
     console.log = (line?: unknown) => {
       lines.push(String(line));
     };
     try {
-      // Reaching serve is the observable difference between "parsed" and
-      // "rejected as a usage error", so the assertion is that it is NOT 2.
-      const code = await runHeadless('agent', ['agent', 'ses_x', '--no-reply', 'plan']);
-      expect(lines.join('\n')).not.toContain('usage: opencode-voice agent');
-      expect(code).not.toBe(2);
+      const code = await withHermeticServe(() =>
+        runHeadless('agent', ['agent', 'ses_x', '--no-reply', 'plan']),
+      );
+      const printed = lines.join('\n');
+      expect(printed, 'the second positional is the agent, not the flag\'s value').toContain('plan');
+      // The boolean itself, not just its absence from the operand list: a parser
+      // that ignored `--no-reply` entirely would still print `plan` here.
+      expect(printed, 'and the flag was read as boolean, not as taking a value').toContain(
+        'noReply (records the turn, no model call)',
+      );
+      expect(printed).not.toContain('usage: opencode-voice agent');
+      expect(printed, 'the documented serve-unreachable branch is the one that ran').toContain(
+        'serve unreachable — no agent was switched',
+      );
+      expect(code).toBe(1);
     } finally {
       console.log = original;
     }

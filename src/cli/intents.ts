@@ -22,13 +22,32 @@ import { COORDINATOR_MODEL, GATE_TIMEOUT_MS, type ChatFn } from '../orchestrator
 // `parseAddressee` returned and compares it to a written expectation.
 //
 // TWO SOURCES OF THE REPLY, AND THE DIFFERENCE MATTERS.
-//   `model`  — a live `openRouterChat` call. Measures the model.
+//   `model`  — a live `openRouterChat` call. The only source whose figure is
+//              evidence about the model's judgement on Arabic.
 //   `replay` — a captured completion, byte-for-byte in the product's schema.
 //              Measures `parseAddressee` and the round-trip, with no network.
-// The report ALWAYS names which one produced a row, because an accuracy figure
-// over replayed replies is a measurement of the parser and calling it a
-// measurement of the classifier's judgement on Arabic would be the fabrication
-// this whole exercise exists to remove.
+//              ITS FIGURE IS NOT A MODEL MEASUREMENT, and the report says so in
+//              the data (`measures`) rather than in a comment.
+//
+// THE OFFLINE FIGURE IS 1 BY CONSTRUCTION. `INTENT_CASES` below carries
+// `expected` and `reply` in ONE object literal, so a replay run compares the
+// parser against a key that was written from the same text the parser is
+// parsing. `agreement === 1` over replay is therefore a statement about the
+// fixture, not about the model, and reporting it as `accuracy` is the
+// fabrication this exercise exists to remove. `intents.test.ts` MEASURES this —
+// it builds a table whose every judgement is inverted and shows the replay
+// figure is still 1 — because the circularity is a fact about the data and
+// asserting it in prose would be asserting it the same way the number was.
+//
+// LIVE MEASUREMENT, AND WHY IT IS NOT A GATE. `opencode-voice intents --live`
+// is the only thing here that measures the model. It is in no gate because it
+// needs a real OpenRouter key and spends free-tier quota, which makes it
+// non-hermetic, non-deterministic (a `:free` model can 429, and can return
+// `content: null` without `reasoning: {effort:'none'}`), and bill-dependent. A
+// gate that fails on someone else's quota is a gate that gets skipped, which is
+// worse than no gate. The honest offline gate is therefore the STRUCTURAL one —
+// `structuralFaultsOf` — which is what `intents.test.ts` holds at 0. Re-measure
+// the model by hand; do not let a replay figure stand in for it.
 
 export interface IntentCase {
   readonly id: string;
@@ -69,6 +88,14 @@ function verdict(fields: {
  * rows, because both are only meaningful against a live `PermissionSlot` — a
  * `deny` with nothing pending is documented as a deliberate no-op
  * (`permission.ts:272-274`), and a table row cannot express a slot.
+ *
+ * READ `expected` AND `reply` IN THIS ONE LITERAL AS A LIMITATION, NOT A FORMAT.
+ * They are the answer and the answer key, side by side. That is what makes these
+ * rows usable as a hermetic round-trip fixture for `parseAddressee`, and it is
+ * exactly what makes a replayed figure over them incapable of measuring the
+ * model. `why` is the human-facing justification and is NOT consulted by any
+ * code path — so a wrong `expected` here is invisible to the suite, which is the
+ * circularity stated at the point where the key is written.
  */
 export const INTENT_CASES: readonly IntentCase[] = [
   {
@@ -151,6 +178,29 @@ export const INTENT_CASES: readonly IntentCase[] = [
 
 export type VerdictSource = 'model' | 'replay';
 
+/**
+ * WHAT THE FIGURE ON A REPORT IS A MEASUREMENT **OF**.
+ *
+ * This exists because `VerdictSource` alone was not enough for a reader. `replay`
+ * and `model` name where a reply came from; they do not say what a number computed
+ * from those replies is evidence about. On a `model` run the figure is a
+ * measurement of the model. On a `replay` run it is a measurement of
+ * `parseAddressee` and the round trip — and, because `INTENT_CASES` carries
+ * `expected` beside `reply` in one object literal, it is a measurement whose
+ * answer key was written from the very text being parsed.
+ *
+ * The `replay` string therefore says so IN THE DATA, not only in a comment, and
+ * `intents.test.ts` asserts the exact wording. A report that cannot be misread
+ * when it is printed six lines away from its own source line is the deliverable;
+ * a well-commented field name is not.
+ */
+export type IntentMeasurement = 'the live model' | 'parseAddressee against recorded replies — NOT the model';
+
+/** Derived, never free text, so a report cannot label itself inconsistently. */
+export function measurementOf(source: VerdictSource): IntentMeasurement {
+  return source === 'model' ? 'the live model' : 'parseAddressee against recorded replies — NOT the model';
+}
+
 export interface IntentRow {
   readonly id: string;
   readonly expected: AddresseeDecision;
@@ -175,8 +225,19 @@ export interface IntentReport {
   readonly rows: readonly IntentRow[];
   readonly correct: number;
   readonly total: number;
-  /** Correct / total, or `null` when there were no cases (never `0/0` printed as a rate). */
-  readonly accuracy: number | null;
+  /**
+   * Fraction of rows where `parseAddressee` agreed with the written expectation.
+   * `null` when there were no cases (never `0/0` printed as a rate).
+   *
+   * NAMED `agreement`, NOT `accuracy`, AND THE RENAME IS THE POINT. On a `model`
+   * run the two words mean nearly the same thing. On a `replay` run they do not:
+   * the answer key sits in the same object literal as the answer, so "accuracy"
+   * named a number that was 1 before a single call was made. `measures` says
+   * which of the two a given report is; this says the arithmetic.
+   */
+  readonly agreement: number | null;
+  /** What `agreement` is evidence about on THIS report. See `IntentMeasurement`. */
+  readonly measures: IntentMeasurement;
   /** Per-decision tallies of expected vs actual. */
   readonly confusion: ReadonlyArray<{ readonly decision: string; readonly expected: number; readonly actual: number }>;
   readonly ms: number;
@@ -260,7 +321,8 @@ export async function runIntentTable(cases: readonly IntentCase[], chat: ChatFn,
     rows,
     correct,
     total: rows.length,
-    accuracy: rows.length === 0 ? null : correct / rows.length,
+    agreement: rows.length === 0 ? null : correct / rows.length,
+    measures: measurementOf(source),
     confusion,
     ms: Date.now() - started,
   };

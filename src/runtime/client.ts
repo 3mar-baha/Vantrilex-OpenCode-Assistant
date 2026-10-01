@@ -596,21 +596,33 @@ function normalizeShellResult(sessionId: SessionId, command: string, raw: unknow
 }
 
 export class ServeClient {
+  /**
+   * NO prompt-shape option, and that is deliberate (W26).
+   *
+   * This constructor used to take `{ promptEnvelope: 'flat' | 'nested' }` and
+   * hold it in a `private get promptEnvelope()` that **nothing ever called** —
+   * `promptWithKey` sent two fixed bodies and read neither. The CLI plumbed a
+   * `--envelope flat|nested` flag all the way down to that dead getter and then
+   * PRINTED the result as `prompt envelope`, so a report claimed a capability
+   * the request path did not have. A surface that reports what the code cannot
+   * do is the defect this repo keeps hunting; the fix was deletion, not wiring.
+   *
+   * WHY IT CANNOT SIMPLY BE REWIRED. Both shapes are measurably invalid against
+   * `/doc`: `flat` (`{text, metadata, delivery}` at the top level) measured a
+   * guaranteed **400 `Missing key ["prompt"]`**, and `nested` (`metadata` inside
+   * `prompt`) measured **500** — `PromptInput` is `{text, files?, agents?}` with
+   * `additionalProperties: false`, so `metadata` has no home in either. Turning
+   * the flag back on would ship a body the server rejects.
+   *
+   * The real prompt egress is not a shape choice at all — it is a ROUTE choice,
+   * taken by status code in `promptWithKey`: try the v2 route, and on a 5xx fall
+   * back to the v1 `prompt_async` route. That measured strategy replaces the
+   * flat/nested axis entirely, so the axis had nothing left to select.
+   */
   constructor(
     private readonly baseUrl: string,
     private readonly password: string,
-    private readonly options: { readonly promptEnvelope?: 'flat' | 'nested' } = {},
   ) {}
-
-  /**
-   * Prompt body shape differs by server generation (verified live):
-   *  - 2.0.x (canonical desktop build): flat `{ text, metadata, delivery }`
-   *  - 1.18.x (npm `latest`):           nested `{ prompt: { text, … } }`
-   * Default is the canonical 2.0.x flat envelope.
-   */
-  private get promptEnvelope(): 'flat' | 'nested' {
-    return this.options.promptEnvelope ?? 'flat';
-  }
 
   /** Stable prompt keys: retries of the same (session, text[, task]) reuse one
    * UUID so serve-side idempotency actually dedupes. Bounded to 256 entries.
@@ -790,12 +802,16 @@ export class ServeClient {
    *
    * `guardSpaFallback` is therefore opt-in per caller, and it is the reason the
    * body is cancelled rather than parsed: we are checking the TYPE, not reading
-   * the payload. It is ON for the one verb measured to hit the fallback, and
-   * OFF for `setSessionAgent` / `setSessionModel` / `compact` / `interrupt` /
-   * `revert` because nobody has measured whether their routes exist at all —
-   * turning the guard on for an unmeasured verb would refuse calls that might
-   * be working, which is a fabrication in the other direction. See the
-   * per-method comments for what is known and what is not.
+   * the payload. It is ON for the verbs MEASURED to exist and to be
+   * distinguishable from the fallback — `execSessionShell`, `toggleSessionSkill`,
+   * and now `interrupt` (measured 2026-10-01: declared in `/doc` as
+   * `v2.session.interrupt`, 204 with no content-type on a real session, while a
+   * sibling bogus path on that same session answers 200 `text/html`). It is OFF
+   * for `setSessionAgent` / `setSessionModel` / `compact` / `revert` because
+   * nobody has measured whether their routes exist at all — turning the guard on
+   * for an unmeasured verb would refuse calls that might be working, which is a
+   * fabrication in the other direction. See the per-method comments for what is
+   * known and what is not.
    */
   private async control(
     method: string,
@@ -1210,9 +1226,58 @@ export class ServeClient {
     return { ok: true };
   }
 
-  /** Native abort — the correct barge-in primitive. */
+  /**
+   * Native abort — `POST /api/session/{sessionID}/interrupt`.
+   *
+   * MEASURED 2026-10-01 against the live serve this client talks to, because the
+   * `control()` funnel's own doc named this verb as one of the unmeasured ones
+   * (`guardSpaFallback` is opt-in per caller and was OFF here, with the stated
+   * reason "nobody has measured whether their routes exist at all"). Three
+   * measurements discharge that reason:
+   *
+   *   1. The route is DECLARED. `GET /doc` — the real spec, 478 968 bytes and 162
+   *      declared paths on this build — lists `/api/session/{sessionID}/interrupt`
+   *      as `operationId: v2.session.interrupt`, summary "Interrupt session
+   *      execution", responses 204/400/401/404, no request body.
+   *   2. It ANSWERS 204 on a real session. Probed on a live `ses_…` id: HTTP 204
+   *      with NO content-type and no body — exactly what the funnel treats as
+   *      success, and exactly what `spaFallbackContentType` returns `null` for
+   *      (a missing content-type on a 2xx is legitimate here, per its own note).
+   *   3. The SPA fallback it must be told apart from is REAL and reachable from
+   *      this exact shape. On the same session, same auth, same method,
+   *      `POST /api/session/{id}/bogus_xyz` answers **200 `text/html`, 2 884
+   *      bytes**. So "a session-scoped path that 200s" genuinely does not mean a
+   *      route exists — and with the guard off this method would have reported
+   *      `{ ok: true }` against nothing the moment serve renamed the route.
+   *
+   * The guard is therefore ON, and the `control()` note listing `interrupt`
+   * among the unguarded verbs is now stale for this verb. The sibling verbs
+   * (`setSessionAgent` / `setSessionModel` / `compact` / `revert`) remain
+   * unmeasured and unguarded, exactly as that note says — this is the measured
+   * one, not a blanket flip.
+   *
+   * NOT "the barge-in primitive". That wording is corrected on purpose: in this
+   * codebase a barge-in is `stopSpeech` (M2 Pattern 2 — speech only, and it must
+   * not cancel the turn), wired to `SpeechGate.abort()` and nothing else. Calling
+   * an interrupt a barge-in described a relationship between two verbs this
+   * client cannot have, and that mislabelling is what made the un-wired call
+   * site read as a deliberate design choice rather than as a missing wire.
+   *
+   * ALSO NOTE the v1 sibling `/session/{sessionID}/abort` exists and answers 200
+   * with the body `true` (both measured). Only the v2 `interrupt` route is used:
+   * it is the one the v2 session API is built on, it is safe to call on an idle
+   * session (204 with nothing running — measured), and `abort`'s boolean body
+   * buys nothing, because a caller cannot act on a boolean it did not ask for.
+   */
   async interruptSession(sessionId: SessionId): Promise<{ ok: true }> {
-    await this.control('POST', `/api/session/${sessionId}/interrupt`, {}, randomUUID(), 'session.interrupt');
+    await this.control(
+      'POST',
+      `/api/session/${sessionId}/interrupt`,
+      {},
+      randomUUID(),
+      'session.interrupt',
+      true,
+    );
     return { ok: true };
   }
 
