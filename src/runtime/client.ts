@@ -252,6 +252,156 @@ export interface SessionStatusInfo {
   readonly lastEventId?: string;
 }
 
+/**
+ * One assistant turn, normalized from the v1 `{info, parts}` row.
+ *
+ * `time.completed` IS the completion signal, and nothing else is. MEASURED
+ * 2026-10-01, one turn observed at 1 s intervals:
+ *
+ *   t+1.5 s  assistant row present   parts: []   completed: ABSENT   text: ""
+ *   t+3.0 s  assistant row present   parts: []   completed: ABSENT   text: ""
+ *   t+4.5 s  assistant row present   parts: 3    completed: SET      text: "Space Bunny"
+ *
+ * The row exists ~3 s before the model has produced anything, so a poller that
+ * treats row-presence as completion returns an empty answer as though the model
+ * had declined to speak. `completedAt` is the only field that distinguishes them.
+ *
+ * `agent`/`mode` are the server's OWN echo of the agent that ran the turn, and
+ * they are the only proof available that an agent switch took effect. Both were
+ * read back from a turn sent with `agent: 'plan'` (measured: `agent=plan`,
+ * `mode=plan`), and neither is a value this client wrote.
+ */
+export interface TurnRow {
+  readonly id: string;
+  /**
+   * `info.role`. Load-bearing, not decoration — see `readTurn`.
+   *
+   * A turn is identified by the message id the CLIENT minted, and that id
+   * belongs to the USER row. The assistant row that answers it carries the same
+   * id in `parentID`. Reading "the row whose id is mine" therefore returns the
+   * question, not the answer: measured live, that mistake made a poll report
+   * `still-running` for 90 s on a turn that had completed in 4 s, and printed the
+   * prompt back as the model's reply. The role is what makes the mistake
+   * impossible rather than merely unlikely.
+   */
+  readonly role: 'user' | 'assistant' | 'other';
+  readonly parentId: string | null;
+  /** `info.agent` — the agent the server says ran this turn. */
+  readonly agent: string | null;
+  /** `info.mode` — the server's own mode classification of the turn. */
+  readonly mode: string | null;
+  readonly createdAt: number | null;
+  /** `info.time.completed`. `null` while the turn is still running. */
+  readonly completedAt: number | null;
+  /** `info.finish`, e.g. `stop`. Present only on a finished turn. */
+  readonly finish: string | null;
+  /** The provider's error, when the turn failed. Named, never its whole body. */
+  readonly error: TurnError | null;
+  /** Every `type: "text"` part joined, in order. Empty until the model speaks. */
+  readonly text: string;
+  readonly textParts: number;
+  readonly partTypes: readonly string[];
+}
+
+/**
+ * A provider error, reduced to what a report may show.
+ *
+ * MEASURED: a rate-limited turn carries
+ * `{name:"APIError", data:{message, statusCode, isRetryable, responseHeaders{…}}}`
+ * and `responseHeaders` includes `set-cookie`-adjacent material. Only the name,
+ * the message and the numeric status are kept — a raw dump of this object is a
+ * credential-leak path, and `notice()` is not in the path of a CLI report.
+ */
+export interface TurnError {
+  readonly name: string;
+  readonly message: string;
+  readonly statusCode: number | null;
+  readonly retryable: boolean | null;
+}
+
+/** `/session/status` for one session. See `ServeClient.sessionStatus`. */
+export type SessionActivityKind = 'busy' | 'retry' | 'idle' | 'unknown' | 'unreachable';
+
+export interface SessionActivity {
+  readonly kind: SessionActivityKind;
+  /** A human sentence naming the state. Never a bare enum, never `ok`. */
+  readonly detail: string;
+  readonly attempt?: number;
+  readonly next?: number;
+}
+
+/**
+ * Normalize one `{info, parts}` row, or `null` when it is not a message.
+ *
+ * `info` is REQUIRED by the declared schema, and this returns `null` without it
+ * rather than treating the row itself as the info — a row read the flat way
+ * would then report `id: undefined` and no completion time, i.e. a turn that
+ * never finishes. `listSessionMessages` accepts both layouts because it only
+ * reads a timestamp; a completion signal must not be read that loosely.
+ */
+function parseTurnRow(row: unknown): TurnRow | null {
+  if (typeof row !== 'object' || row === null) return null;
+  const r = row as Record<string, unknown>;
+  const infoRaw = r['info'];
+  if (typeof infoRaw !== 'object' || infoRaw === null) return null;
+  const info = infoRaw as Record<string, unknown>;
+  const id = info['id'];
+  if (typeof id !== 'string' || id.length === 0) return null;
+  const time = (typeof info['time'] === 'object' && info['time'] !== null ? info['time'] : {}) as Record<string, unknown>;
+  const parts = Array.isArray(r['parts']) ? r['parts'] : [];
+  const partTypes: string[] = [];
+  const texts: string[] = [];
+  for (const part of parts) {
+    if (typeof part !== 'object' || part === null) {
+      partTypes.push('non-object');
+      continue;
+    }
+    const p = part as Record<string, unknown>;
+    const type = typeof p['type'] === 'string' ? p['type'] : 'unknown';
+    partTypes.push(type);
+    if (type !== 'text') continue;
+    const text = p['text'];
+    if (typeof text === 'string' && text.trim().length > 0) texts.push(text);
+  }
+  return {
+    id,
+    // `AssistantMessage` and `UserMessage` both declare `role`, and the v1 route
+    // returns both. Anything else is `other` rather than an optimistic
+    // `'assistant'`: a row this client cannot identify must not be able to pass
+    // as a model answer.
+    role: info['role'] === 'assistant' ? 'assistant' : info['role'] === 'user' ? 'user' : 'other',
+    parentId: typeof info['parentID'] === 'string' ? info['parentID'] : null,
+    agent: typeof info['agent'] === 'string' ? info['agent'] : null,
+    mode: typeof info['mode'] === 'string' ? info['mode'] : null,
+    createdAt: num(time['created']) ?? null,
+    completedAt: num(time['completed']) ?? null,
+    finish: typeof info['finish'] === 'string' ? info['finish'] : null,
+    error: parseTurnError(info['error']),
+    text: texts.join('\n'),
+    textParts: texts.length,
+    partTypes,
+  };
+}
+
+/** `{name, data:{message, statusCode, isRetryable}}` → three safe fields. */
+function parseTurnError(raw: unknown): TurnError | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const name = typeof r['name'] === 'string' ? r['name'] : 'UnknownError';
+  const data = (typeof r['data'] === 'object' && r['data'] !== null ? r['data'] : {}) as Record<string, unknown>;
+  const message = typeof data['message'] === 'string' ? data['message'] : typeof r['message'] === 'string' ? r['message'] : '';
+  const statusCode = num(data['statusCode']);
+  const retryable = typeof data['isRetryable'] === 'boolean' ? data['isRetryable'] : null;
+  return {
+    name,
+    // Bounded: a provider error body can be an entire HTML page, and a report
+    // that prints one is a report nobody reads to the end.
+    message: message.slice(0, 200),
+    statusCode: statusCode ?? null,
+    retryable,
+  };
+}
+
 /** Model reference — the canonical shape required by /api/session model calls. */
 export interface ModelRef {
   readonly id: string;
@@ -1151,5 +1301,212 @@ export class ServeClient {
     } catch {
       return 'unknown';
     }
+  }
+
+  // ── TURN CONTROL — the three capabilities a caller needs to drive a session ─
+  //
+  // Everything below is measured against opencode 1.18.32 on 2026-10-01, and
+  // every one of these three methods exists because a route that LOOKS like it
+  // does the job was measured not to.
+
+  /**
+   * Send one turn on the v1 envelope, with the AGENT carried in the body.
+   *
+   * WHY THIS IS NOT `setSessionAgent`. Measured, live, on 1.18.32:
+   *
+   *   POST /api/session/{id}/agent {agent}  -> 500 UnknownError (err_54128a6f)
+   *   POST /session/{id}/agent     {agent}  -> 200, text/html, 2 884 bytes — the
+   *                                             SPA catch-all, byte-identical to
+   *                                             an invented path. NOT A ROUTE.
+   *
+   * `setSessionAgent` targets the first and therefore cannot switch an agent on
+   * this server. The ONLY mechanism that works is the `agent` field inside the v1
+   * message envelope, and it is confirmed by the server's OWN response: the
+   * assistant row comes back with `info.agent` and `info.mode` both set to the
+   * requested name. That is what this method returns — not what we asked for.
+   *
+   * THE TRUST PROOF IS MEASURED, NOT ASSUMED. An INVALID agent name is accepted
+   * with `204` and simply produces no assistant row at all (measured: 204 in
+   * 5 ms, and 0 rows on `/session/{id}/message` a minute later). So a `204` here
+   * is evidence of ACCEPTANCE BY THE ROUTE and of nothing else; whether an agent
+   * was really applied can only be settled by `readTurn()`, which is why the
+   * caller must.
+   */
+  async promptTurn(
+    sessionId: SessionId,
+    text: string,
+    options: {
+      readonly agent?: string;
+      readonly model?: { readonly providerID: string; readonly modelID: string };
+      /** `true` records the user row and switches the agent without a model call. */
+      readonly noReply?: boolean;
+    } = {},
+  ): Promise<{ readonly messageId: string; readonly status: number; readonly body: string }> {
+    const messageId = `msg_${randomUUID()}`;
+    // The v1 envelope is `additionalProperties: false` with `parts` required —
+    // measured: omitting it is a 400 `Missing key at ["parts"]`. A stray
+    // `delivery` field is NOT rejected on 1.18.32 (measured 204), so the body
+    // below carries only declared members and the shape is the spec's.
+    const body: Record<string, unknown> = {
+      messageID: messageId,
+      ...(options.agent !== undefined ? { agent: options.agent } : {}),
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.noReply === true ? { noReply: true } : {}),
+      parts: [{ type: 'text', text }],
+    };
+    const res = await this.request(
+      `/session/${sessionId}/prompt_async`,
+      { method: 'POST', body: JSON.stringify(body) },
+      // The message id doubles as the idempotency key, so a retried send of the
+      // same turn is deduped by serve rather than run twice.
+      messageId,
+    );
+    const raw = await res.text().catch(() => '');
+    if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
+    if (res.status === 409) throw new OrchestratorError('SESSION_BUSY', true, `session ${sessionId} busy — backpressure`);
+    if (res.status === 401) throw new OrchestratorError('SERVE_UNREACHABLE', false, 'session.prompt_async: rejected credentials (401)');
+    if (!res.ok) {
+      throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.prompt_async failed with HTTP ${res.status}`);
+    }
+    // 204 No Content is the measured answer, and it carries no content-type —
+    // legitimately, which is why `spaFallbackContentType` treats a MISSING type
+    // as "not the fallback". A 200 that DOES declare a type here would be the
+    // catch-all, and a turn reported as delivered against it is the exact
+    // `execSessionShell` defect. Guarded rather than trusted.
+    const fallback = spaFallbackContentType(res);
+    if (fallback !== null) {
+      throw new OrchestratorError(
+        'CONTRACT_DRIFT',
+        false,
+        `session.prompt_async: expected 204 with no body, got ${fallback} (HTTP ${res.status}) — the request hit the SPA fallback, not a route`,
+      );
+    }
+    return { messageId, status: res.status, body: raw };
+  }
+
+  /**
+   * One assistant turn, read back from serve. The v1 route, pinned.
+   *
+   * MEASURED 2026-10-01, same session, same moment:
+   *   GET /api/session/{id}/message -> 200 {"data":[], "cursor":{…}}   0 rows
+   *   GET /session/{id}/message      -> 200 [ {info, parts} … ]       2 rows
+   *
+   * The v2 projection is EMPTY for a session that demonstrably has messages, so a
+   * poller built on it would report "still running" forever on a turn that
+   * actually finished. Neither surface is a superset of the other; v1 is the one
+   * that carries the data, so it is the one used.
+   *
+   * `?before=` is declared on this route and MEASURED to 400 on every attempt, so
+   * there is no cursor pagination here: the whole timeline comes back every time.
+   * The route is therefore read in full on each poll rather than incrementally,
+   * and this method does not pretend to be incremental.
+   *
+   * ── WHICH ROW IS "MY TURN", AND WHY IT IS NOT `id === messageId` ──
+   *
+   * The id this client mints belongs to the USER row. Measured on a real turn:
+   *
+   *   user      id = msg_01adc70e…   parentID = (none)     text = the prompt
+   *   assistant id = msg_0f6822b3…   parentID = msg_01adc70e…  text = the answer
+   *
+   * So "the row whose id is the one I sent" is the QUESTION. The first version of
+   * this method matched on `id` and it was caught by running it, not by reading
+   * it: a live poll reported `still-running` for 90 s on a turn that completed in
+   * 4 s, and printed the request back as the model's reply — the precise defect
+   * this whole change set exists to prevent, shipped inside the fix for it.
+   *
+   * The match is therefore `role === 'assistant' && parentID === messageId`, and
+   * a row that is not an assistant row is never returned. One turn can produce
+   * several assistant rows (a tool loop), so the LAST match wins: it is the one
+   * carrying the final `time.completed`.
+   */
+  async readTurn(sessionId: SessionId, messageId: string): Promise<TurnRow | null> {
+    const res = await this.request(`/session/${sessionId}/message`, { method: 'GET' });
+    if (res.status === 404) throw new OrchestratorError('SESSION_NOT_FOUND', false, `session ${sessionId} not found`);
+    if (!res.ok) throw new OrchestratorError('SERVE_UNREACHABLE', true, `session.messages failed with HTTP ${res.status}`);
+    const fallback = spaFallbackContentType(res);
+    if (fallback !== null) {
+      throw new OrchestratorError(
+        'CONTRACT_DRIFT',
+        false,
+        `session.messages: expected JSON, got ${fallback} (HTTP ${res.status}) — the request hit the SPA fallback, not a route`,
+      );
+    }
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch (err) {
+      throw new OrchestratorError(
+        'CONTRACT_DRIFT',
+        false,
+        `session.messages: response was not JSON (${err instanceof Error ? err.message : 'unknown'})`,
+      );
+    }
+    const rows = Array.isArray(raw) ? raw : [];
+    let match: TurnRow | null = null;
+    for (const row of rows) {
+      const parsed = parseTurnRow(row);
+      // The assistant row that ANSWERS our message. Not `id === messageId`:
+      // that id is the user row's, and matching on it returns the question —
+      // measured, and the reason this is spelled out rather than left implicit.
+      if (parsed === null) continue;
+      if (parsed.role !== 'assistant' || parsed.parentId !== messageId) continue;
+      match = parsed;
+    }
+    return match;
+  }
+
+  /**
+   * The server's own liveness map, `GET /session/status`.
+   *
+   * MEASURED 2026-10-01, one entry per busy session:
+   *   {"ses_…":{"type":"busy"}}
+   *   {"ses_…":{"type":"retry","attempt":5,"message":"Rate limit exceeded…","next":…}}
+   *
+   * This is CORROBORATION and is never the completion signal. It is reported
+   * beside a poll so a timeout can be attributed ("serve says retry, attempt 5")
+   * instead of being a bare "gave up". A `busy` entry with no `completed` row is
+   * the exact situation the poller must keep waiting through: measured, the
+   * assistant row appears at t+1.5 s with `parts: []` and the turn does not
+   * complete until t+4.5 s.
+   */
+  async sessionStatus(sessionId: SessionId): Promise<SessionActivity> {
+    let res: Response;
+    try {
+      res = await this.request('/session/status', { method: 'GET' });
+    } catch (err) {
+      return { kind: 'unreachable', detail: err instanceof Error ? err.message : 'unknown' };
+    }
+    if (spaFallbackContentType(res) !== null || !res.ok) {
+      return { kind: 'unreachable', detail: `HTTP ${res.status}` };
+    }
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch {
+      return { kind: 'unreachable', detail: 'response was not JSON' };
+    }
+    if (typeof raw !== 'object' || raw === null) return { kind: 'unreachable', detail: 'response was not a map' };
+    const entry = (raw as Record<string, unknown>)[sessionId];
+    if (typeof entry !== 'object' || entry === null) {
+      // ABSENT IS A REAL ANSWER, and it is the good one: measured, a session
+      // absent from this map is not running. It is not an error and it is not
+      // "unknown" — the map is complete, so absence means idle.
+      return { kind: 'idle', detail: 'no entry for this session in /session/status' };
+    }
+    const e = entry as Record<string, unknown>;
+    const type = typeof e['type'] === 'string' ? e['type'] : 'unknown';
+    const message = typeof e['message'] === 'string' ? e['message'] : null;
+    const attempt = num(e['attempt']);
+    if (type === 'retry') {
+      const next = num(e['next']);
+      return {
+        kind: 'retry',
+        detail: message ?? 'retrying',
+        ...(attempt !== undefined ? { attempt } : {}),
+        ...(next !== undefined ? { next } : {}),
+      };
+    }
+    if (type === 'busy') return { kind: 'busy', detail: 'a turn is in flight' };
+    return { kind: 'unknown', detail: `type=${type}${message === null ? '' : ` ${message}`}` };
   }
 }

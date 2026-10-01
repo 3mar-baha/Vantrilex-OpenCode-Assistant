@@ -15,6 +15,7 @@ import {
 } from './intents.js';
 import { reasonCommand } from './reason.js';
 import { createSessionCommand, lspCommand, mcpCommand, promptCommand, sessionsCommand, shellCommand, skillsCommand, specCommand } from './bridge.js';
+import { agentCommand, waitCommand } from './agent.js';
 import { assertGateInvariant, measureGateInvariant, type GateInvariant } from './turn.js';
 import { HEADLESS_COMMANDS, type HeadlessCommand } from './commands.js';
 import { readFileSync } from 'node:fs';
@@ -59,7 +60,17 @@ function option(args: readonly string[], name: string): string | null {
  *
  * Anything not named here is boolean and leaves the next token alone.
  */
-const VALUE_OPTIONS: ReadonlySet<string> = new Set(['session', 'directory', 'model', 'agent', 'case', 'source', 'envelope']);
+const VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  'session',
+  'directory',
+  'model',
+  'agent',
+  'case',
+  'source',
+  'envelope',
+  'timeout',
+  'message',
+]);
 
 /** Positional arguments, in order, ignoring flags and their values. */
 function positionals(args: readonly string[]): string[] {
@@ -120,6 +131,12 @@ function usage(): string {
     '                                run a command in a session (v1 route)',
     '  spec                           the real OpenAPI document at /doc',
     '  gate [--source <file>]          the structural invariant, counted from source',
+    '  agent <sessionId> <name> [--no-reply] [--envelope flat|nested]',
+    '                                switch a session agent; proven from info.agent,',
+    '                                never from what was requested',
+    '  wait <sessionId> <messageId> [--timeout <ms>] [--envelope flat|nested]',
+    '                                poll a turn to completion; reports which of the',
+    '                                four: text / empty / running / errored',
     '',
     'no audio, no webview, no daemon required. serve must be running on 4096.',
   ].join('\n');
@@ -298,6 +315,54 @@ export async function runHeadless(command: HeadlessCommand, argv: readonly strin
     }
     case 'spec':
       return specCommand();
+    case 'agent': {
+      const pos = positionals(args);
+      const sessionId = pos[0];
+      const agent = pos[1];
+      if (sessionId === undefined || agent === undefined) {
+        out.heading('agent');
+        out.fail('usage: opencode-voice agent <sessionId> <agentName> [--no-reply]');
+        return 2;
+      }
+      const env = envelopeOption(args);
+      if (!env.ok) {
+        out.heading('agent');
+        out.fail(`--envelope must be flat or nested, got "${env.raw}"`);
+        return 2;
+      }
+      return agentCommand(sessionId, agent, flag(args, 'no-reply'), env.value);
+    }
+    case 'wait': {
+      const pos = positionals(args);
+      const sessionId = pos[0];
+      const messageId = pos[1];
+      if (sessionId === undefined || messageId === undefined) {
+        out.heading('wait');
+        out.fail('usage: opencode-voice wait <sessionId> <messageId> [--timeout <ms>]');
+        return 2;
+      }
+      const env = envelopeOption(args);
+      if (!env.ok) {
+        out.heading('wait');
+        out.fail(`--envelope must be flat or nested, got "${env.raw}"`);
+        return 2;
+      }
+      // A bad `--timeout` is a usage error rather than a silent default: this
+      // option IS the budget, and quietly substituting 30 000 for a typo would
+      // answer "did it finish?" with a different question than the caller asked.
+      const raw = option(args, 'timeout');
+      let timeoutMs = 30_000;
+      if (raw !== null) {
+        const parsed = Number.parseInt(raw, 10);
+        if (!Number.isInteger(parsed) || parsed < 0) {
+          out.heading('wait');
+          out.fail(`--timeout must be a non-negative integer of milliseconds, got "${raw}"`);
+          return 2;
+        }
+        timeoutMs = parsed;
+      }
+      return waitCommand(sessionId, messageId, timeoutMs, env.value);
+    }
     default: {
       out.heading('headless');
       out.fail(`unknown headless command: ${String(command)}`);

@@ -115,6 +115,102 @@ describe('usage errors exit 2, distinct from a failure', () => {
   });
 });
 
+describe('`agent` and `wait` — the two new verbs, at the argv surface', () => {
+  // The value-taking options below are the ones that can SWALLOW the next token,
+  // which is the failure this file exists for. `--agent plan` used to be
+  // ambiguous with the command's own positional name, and `--timeout 30000` had
+  // to be declared or the budget would be read as the message id.
+  test('`agent` with a session but no agent name is a usage error', async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    try {
+      expect(await runHeadless('agent', ['agent', 'ses_x'])).toBe(2);
+      expect(lines.join('\n')).toContain('usage: opencode-voice agent <sessionId> <agentName>');
+    } finally {
+      console.log = original;
+    }
+  });
+
+  test('BREAK: `--no-reply` is boolean and does not eat the agent name', async () => {
+    // `--no-reply` is deliberately NOT in VALUE_OPTIONS. If it were, then
+    // `agent ses_x --no-reply plan` would consume `plan` as the flag's value and
+    // report "no agent name" — a correct-looking usage error for a command that
+    // was fully specified.
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    try {
+      // Reaching serve is the observable difference between "parsed" and
+      // "rejected as a usage error", so the assertion is that it is NOT 2.
+      const code = await runHeadless('agent', ['agent', 'ses_x', '--no-reply', 'plan']);
+      expect(lines.join('\n')).not.toContain('usage: opencode-voice agent');
+      expect(code).not.toBe(2);
+    } finally {
+      console.log = original;
+    }
+  });
+
+  test('`wait` with no message id is a usage error', async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    try {
+      expect(await runHeadless('wait', ['wait', 'ses_x'])).toBe(2);
+      expect(lines.join('\n')).toContain('usage: opencode-voice wait <sessionId> <messageId>');
+    } finally {
+      console.log = original;
+    }
+  });
+
+  test('BREAK: a non-numeric `--timeout` is refused, not silently defaulted', async () => {
+    // The budget IS the question this verb answers. Substituting 30 000 for a
+    // typo would answer "did it finish within 30 s?" when the caller asked
+    // "within 5 s?" — a different measurement wearing the same report.
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    try {
+      expect(await runHeadless('wait', ['wait', 'ses_x', 'msg_1', '--timeout', 'soon'])).toBe(2);
+      expect(lines.join('\n')).toContain('--timeout must be a non-negative integer');
+    } finally {
+      console.log = original;
+    }
+  });
+
+  test('BREAK: `--timeout` DOES consume its value, so the message id survives', async () => {
+    // The mirror of the `--no-reply` case. If `timeout` were not a value option,
+    // `wait ses_x msg_1 --timeout 5000` would take `5000` as the message id and
+    // poll the wrong turn.
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => {
+      lines.push(String(line));
+    };
+    try {
+      expect(await runHeadless('wait', ['wait', 'ses_x', '--timeout', 'soon'])).toBe(2);
+      // `ses_x` present, `--timeout` consumed `soon`; the missing message id is
+      // therefore the reported problem, which is what proves the consumption.
+      expect(lines.join('\n')).toContain('usage: opencode-voice wait <sessionId> <messageId>');
+    } finally {
+      console.log = original;
+    }
+  });
+
+  test('both verbs are reachable from the ladder and the usage line names them', () => {
+    expect(isHeadlessCommand('agent')).toBe(true);
+    expect(isHeadlessCommand('wait')).toBe(true);
+  });
+});
+
 describe('`gate --source` — the break-verification seam', () => {
   test('an unreadable source is a loud failure, not a fallback to 1', async () => {
     const lines: string[] = [];

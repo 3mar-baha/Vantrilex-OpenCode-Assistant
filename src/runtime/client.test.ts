@@ -628,3 +628,433 @@ describe('context telemetry (D9)', () => {
   });
 });
 
+// ── TURN CONTROL — promptTurn / readTurn / sessionStatus ────────────────────
+//
+// Three methods added because the routes that LOOK like they do this job were
+// measured not to, against opencode 1.18.32 on 2026-10-01:
+//
+//   POST /api/session/{id}/agent  -> 500 UnknownError   (the route exists; the
+//                                                            handler throws)
+//   POST /session/{id}/agent      -> 200 text/html 2884 bytes, byte-identical to
+//                                    an invented path — the SPA catch-all
+//
+// so an agent switch is only expressible as the `agent` field on the v1 message
+// envelope, and the only proof it took effect is the `info.agent` / `info.mode`
+// the server writes onto the assistant row.
+//
+// THE FIXTURES BELOW ARE MEASURED ROWS, captured from a live turn. A guard written
+// against an invented payload proves nothing about a server that does not send
+// it, which is how the two earlier defects in this file were missed.
+describe('turn control: promptTurn, readTurn, sessionStatus', () => {
+  /** Serve one measured turn, and record every request that reached it. */
+  async function withTurnServe(
+    handler: (req: IncomingMessage, res: ServerResponse, url: string, body: string) => boolean,
+    run: (client: ServeClient, seen: Array<{ url: string; body: string; key: string }>) => Promise<void>,
+  ): Promise<void> {
+    const seen: Array<{ url: string; body: string; key: string }> = [];
+    const probe = createServer((req: IncomingMessage, res: ServerResponse) => {
+      let raw = '';
+      req.on('data', (c: Buffer) => {
+        raw += c.toString('utf8');
+      });
+      req.on('end', () => {
+        const url = req.url ?? '';
+        seen.push({ url, body: raw, key: String(req.headers['idempotency-key'] ?? '') });
+        if (req.headers.authorization !== GOOD_AUTH) {
+          json(res, 401, { error: 'unauthorized' });
+          return;
+        }
+        if (!handler(req, res, url, raw)) {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const addr = probe.address();
+    if (addr === null || typeof addr === 'string') throw new Error('probe failed to bind');
+    try {
+      await run(new ServeClient(`http://127.0.0.1:${addr.port}`, 'test-password'), seen);
+    } finally {
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+    }
+  }
+
+  const noContent = (_r: IncomingMessage, res: ServerResponse): boolean => {
+    res.writeHead(204);
+    res.end();
+    return true;
+  };
+
+  // A real assistant row, captured live. `completed` and `agent` are the two
+  // load-bearing fields: one says the turn is done, the other says which agent
+  // ran it, and NEITHER is ever written by this client.
+  const FINISHED = {
+    info: {
+      id: 'msg_finished',
+      sessionID: 'ses_1',
+      role: 'assistant',
+      parentID: 'msg_parent',
+      modelID: 'space-bunny-free',
+      providerID: 'opencode',
+      mode: 'plan',
+      agent: 'plan',
+      cost: 0,
+      time: { created: 1_790_842_280_449, completed: 1_790_842_284_593 },
+      finish: 'stop',
+    },
+    parts: [
+      { type: 'step-start' },
+      { type: 'text', text: 'Space Bunny' },
+      { type: 'step-finish' },
+    ],
+  };
+  // The SAME turn 3 s earlier: the row exists, `parts` is EMPTY, and there is no
+  // `completed`. This is the measured trap, and the reason `readTurn` cannot be
+  // a boolean "is there a row".
+  const IN_FLIGHT = {
+    info: {
+      id: 'msg_finished',
+      sessionID: 'ses_1',
+      role: 'assistant',
+      parentID: 'msg_parent',
+      mode: 'plan',
+      agent: 'plan',
+      cost: 0,
+      time: { created: 1_790_842_280_449 },
+    },
+    parts: [],
+  };
+  // The USER row, measured. Its `id` IS the message id this client mints and its
+  // `parts` hold the PROMPT. It is the row a naive `id === messageId` match
+  // returns — and that mistake was made, shipped in the first version of
+  // `readTurn`, and caught only by running the poll against a live serve: it
+  // waited 90 s on a turn that finished in 4 s and printed the request back as
+  // the model's answer. `UserMessage` declares `agent` but no `mode` and no
+  // `time.completed`, which is why the bug was invisible to every fixture that
+  // contained only the assistant row.
+  const USER = {
+    info: {
+      id: 'msg_parent',
+      sessionID: 'ses_1',
+      role: 'user',
+      time: { created: 1_790_842_278_410 },
+      summary: { diffs: [] },
+      agent: 'plan',
+      model: { providerID: 'opencode', modelID: 'space-bunny-free' },
+    },
+    parts: [{ type: 'text', text: 'رد بكلمة واحدة فقط: ما اسمك؟' }],
+  };
+
+  test('promptTurn sends the v1 envelope with `agent`, and parts is present', async () => {
+    // `parts` is REQUIRED: measured, omitting it is a 400 `Missing key at
+    // ["parts"]`. The route is `additionalProperties: false`, so `agent` is a
+    // declared member of that envelope and the switch rides inside it.
+    await withTurnServe(
+      (req, res, url) => (req.method === 'POST' && url === '/session/ses_1/prompt_async' ? noContent(req, res) : false),
+      async (client, seen) => {
+        const out = await client.promptTurn('ses_1' as never, 'قل نعم فقط', { agent: 'plan' });
+        expect(out.status).toBe(204);
+        expect(out.messageId).toMatch(/^msg_/);
+        const body = JSON.parse(seen[0]!.body) as Record<string, unknown>;
+        expect(body['agent']).toBe('plan');
+        expect(body['parts']).toEqual([{ type: 'text', text: 'قل نعم فقط' }]);
+        expect(body['messageID']).toBe(out.messageId);
+        // The message id doubles as the idempotency key, so a retried send is
+        // deduped by serve rather than run twice.
+        expect(seen[0]!.key).toBe(out.messageId);
+      },
+    );
+  });
+
+  test('BREAK: a 200 carrying the SPA page is a typed CONTRACT_DRIFT, not a delivered turn', async () => {
+    // The `execSessionShell` defect, on this route. Measured: an unknown path on
+    // this server answers 200 + `text/html` + 2 884 bytes, so `res.ok` is true
+    // for a path with no handler, and a turn reported delivered against it never
+    // reached a route. The guard is the same one predicate the shell verb uses.
+    await withTurnServe(
+      (_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html;charset=UTF-8' });
+        res.end('<!doctype html><html></html>');
+        return true;
+      },
+      async (client) => {
+        await expect(client.promptTurn('ses_1' as never, 'x')).rejects.toMatchObject({
+          code: 'CONTRACT_DRIFT',
+          retryable: false,
+        });
+      },
+    );
+  });
+
+  test('BREAK: a 204 with no body is the measured answer and is NOT the fallback', async () => {
+    // The mirror of the case above, and the reason the guard cannot simply reject
+    // "no content-type": `204 No Content` legitimately declares none. Rejecting
+    // it would break the verb that is measured working.
+    await withTurnServe(noContent, async (client) => {
+      await expect(client.promptTurn('ses_1' as never, 'x', { noReply: true })).resolves.toMatchObject({ status: 204 });
+    });
+  });
+
+  test('noReply is sent only when asked, and adds no other member', async () => {
+    await withTurnServe(noContent, async (client, seen) => {
+      await client.promptTurn('ses_1' as never, 'خامل', { agent: 'plan', noReply: true });
+      const body = JSON.parse(seen[0]!.body) as Record<string, unknown>;
+      expect(body['noReply']).toBe(true);
+      expect(Object.keys(body).sort()).toEqual(['agent', 'messageID', 'noReply', 'parts']);
+      // The measured cheap switch: 204, the user row records `agent`, and no
+      // model is called. `session.agent` then reports the new name.
+    });
+  });
+
+  test('a 404 on the turn is SESSION_NOT_FOUND and not a transport error', async () => {
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 404, { name: 'NotFoundError', data: { message: 'Session not found' } });
+        return true;
+      },
+      async (client) => {
+        await expect(client.promptTurn('ses_gone' as never, 'x')).rejects.toMatchObject({
+          code: 'SESSION_NOT_FOUND',
+          retryable: false,
+        });
+      },
+    );
+  });
+
+  test('readTurn returns the server\'s own agent, mode and completion time', async () => {
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [FINISHED]);
+        return true;
+      },
+      async (client, seen) => {
+        // `msg_parent` is the id THIS CLIENT minted, and the assistant row names
+        // it in `parentID`. It is never the assistant row's own `id` — see the
+        // user-row regression below for what passing that instead returns.
+        const row = await client.readTurn('ses_1' as never, 'msg_parent');
+        // Pinned to the V1 route. Measured on one session at one moment:
+        // `/api/session/{id}/message` returned 0 rows and `/session/{id}/message`
+        // returned 2. Neither is a superset, so a poller on the v2 surface waits
+        // forever on a turn that already finished.
+        expect(seen[0]!.url).toBe('/session/ses_1/message');
+        expect(row?.agent).toBe('plan');
+        expect(row?.mode).toBe('plan');
+        expect(row?.completedAt).toBe(1_790_842_284_593);
+        expect(row?.finish).toBe('stop');
+        expect(row?.text).toBe('Space Bunny');
+        expect(row?.partTypes).toEqual(['step-start', 'text', 'step-finish']);
+      },
+    );
+  });
+
+  test('BREAK: given BOTH rows, it returns the ASSISTANT one — not the row carrying our own id', async () => {
+    // THE live defect, as a regression. Measured payload order is user-then-
+    // assistant, and the user row's `id` is the message id `promptTurn` mints. A
+    // match on `id` returns the question: the poll then never sees
+    // `time.completed`, times out at 90 s on a turn that finished in 4 s, and
+    // `assistantText` prints the operator's own prompt as the model's reply.
+    // Matched on `parentID` and `role`, the question is unmatchable.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [USER, IN_FLIGHT, FINISHED]);
+        return true;
+      },
+      async (client) => {
+        const row = await client.readTurn('ses_1' as never, 'msg_parent');
+        expect(row?.role).toBe('assistant');
+        expect(row?.id).toBe('msg_finished');
+        expect(row?.text).toBe('Space Bunny');
+        expect(row?.text).not.toContain('ما اسمك');
+        expect(row?.completedAt).toBe(1_790_842_284_593);
+      },
+    );
+  });
+
+  test('BREAK: the user row is never returned, so nothing can echo the request back', async () => {
+    // The same payload with the assistant row still in flight. The answer is
+    // `null` — not the user row — which is what makes `still-running` an
+    // observation instead of a misread question.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [USER, IN_FLIGHT]);
+        return true;
+      },
+      async (client) => {
+        const row = await client.readTurn('ses_1' as never, 'msg_parent');
+        expect(row?.role).toBe('assistant');
+        expect(row?.completedAt).toBeNull();
+        expect(row?.text).toBe('');
+      },
+    );
+  });
+
+  test('BREAK: with ONLY the user row present, the result is null and not the question', async () => {
+    // Measured on an invalid agent name: the request is recorded, nothing answers.
+    // Returning the user row here would confirm a switch off a field the request
+    // itself carried — the echo, in the place where it does the most damage.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [USER]);
+        return true;
+      },
+      async (client) => {
+        expect(await client.readTurn('ses_1' as never, 'msg_parent')).toBeNull();
+      },
+    );
+  });
+
+  test('when several assistant rows answer one turn, the LAST one wins', async () => {
+    // A tool loop produces more than one. The finished one is the answer; the
+    // earlier in-flight one is not.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [IN_FLIGHT, { ...FINISHED, info: { ...FINISHED.info, id: 'msg_second' } }]);
+        return true;
+      },
+      async (client) => {
+        const row = await client.readTurn('ses_1' as never, 'msg_parent');
+        expect(row?.id).toBe('msg_second');
+        expect(row?.completedAt).toBe(1_790_842_284_593);
+      },
+    );
+  });
+
+  test('BREAK: the in-flight row reports completedAt null — the poll must read THAT', async () => {
+    // The same turn 3 s earlier. It has an `agent` and a `mode` and an id, so
+    // anything that switches on row-presence calls this finished and reports the
+    // model's silence as its answer.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [IN_FLIGHT]);
+        return true;
+      },
+      async (client) => {
+        const row = await client.readTurn('ses_1' as never, 'msg_parent');
+        expect(row).not.toBeNull();
+        expect(row?.completedAt).toBeNull();
+        expect(row?.finish).toBeNull();
+        expect(row?.text).toBe('');
+        expect(row?.partTypes).toEqual([]);
+      },
+    );
+  });
+
+  test('a message id that has no row is null, not a zeroed row', async () => {
+    // Measured on an invalid agent name: 204 accepted, and no assistant row ever
+    // appears. `null` is what makes that a failed switch instead of a successful
+    // one built out of defaults.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, []);
+        return true;
+      },
+      async (client) => {
+        expect(await client.readTurn('ses_1' as never, 'msg_never')).toBeNull();
+      },
+    );
+  });
+
+  test('a provider error is reduced to name/message/status, never a raw body dump', async () => {
+    // Measured on a rate-limited turn: `error.data.responseHeaders` carries
+    // connection metadata, and a raw dump of that object into a report is a leak
+    // path. Only the three fields that identify the fault are kept.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [
+          {
+            ...FINISHED,
+            info: {
+              ...FINISHED.info,
+              error: {
+                name: 'APIError',
+                data: {
+                  message: 'Rate limit exceeded: free-models-per-day',
+                  statusCode: 429,
+                  isRetryable: true,
+                  responseHeaders: { 'set-cookie': 'secret=abc', server: 'cloudflare' },
+                },
+              },
+            },
+          },
+        ]);
+        return true;
+      },
+      async (client) => {
+        const row = await client.readTurn('ses_1' as never, 'msg_parent');
+        expect(row?.error).toEqual({
+          name: 'APIError',
+          message: 'Rate limit exceeded: free-models-per-day',
+          statusCode: 429,
+          retryable: true,
+        });
+        expect(JSON.stringify(row)).not.toContain('secret=abc');
+      },
+    );
+  });
+
+  test('BREAK: the v2 message route being empty is not read as "no turn happened"', async () => {
+    // `{"data":[], "cursor":{…}}` is what `/api/session/{id}/message` returns for
+    // a session that demonstrably HAS messages. If a poller were pointed there it
+    // would see zero rows forever and never finish. Asserted on the v1 read so
+    // the pin is visible in the suite rather than only in a comment.
+    await withTurnServe(
+      (_req, res) => {
+        json(res, 200, [FINISHED]);
+        return true;
+      },
+      async (client, seen) => {
+        await client.readTurn('ses_1' as never, 'msg_parent');
+        expect(seen.map((s) => s.url)).not.toContain('/api/ses_1/message');
+        expect(seen.map((s) => s.url)).not.toContain('/api/session/ses_1/message');
+      },
+    );
+  });
+
+  test('sessionStatus reads busy, retry and absent-as-idle', async () => {
+    // `retry` is the state a rate-limited turn sits in, and it names the provider
+    // error the assistant row does not carry for another 10 s. `absent` is the
+    // GOOD news and is a real answer: the map is complete, so a session with no
+    // entry is not running.
+    //
+    // KEYED BY THE RESPONSE BODY, not by the request URL: `/session/status` takes
+    // no session parameter and returns a MAP of every live session, so the only
+    // place a session id can appear is the reply. The fixture returns all three
+    // shapes at once and the assertions below are about which entry wins.
+    await withTurnServe(
+      (_req, res, url) => {
+        if (url !== '/session/status') return false;
+        json(res, 200, {
+          ses_busy: { type: 'busy' },
+          ses_retry: { type: 'retry', attempt: 5, message: 'Rate limit exceeded', next: 1_790_842_192_143 },
+        });
+        return true;
+      },
+      async (client) => {
+        expect(await client.sessionStatus('ses_busy' as never)).toMatchObject({ kind: 'busy' });
+        const retry = await client.sessionStatus('ses_retry' as never);
+        expect(retry.kind).toBe('retry');
+        expect(retry.attempt).toBe(5);
+        expect(retry.detail).toContain('Rate limit exceeded');
+        // Absent is idle — the map is complete, so a missing entry is not running.
+        expect(await client.sessionStatus('ses_absent' as never)).toMatchObject({ kind: 'idle' });
+      },
+    );
+  });
+
+  test('the SPA page on /session/status is unreachable, not a bogus idle', async () => {
+    // Reporting "idle" because a web page came back would be a lie that reads as
+    // a settled session — the worst failure for a poller's diagnostic.
+    await withTurnServe(
+      (_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html;charset=UTF-8' });
+        res.end('<!doctype html>');
+        return true;
+      },
+      async (client) => {
+        expect(await client.sessionStatus('ses_1' as never)).toMatchObject({ kind: 'unreachable' });
+      },
+    );
+  });
+});
+
