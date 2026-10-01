@@ -127,15 +127,103 @@ function reachability() {
   };
 }
 
-/** Run a vitest suite with the JSON reporter and return {tests, files}. */
+/**
+ * The reporter's own reason for a non-collecting run, or null.
+ *
+ * Measured on a file with a syntax error: `testResults[0].message` is
+ *
+ *   Transform failed with 1 error:
+ *   C:/…/probe/broken.test.ts:2:38: ERROR: Expected ";" but found "is"
+ *
+ * Two lines, not one: the first is the headline and the SECOND carries the
+ * file and the column, which is the actionable half. Truncated to one line it
+ * read "Transform failed with 1 error:" and named nothing. Bounded to 240
+ * chars because a full rollup can be 40 lines of noise around one fact.
+ */
+function collectErrorReason(json) {
+  for (const t of Array.isArray(json.testResults) ? json.testResults : []) {
+    if (typeof t?.message === 'string' && t.message.trim() !== '') {
+      return t.message
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '')
+        .slice(0, 2)
+        .join(' — ')
+        .slice(0, 240);
+    }
+  }
+  return 'no testResults[].message on the document';
+}
+
+/**
+ * Run a vitest suite with the JSON reporter and return its counts.
+ *
+ * WHY THIS NO LONGER GIVES UP ON A NON-ZERO EXIT. It used to: `if
+ * (r.status !== 0) return null`. Every "all passing" claim then fell through to
+ * UNVERIFIED in exactly the case it exists for — a suite with a real failure
+ * could never FAIL, because the failure was what made the parse return null.
+ * UNVERIFIED is fatal, so the exit code was still 1; what was lost is the
+ * DIAGNOSIS, and a check whose verdict on a broken suite is "reporter
+ * unavailable" is a check that cannot name a defect.
+ *
+ * MEASURED 2026-10-01 on vitest 4.1.11, with a probe suite of 1 passed /
+ * 1 failed / 1 skipped:
+ *
+ *   exit code 1, STDOUT 2,159 bytes, STDERR 0 bytes, JSON intact.
+ *
+ * So the document is parsed regardless of the exit code, and the field names
+ * are the Jest-compatible ones, quoted from that failing run:
+ *
+ *   "numTotalTests": 3, "numPassedTests": 1, "numFailedTests": 1,
+ *   "numPendingTests": 1, "numTodoTests": 0, "numTotalTestSuites": 2,
+ *   "success": false, "testResults": [ { assertionResults: [...] } ]
+ *
+ * `numFailedTests` is present and correct on a FAILING run. A skip is
+ * `numPendingTests`, per-assertion `status: "skipped"`. A todo is
+ * `numTodoTests` and appears in NEITHER passed nor pending, so
+ * `numTotalTests = passed + failed + pending + todos` — verified on a probe
+ * carrying all four kinds (1 + 1 + 1 + 1 = 4). This tree has zero `test.todo`
+ * calls, measured across src/, test/ and bench/, which is why the documented
+ * form is `passed + skipped`; the todo count is still surfaced in the verdict
+ * line so the arithmetic is readable if one is ever added.
+ *
+ * THE ONE PATH WHERE `numFailedTests` IS 0 ON A NON-ZERO EXIT: a suite that
+ * never collected. Measured on a file with a syntax error — exit 1,
+ * numTotalTests 0, numPassedTests 0, numFailedTests 0, numPendingTests 0,
+ * numFailedTestSuites 1, `success: false`, reason on `testResults[0].message`.
+ * That is reported as a FAILURE carrying the reason. It is deliberately NOT
+ * "0 failed", which would be a false green, and NOT UNVERIFIED, which would
+ * discard the one message worth reading. `collectError` names the state and
+ * the caller decides; nothing here infers a count that was not measured.
+ */
 function vitestCounts(cwd, include) {
   const args = ['vitest', 'run', '--reporter=json', ...(include ?? [])];
   const r = spawnSync('npx', args, { cwd: join(ROOT, cwd), encoding: 'utf8', shell: true, maxBuffer: 64 * 1024 * 1024 });
-  if (r.status !== 0) return null;
-  let json;
-  const start = r.stdout.indexOf('{');
-  if (start < 0) return null;
-  try { json = JSON.parse(r.stdout.slice(start)); } catch { return null; }
+  const exit = r.status;
+  const body = typeof r.stdout === 'string' ? r.stdout : '';
+  // Try the whole stream first, then from the first brace: a non-JSON banner
+  // can precede the document, and a naive `indexOf('{')` would splice the two
+  // together into something that cannot parse.
+  const start = body.indexOf('{');
+  let json = null;
+  for (const cand of start < 0 ? [body] : [body, body.slice(start)]) {
+    if (cand.trim() === '') continue;
+    try { json = JSON.parse(cand); break; } catch { /* try the next shape */ }
+  }
+  if (json === null) {
+    return {
+      ok: false,
+      exit,
+      tests: null,
+      passed: null,
+      failed: null,
+      skipped: null,
+      todos: null,
+      files: null,
+      collectError: false,
+      problem: `vitest exited ${exit} and wrote no parsable JSON to stdout (${body.length} bytes)`,
+    };
+  }
   // `numTotalTests` is authoritative and already accounts for `test.each`
   // expansion. A static grep of `test(` does NOT: it undercounted the desktop
   // suite by 2 here, which would have produced a false failure.
@@ -144,11 +232,115 @@ function vitestCounts(cwd, include) {
   // latter counts `describe` blocks (184 for the root suite, against 53 files).
   // Getting that wrong would have made this script "prove" a false claim true by
   // demanding the doc be corrected to match a buggy derivation.
+  const tests = json.numTotalTests ?? null;
+  const collectError = json.success === false && (tests ?? 0) === 0;
   return {
-    tests: json.numTotalTests ?? null,
+    ok: true,
+    exit,
+    tests,
     files: Array.isArray(json.testResults) ? json.testResults.length : null,
     passed: json.numPassedTests ?? null,
+    failed: json.numFailedTests ?? null,
+    // `numPendingTests` is vitest's name for a skipped test, and it is the
+    // field the documented `+ N skipped` figure is compared against. The root
+    // suite's single skip is `src/daemon.test.ts:1216`,
+    // `test.skipIf(process.platform === 'win32')`, which is permanent on this
+    // platform by design: `ensureIpcToken` refuses to generate where a 0600
+    // mode is a no-op, because the Rust supervisor provisions that path with a
+    // protected DACL instead.
+    //
+    // The figure does not move with serve liveness, STRUCTURALLY rather than
+    // by measurement: `vitest.config.ts` negates `src/**/*.live.test.ts` out
+    // of `include`, so the live tier is not collected by `npm run test` at all
+    // and contributes zero tests to any of the four counters. (That config
+    // comment records an earlier measurement — 1394+1 with the credential
+    // reachable, 1392+3 without — taken BEFORE the negation, so it describes a
+    // tree state that no longer exists and must not be read as the current
+    // behaviour.) What a `describe.skipIf` that never runs contributes to
+    // `numPendingTests` is NOT measured here and is not assumed.
+    skipped: json.numPendingTests ?? null,
+    todos: json.numTodoTests ?? 0,
+    collectError,
+    problem: collectError ? collectErrorReason(json) : null,
   };
+}
+
+/**
+ * The three counts, named separately and never summed away.
+ *
+ * `0 failed / 1 skipped / 1395 total` — the wording matters as much as the
+ * numbers. The previous verdict read `some failing` for any `tests !== passed`,
+ * which mislabels a correct-by-design skip as a failure; two rounds of analysis
+ * were sent down the wrong path by that word. A skip is not a failure and a
+ * failure is not a skip, so both are always named.
+ */
+function countsLine(c) {
+  const todo = c.todos > 0 ? ` / ${c.todos} todo` : '';
+  return `${c.failed} failed / ${c.skipped} skipped${todo} / ${c.tests} total`;
+}
+
+/**
+ * Report one suite's claims. Shared by the root and desktop blocks so the two
+ * cannot drift apart again — they are the same check, and the copy that made
+ * "some failing" appear once already cost a rewrite.
+ *
+ * The documented form is `root **N passed + M skipped** (F files)`. BOTH
+ * numbers are checked against the reporter's own fields, separately:
+ * `numPassedTests` and `numPendingTests`. The previous check compared the
+ * document's first number to `numTotalTests`, which counts a skip as a test, so
+ * a truthful skip count made the figure unresolvable and the only spelling that
+ * parsed was the one that hid the skip.
+ *
+ * The skip count is a CLAIM, not decoration: deleting it turns this into a
+ * no-op that still exits 0, which is the failure mode UNVERIFIED-as-error
+ * exists to prevent. A suite with a todo cannot be written in this form, which
+ * is stated rather than papered over — `countsLine` surfaces the todo count.
+ */
+function reportSuite({ counts, countRe, filesRe, runLabel, testsLabel, skippedLabel, filesLabel }) {
+  if (!counts.ok) {
+    // No JSON. If the run also exited non-zero this is a real failure — a crash,
+    // a bad config, a missing binary — and calling it UNVERIFIED would hide it
+    // behind the word "unavailable" again.
+    fail(runLabel, 'no failures', counts.problem);
+    for (const [label, what] of [[testsLabel, 'test count'], [skippedLabel, 'skip count'], [filesLabel, 'file count']]) {
+      unverified(label, '-', `${what} unavailable — ${counts.problem}`);
+    }
+    return;
+  }
+  if (counts.collectError) {
+    fail(runLabel, 'no failures', `suite did not collect — ${counts.problem}`);
+    for (const [label, what] of [[testsLabel, 'test count'], [skippedLabel, 'skip count'], [filesLabel, 'file count']]) {
+      unverified(label, '-', `${what} unavailable — the suite did not collect`);
+    }
+    return;
+  }
+
+  const line = countsLine(counts);
+  if (counts.failed > 0) fail(runLabel, 'no failures', line);
+  // A non-zero exit with zero failed tests is neither green nor a test failure:
+  // an unhandled error or a crash after the run. Reported, because the claim is
+  // "this suite ran clean", and it did not.
+  else if (counts.exit !== 0) fail(runLabel, 'no failures', `vitest exited ${counts.exit} with 0 failed tests — ${line}`);
+  else pass(runLabel, 'no failures', line);
+
+  const m = agents.match(countRe);
+  const docPassed = m?.[1];
+  const docSkipped = m?.[2];
+  if (docPassed == null) unverified(testsLabel, 'not stated', String(counts.passed));
+  else if (Number(docPassed) === counts.passed) pass(testsLabel, docPassed, String(counts.passed));
+  else fail(testsLabel, docPassed, String(counts.passed));
+  if (docSkipped == null) unverified(skippedLabel, 'not stated', String(counts.skipped));
+  else if (Number(docSkipped) === counts.skipped) pass(skippedLabel, docSkipped, String(counts.skipped));
+  else fail(skippedLabel, docSkipped, String(counts.skipped));
+
+  if (counts.files == null) {
+    unverified(filesLabel, '-', 'no testResults array in the json document');
+    return;
+  }
+  const docFiles = (agents.match(filesRe) ?? [])[1];
+  if (docFiles == null) unverified(filesLabel, 'not stated', String(counts.files));
+  else if (Number(docFiles) === counts.files) pass(filesLabel, docFiles, String(counts.files));
+  else fail(filesLabel, docFiles, String(counts.files));
 }
 
 function countRustTests() {
@@ -348,13 +540,33 @@ function citedAnchors() {
   // not as `daemon.ts`:790. Both spellings appear across the file's history, so
   // accept either. An earlier version only accepted the second and reported
   // "no citations found" on a document with five of them.
-  const re = /`([A-Za-z0-9_.-]+\.tsx?):(\d+)`/g;
+  // `.rs` is in this alternation, and it has to be here together with the two
+  // index changes below. Widening ONLY the citation pattern makes every `main.rs`
+  // anchor in AGENTS.md resolve to "file not found" - an honest FAIL, but for the
+  // wrong reason, and a reader who has seen nine anchors flip red for a missing
+  // file learns to distrust the red. The three parts are one change because one
+  // part without the other two produces a failure that names the wrong cause.
+  //
+  // `main.rs` was invisible to this check until now: the pattern required
+  // `.tsx?`, the index collected only `.ts`/`.tsx`, and the roots did not include
+  // `apps/desktop/src-tauri/src` at all. Nine of AGENTS.md's citations name it.
+  const re = /`([A-Za-z0-9_.-]+\.(?:tsx?|rs)):(\d+)`/g;
   // Resolve by BASENAME, recursively. The docs cite `brain.ts:108` and
   // `daemon.ts:790` as bare filenames while the files live at `src/voice/` and
   // `src/` — a fixed two-root lookup called a valid citation "file not found",
   // which is a false FAIL that trains a reader to ignore the check.
   const index = new Map();
-  const indexRoots = [join(ROOT, 'src'), join(ROOT, 'apps/desktop/src')];
+  // `apps/desktop/src-tauri/src` is the Rust supervisor's source root. It is a
+  // root rather than a file because the filter below indexes by BASENAME
+  // recursively, and hardcoding `main.rs` as a special case would be the kind of
+  // narrow fix that reads as complete while the next Rust file cites the same
+  // way. Verified: with this root, `main.rs` resolves to exactly one file, so no
+  // citation of it is reported ambiguous.
+  const indexRoots = [
+    join(ROOT, 'src'),
+    join(ROOT, 'apps/desktop/src'),
+    join(ROOT, 'apps/desktop/src-tauri/src'),
+  ];
   // A bare basename is AMBIGUOUS in this tree, and silently picking the first
   // match is how the check passes on the wrong file. A code review caught it:
   // `vault.ts` resolved to `src/memory/vault.ts` (the Obsidian note scaffolder)
@@ -370,7 +582,10 @@ function citedAnchors() {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
       if (e.isDirectory()) collect(p);
-      else if (/\.(ts|tsx)$/.test(p) && !p.endsWith('.test.ts')) {
+      // `.rs` alongside `.ts`/`.tsx`. The `.test.ts` exclusion stays TypeScript-
+      // only: Rust tests live inside `main.rs` under `#[cfg(test)]`, so there is
+      // no separate `.test.rs` file to exclude here.
+      else if (/\.(ts|tsx|rs)$/.test(p) && !p.endsWith('.test.ts')) {
         const seen = index.get(e.name);
         if (seen === undefined) index.set(e.name, [p]);
         else seen.push(p);
@@ -378,6 +593,14 @@ function citedAnchors() {
     }
   };
   for (const r of indexRoots) if (existsSync(r)) collect(r);
+  // The searched roots, named in the failure message from the ACTUAL list rather
+  // than from a hand-written string. The hand-written form said "src/ or
+  // apps/desktop/src/" and went stale the moment src-tauri/src was added, which
+  // is how a "file not found" line can name two roots while three were searched.
+  const searchedRoots = indexRoots
+    .filter(existsSync)
+    .map((r) => r.replace(ROOT, '').replace(/^[/\\]+/, '').replace(/\\/g, '/'))
+    .join(', ');
   const out = [];
   const doc = typeof globalThis.__agentsOverride === 'string' ? globalThis.__agentsOverride : agents;
   for (const m of doc.matchAll(re)) {
@@ -385,7 +608,7 @@ function citedAnchors() {
     const line = Number(m[2]);
     const hits = index.get(name);
     if (hits === undefined) {
-      out.push({ name, line, ok: false, why: 'file not found in src/ or apps/desktop/src/' });
+      out.push({ name, line, ok: false, why: `file not found in ${searchedRoots}` });
       continue;
     }
     if (hits.length > 1) {
@@ -474,42 +697,46 @@ const agents = existsSync(join(DOC_ROOT, 'AGENTS.md'))
   : '';
 const pkg = JSON.parse(read('package.json'));
 
-// 1. Root vitest
-const root = vitestCounts('.', []);
-if (root) {
-  const doc = (agents.match(/root \*\*(\d+) passed/) ?? [])[1];
-  if (root.tests !== root.passed) fail('root vitest (all passing)', `${root.passed}/${root.tests}`, 'some failing');
-  else if (doc == null) unverified('root vitest tests', 'not stated', String(root.tests));
-  else if (Number(doc) === root.tests) pass('root vitest tests', doc, String(root.tests));
-  else fail('root vitest tests', doc, String(root.tests));
-} else unverified('root vitest tests', '-', 'vitest json reporter unavailable');
+// 1–4. The root and desktop vitest suites.
+//
+// Four claims each, not two: the run itself ("no failures"), the passed count,
+// the SKIP count, and the file count. The skip is a claim rather than a
+// footnote because a correct-by-design skip is a fact about the platform, and a
+// document that must write `+ 0 skipped` to satisfy the checker has been told
+// to state something false. `src/daemon.test.ts:1216` skips on win32 by design:
+// `ensureIpcToken` refuses to generate where a 0600 mode is a no-op, because the
+// Rust supervisor provisions that path with a protected DACL instead.
+//
+// The optional `(?: [^**]*)?` in each pattern tolerates a reason INSIDE the
+// bold — `+ 1 skipped (Windows platform, by design)` — and the recommended
+// spelling puts it outside instead, in prose the parser does not read. The
+// pattern is strict about the numbers and loose about the words around them,
+// for the reason the test-reachability patterns already state: a false FAIL
+// trains a reader to `git checkout AGENTS.md`.
+reportSuite({
+  counts: vitestCounts('.', []),
+  countRe: /root \*\*(\d+) passed \+ (\d+) skipped(?: [^**]*)?\*\*/,
+  filesRe: /root \*\*\d+ passed \+ \d+ skipped(?: [^**]*)?\*\* \((\d+) files\)/,
+  runLabel: 'root vitest (no failures)',
+  testsLabel: 'root vitest tests',
+  skippedLabel: 'root vitest skipped',
+  filesLabel: 'root vitest files',
+});
 
-// 2. Root test files
-if (root?.files != null) {
-  const doc = (agents.match(/root \*\*\d+ passed \+ 0 skipped\*\* \((\d+) files\)/) ?? [])[1];
-  if (doc == null) unverified('root vitest files', 'not stated', String(root.files));
-  else if (Number(doc) === root.files) pass('root vitest files', doc, String(root.files));
-  else fail('root vitest files', doc, String(root.files));
-}
-
-// 3. Desktop vitest
-const desk = vitestCounts('apps/desktop', []);
-if (desk) {
-  const doc = (agents.match(/desktop \*\*(\d+)\*\*/) ?? [])[1];
-  if (desk.tests !== desk.passed) fail('desktop vitest (all passing)', `${desk.passed}/${desk.tests}`, 'some failing');
-  else if (doc == null) unverified('desktop vitest tests', 'not stated', String(desk.tests));
-  else if (Number(doc) === desk.tests) pass('desktop vitest tests', doc, String(desk.tests));
-  else fail('desktop vitest tests', doc, String(desk.tests));
-} else unverified('desktop vitest tests', '-', 'vitest json reporter unavailable');
-
-// 4. Desktop test files
-if (desk?.files != null) {
-  const doc = (agents.match(/desktop \*\*\d+\*\* \((\d+) files\)/) ?? [])[1];
-  if (doc == null) unverified('desktop vitest files', 'not stated', String(desk.files));
-  else if (Number(doc) === desk.files) pass('desktop vitest files', doc, String(desk.files));
-  else fail('desktop vitest files', doc, String(desk.files));
-}
-
+// The desktop suite takes the same shape as the root one, for the same reason:
+// its documented number used to be compared against `numTotalTests`, so a
+// desktop skip would have been absorbed into the total silently. Measured
+// 2026-10-01: the desktop tree has zero `skipIf`/`skip`/`todo`, so its skip
+// count is a measured 0 rather than an assumption.
+reportSuite({
+  counts: vitestCounts('apps/desktop', []),
+  countRe: /desktop \*\*(\d+) passed \+ (\d+) skipped(?: [^**]*)?\*\*/,
+  filesRe: /desktop \*\*\d+ passed \+ \d+ skipped(?: [^**]*)?\*\* \((\d+) files\)/,
+  runLabel: 'desktop vitest (no failures)',
+  testsLabel: 'desktop vitest tests',
+  skippedLabel: 'desktop vitest skipped',
+  filesLabel: 'desktop vitest files',
+});
 // 5. Cargo
 const cargo = countRustTests();
 if (cargo != null) {
@@ -714,12 +941,24 @@ if (process.argv.includes('--json')) {
   process.exit(failed.length || skipped.length ? 1 : 0);
 }
 
+// Column widths are derived from the data, but each CELL is clamped, and the
+// clamp is the point. The suite verdicts are sentences — "suite did not
+// collect — Transform failed with 1 error: — <path>:2:38: ERROR: …" is 180
+// characters — and two things were wrong before: a fixed 13-char DERIVED column
+// printed them straight into the STATUS column (`…(0 bytes)FAIL`), and sizing
+// the column to the longest one blows the table out to 250 columns. The full
+// text is never lost: it is printed verbatim in the per-claim lines below the
+// table, which are unbounded.
+const CELL = 64;
+const cell = (s, n = CELL) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 const w = Math.max(...results.map((r) => r.name.length));
-console.log('  ' + 'CHECK'.padEnd(w) + '  DOCUMENTED   DERIVED       STATUS');
-console.log('  ' + '-'.repeat(w + 34));
+const wd = Math.max(11, ...results.map((r) => cell(String(r.documented), 40).length));
+const wv = Math.max(7, ...results.map((r) => cell(String(r.derived)).length));
+console.log('  ' + 'CHECK'.padEnd(w) + 'DOCUMENTED'.padEnd(wd + 2) + 'DERIVED'.padEnd(wv + 2) + 'STATUS');
+console.log('  ' + '-'.repeat(w + wd + wv + 6));
 for (const r of results) {
   const mark = r.status === 'ok' ? 'PASS' : r.status === 'FAIL' ? 'FAIL' : 'SKIP';
-  console.log('  ' + r.name.padEnd(w) + '  ' + String(r.documented).padEnd(12) + String(r.derived).padEnd(13) + mark);
+  console.log('  ' + r.name.padEnd(w) + cell(String(r.documented), 40).padEnd(wd + 2) + cell(String(r.derived)).padEnd(wv + 2) + mark);
 }
 console.log('');
 if (failed.length) {
