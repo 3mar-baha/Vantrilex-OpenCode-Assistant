@@ -63,7 +63,34 @@ export function SettingsView({ chain, initialPersona = 'kareem' }: SettingsViewP
   const [copied, setCopied] = useState(false);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  useAutoSize(rootRef, { minWidth: 560, minHeight: 460, maxWidth: 900, maxHeight: 1000, paddingX: 2, paddingY: 2 });
+  // W20 — `enabled: true` is LOAD-BEARING here, and its absence was a silent
+  // defect rather than a no-op. `useAutoSize` defaults `enabled` to false (the
+  // stand-down recorded in `useAutoSize.ts`: the HUD is min-bounded 380×380 and
+  // must not let content drive the OS frame), so passing bounds alone builds a
+  // complete-looking call that the hook discards on its first line.
+  //
+  // The two windows are the case the stand-down's own reason 2 names: they are
+  // separate frames, spawned at 720×600 with their own 560×460 minimum and their
+  // own content, and no argument from the HUD's minimum-bounds story applies to
+  // them. They are also the only surfaces whose content genuinely varies —
+  // a persona list, a model roster, a three-key form — so they are the only ones
+  // that can need a taller frame than the spawn default.
+  //
+  // WHAT MAKES THIS A VISUAL DEFECT AND NOT A COSMETIC ONE: this file's root is
+  // `overflow-hidden` (line 140) and the tab body is `overflow-y-auto` (line 182),
+  // while `styles/tokens.css` sets `scrollbar-width: none` and
+  // `::-webkit-scrollbar { display: none }` GLOBALLY. So an overflowing tab
+  // scrolled with no visible affordance of any kind — no bar, no edge — and
+  // because the root clips, the user had no way to tell there was more below.
+  useAutoSize(rootRef, {
+    enabled: true,
+    minWidth: 560,
+    minHeight: 460,
+    maxWidth: 900,
+    maxHeight: 1000,
+    paddingX: 2,
+    paddingY: 2,
+  });
 
   useEffect(() => {
     let disposed = false;

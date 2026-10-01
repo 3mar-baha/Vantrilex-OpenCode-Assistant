@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import {
   clampLevel,
+  HALO_SPAN,
   hexToRgb,
   mixHex,
   mixRgb,
   orbBreathAmplitude,
   orbGlow,
+  orbHaloRadius,
   orbPalette,
   rgbToHex,
   type OrbPersona,
@@ -26,6 +28,38 @@ const NOUR = { core: '#f472b6', mid: '#e04d97', edge: '#db2777' };
 
 const PERSONAS: readonly OrbPersona[] = ['kareem', 'nour'];
 const PHASES: readonly OrbPhase[] = ['idle', 'listening', 'thinking', 'speaking'];
+
+describe('orbHaloRadius — the clamp, as arithmetic rather than as a drawn frame', () => {
+  // W22. `Orb.test.tsx` proves the drawn halo lands inside the canvas; these cases
+  // pin WHY the clamp is the right shape, which a framebuffer cannot show. The
+  // load-bearing property is that the overflow ratio is INDEPENDENT of `size`, so
+  // enlarging the canvas is not an alternative fix — it is the same fix twice.
+  test('the overflow ratio does not depend on the canvas size', () => {
+    for (const size of [120, 232, 260, 520, 2000]) {
+      const ratio = (0.3 * size * 1.35 * HALO_SPAN) / (size / 2);
+      expect(ratio, `at size ${size} the unclamped halo wants 1.11x the canvas`).toBeCloseTo(1.4985, 3);
+    }
+  });
+
+  test('so the clamp binds at rest and at full scale, and only there', () => {
+    const size = 232;
+    // Rest (scale 1.0): 0.3 × 232 × 1.85 = 128.76 against a 116 px radius.
+    expect(orbHaloRadius(size, 0.3 * size)).toBe(size / 2);
+    // Full scale (1.35): 173.83 — 57.83 px cut off, and the window is
+    // `transparent`, so that cut is a visible seam rather than a silent trim.
+    expect(orbHaloRadius(size, 0.3 * size * 1.35)).toBe(size / 2);
+    // `thinking` at the bottom of its ponder cycle: 0.88 → 113.31, which FITS, so
+    // the clamp must not fire and the orb must still breathe there.
+    expect(orbHaloRadius(size, 0.3 * size * 0.88)).toBeCloseTo(113.31, 2);
+    expect(orbHaloRadius(size, 0.3 * size * 0.88), 'unclamped where the design fits').toBeLessThan(size / 2);
+  });
+
+  test('and it can never return more than the canvas radius, for any body radius', () => {
+    for (const bodyRadius of [0, 1, 40, 69.6, 93.96, 500]) {
+      expect(orbHaloRadius(232, bodyRadius)).toBeLessThanOrEqual(116);
+    }
+  });
+});
 
 describe('orbPalette — one assertion per phase', () => {
   test('idle is charcoal, and says so for both personas', () => {

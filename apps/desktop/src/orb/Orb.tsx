@@ -5,6 +5,7 @@ import {
   mixRgb,
   orbBreathAmplitude,
   orbGlow,
+  orbHaloRadius,
   orbPalette,
   rgbToHex,
   type OrbPalette,
@@ -211,7 +212,15 @@ export function Orb({ phase, persona, inputLevel, outputLevel, size = DEFAULT_SI
       live.mid = mixRgb(live.mid, target.mid, kColor);
       live.edge = mixRgb(live.edge, target.edge, kColor);
 
-      const scale = 1 + PHASE_PULSE[p] * Math.sin(t * PHASE_RATE[p]) + orbBreathAmplitude(p) * level * LEVEL_GAIN;
+      // `prefers-reduced-motion` zeroes the AUTONOMOUS term only — the `sin`
+      // breath and the `thinking` ponder cycle, which move with no input and are
+      // therefore the decoration the preference is about. The measured-audio term
+      // stays: a radius that answers the user's own voice is a readout, not an
+      // animation, and dropping it would take the orb's only job away from a user
+      // who asked for less motion rather than less feedback. The loop itself is
+      // NOT stopped — see the `reduce` comment at the bottom.
+      const pulse = reduce ? 0 : PHASE_PULSE[p] * Math.sin(t * PHASE_RATE[p]);
+      const scale = 1 + pulse + orbBreathAmplitude(p) * level * LEVEL_GAIN;
       const r = BASE_RADIUS * px * scale;
       const cx = px / 2;
       const cy = px / 2;
@@ -224,7 +233,13 @@ export function Orb({ phase, persona, inputLevel, outputLevel, size = DEFAULT_SI
       // Halo. Rebuilt every frame because its stop moves with the interpolated
       // edge: a cached gradient cannot have moving stops, so "cache it" would
       // mean quantising the colour instead of interpolating it.
-      const haloR = r * 1.85;
+      //
+      // `orbHaloRadius` clamps to the canvas, and the comment there carries the
+      // arithmetic: at the shipped 232 px the unclamped halo wants 128.76 px of a
+      // 116 px radius at REST, and up to 173.83 px under a full-scale level, so the
+      // glow was being cut at the canvas edge in every phase at every size. A
+      // bigger canvas cannot fix it — the overflow ratio is independent of `size`.
+      const haloR = orbHaloRadius(px, r);
       const halo = ctx.createRadialGradient(cx, cy, r * 0.55, cx, cy, haloR);
       halo.addColorStop(0, orbGlow(edge));
       halo.addColorStop(1, orbGlow(edge, 0));
@@ -256,10 +271,17 @@ export function Orb({ phase, persona, inputLevel, outputLevel, size = DEFAULT_SI
       ctx.globalAlpha = 1;
     };
 
-    if (reduce) {
-      draw(0);
-      return;
-    }
+    // THE LOOP RUNS UNDER REDUCED MOTION. It used not to: the old code drew one
+    // frame and returned, which is not "reduced motion" but a permanent freeze —
+    // and the orb's whole job is continuity of state. A user with animation
+    // effects off in the OS was left with a static disc that never breathed, never
+    // cross-faded to the phase that had just changed, and never moved for their own
+    // voice. The preference is honoured by zeroing one term inside `draw` (see
+    // `pulse` above), which is the difference between honouring a preference and
+    // removing a feature. `Orb.test.tsx` asserts the loop still runs, that the
+    // autonomous term is the ONLY thing that stops, and that audio still drives the
+    // radius — the positive control is in the same file, because a "no motion" test
+    // with no "motion without the flag" control next to it is the vacuous shape.
     // The fallback clock is `performance.now()` and not `Date.now()` so the
     // timestamp is on the same scale as the rAF timestamp it replaces — mixing
     // the two hands `draw` an epoch-scale first frame.

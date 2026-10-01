@@ -276,6 +276,36 @@ export interface CommandMsg {
   readonly approve?: boolean;
   /** M2 Pattern 3 — optional correlation id for `playbackStarted`, ≤64 chars. */
   readonly playbackId?: string;
+  /**
+   * W24. `UiCommandSchema` is `.strict()` (`src/ipc/protocol.ts:543`), so a field
+   * the schema does not declare is not merely ignored on the way in — it is a
+   * VALIDATION FAILURE, and the command is refused before the router ever sees
+   * it. That is why this type is not a convenience mirror: it is the set of keys
+   * the shell is permitted to put on the wire at all, and a key missing here
+   * cannot be sent even when the daemon has a handler for it.
+   *
+   * `title` (schema `protocol.ts:540`, `z.string().min(1).max(200)`). Declared
+   * there as "directory for `createSession`" and read NOWHERE on the daemon side:
+   * `command-router.ts:672` takes the directory from `deps.projectDirectory()`
+   * and deliberately ignores the payload, pinned by
+   * `command-router.test.ts:211` ('createSession ignores any directory supplied
+   * in the payload'). So this field is PARITY, not capability — it exists so a
+   * shell can express the whole schema, and sending it changes no behaviour. That
+   * asymmetry is the point of the declaration: the schema says a field is legal
+   * and the router says it is ignored, and a renderer that could not send it
+   * would have to guess which of the two it was.
+   */
+  readonly title?: string;
+  /**
+   * W24. `contextLimit` (schema `protocol.ts:541`,
+   * `z.number().int().positive().max(10_000_000)`), and this one IS live:
+   * `command-router.ts:660` forwards it to `deps.client.contextUsage(session,
+   * cmd.contextLimit)`, pinned by `command-router.test.ts:155` ('sessionContext
+   * passes the model limit through when supplied'). Without the field here the
+   * shell cannot state a limit, and `sessionContext` always reports
+   * `الحد غير معروف` (limit unknown) for every session.
+   */
+  readonly contextLimit?: number;
 }
 
 export interface CommandOutcome {

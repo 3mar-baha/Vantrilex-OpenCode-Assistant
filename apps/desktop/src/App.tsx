@@ -169,6 +169,22 @@ export function App(): JSX.Element {
   const [voicePhase, setVoicePhase] = useState<OrbPhase>('idle');
   const [micEnergy, setMicEnergy] = useState(0);
   const [outputEnergy, setOutputEnergy] = useState(0);
+  /**
+   * W23 — the daemon's backpressure latch, surfaced.
+   *
+   * The bridge already DROPPED every PCM chunk while paused (`ws.ts` `sendPcm`
+   * returns false under the latch) and that drop is invisible from here: the mic
+   * keeps running, the orb keeps saying `listening`, and the user is being
+   * ignored with no indication that anything is wrong. That is the defect — not
+   * the missing unsubscribe call, which is only how it was found.
+   *
+   * `null` means "the daemon has not said", which is a THIRD state and not
+   * `false`. A daemon that predates the `flow` frame never reports either way,
+   * and rendering "the uplink is fine" from an absent field is the same class of
+   * false affordance as the `layaReady: true` claim. So the line below says
+   * nothing about the uplink until the daemon has spoken.
+   */
+  const [uplinkPaused, setUplinkPaused] = useState<boolean | null>(null);
 
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const captureRef = useRef<AudioCapture | null>(null);
@@ -260,7 +276,19 @@ export function App(): JSX.Element {
           if (h.persona !== undefined && h.persona !== personaRef.current) {
             setPersona(h.persona);
           }
+          // W23 — adopt the daemon's authoritative backpressure state on EVERY
+          // connect, for the same reason the bridge latches it internally: a
+          // `flow` frame raised while this shell was away is never retained, so
+          // the first honest word about the uplink is the one in `hello`.
+          // Presence-gated — an older daemon omits the field and the shell keeps
+          // saying nothing, which is the pre-B.3 behaviour.
+          if (typeof h.uplinkPaused === 'boolean') setUplinkPaused(h.uplinkPaused);
         },
+        // W23 — the subscription that was missing. Without it the bridge's latch
+        // still worked and the UI was still lying: the daemon asks the uplink to
+        // pause, `sendPcm` starts dropping chunks, and nothing anywhere in the
+        // renderer learns that the microphone it is showing as live is deaf.
+        onFlow: (f) => setUplinkPaused(f.state === 'pause'),
         onNotice: (n) => {
           // C.3: a credit notice takes the dedicated banner INSTEAD of the
           // message line. Both would otherwise show the same Arabic sentence
@@ -517,6 +545,24 @@ export function App(): JSX.Element {
    */
   const orbPhase: OrbPhase = botMuted && voicePhase === 'speaking' ? 'thinking' : voicePhase;
 
+  /**
+   * The transport line. ONE line, so every state is a priority rather than a
+   * layout — see the root comment's height arithmetic, which a second line would
+   * break.
+   *
+   * W23, and the priority is the whole design. A paused uplink overrides
+   * EXACTLY ONE branch: the one that claims the orb is listening. That claim is
+   * the false one — the daemon has stopped accepting audio, so a live-looking
+   * `listening` line is the user talking into a void. It does NOT override
+   * `speaking` or `thinking`, because those are true while the uplink is paused
+   * (the assistant is talking; the pause is about the user's audio, not the
+   * assistant's) and overriding them would trade one lie for another. And it does
+   * not override `offline`, which is the more severe truth.
+   *
+   * The text is deliberately explicit that the microphone is MUTED BY THE SERVER
+   * rather than by the user, because the obvious user response is to press the
+   * mic button — which would silence a microphone the daemon is already refusing.
+   */
   const status =
     bridge !== 'live'
       ? { text: '● غير متصل', state: 'offline' }
@@ -524,9 +570,11 @@ export function App(): JSX.Element {
         ? { text: '● يتحدث الآن…', state: 'speaking' }
         : orbPhase === 'thinking'
           ? { text: '● جارٍ التفكير…', state: 'processing' }
-          : orbPhase === 'listening' || !userMuted
-            ? { text: '● جارٍ الاستماع…', state: 'listening' }
-            : { text: '● متصل وبانتظار الأوامر', state: 'ready' };
+          : uplinkPaused === true
+            ? { text: '● الخادم علّق الميكروفون — الالتقاط متوقف مؤقتاً', state: 'uplink-paused' }
+            : orbPhase === 'listening' || !userMuted
+              ? { text: '● جارٍ الاستماع…', state: 'listening' }
+              : { text: '● متصل وبانتظار الأوامر', state: 'ready' };
 
   const line = noticeLineFor(notice, announce);
 

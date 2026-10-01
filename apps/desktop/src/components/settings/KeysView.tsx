@@ -32,7 +32,26 @@ export function KeysView(): JSX.Element {
   const [formKey, setFormKey] = useState(0);
   const bridgeRef = useRef<VoxauraBridge | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  useAutoSize(rootRef, { minWidth: 560, minHeight: 460, maxWidth: 820, maxHeight: 1000, paddingX: 2, paddingY: 2 });
+  // W20 — see the identical comment in `SettingsView.tsx`; the reasoning is the
+  // same and it belongs to both call sites. Short version: `enabled` defaults to
+  // false, so this call was complete-looking and inert; these are separate
+  // frames with their own minimum bounds, which is the case the stand-down's own
+  // reason 2 exists for; and this file's root clips (`overflow-hidden`, line 145)
+  // under a global scrollbar-hiding rule, so a form taller than the frame was
+  // unreachable with nothing on screen to say so.
+  //
+  // The 460 floor is the window's own `minHeight` (`open-settings.ts`), so the
+  // hook can never push below what the OS would allow — the two agree by
+  // construction rather than by luck, and `useAutoSize.test.tsx` pins the pair.
+  useAutoSize(rootRef, {
+    enabled: true,
+    minWidth: 560,
+    minHeight: 460,
+    maxWidth: 820,
+    maxHeight: 1000,
+    paddingX: 2,
+    paddingY: 2,
+  });
 
   useEffect(() => {
     let disposed = false;

@@ -2,7 +2,7 @@ import { act } from 'react-dom/test-utils';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Orb, type OrbProps } from './Orb.js';
-import { orbPalette, type OrbPersona, type OrbPhase } from './palette.js';
+import { HALO_SPAN, orbHaloRadius, orbPalette, type OrbPersona, type OrbPhase } from './palette.js';
 
 // The orb, measured rather than trusted.
 //
@@ -403,6 +403,79 @@ describe('Orb — the level boundary cannot break the render', () => {
   });
 });
 
+describe('Orb — the halo fits inside the canvas it is drawn into', () => {
+  // W22. Every frame records the halo's gradient outer radius (`gradients[…-2].r1`),
+  // which is the radius the FILL path is built from, so this measures the geometry
+  // that actually clips rather than a restatement of the formula.
+  function haloSeries(p: OrbProps, frames: number): number[] {
+    const rec = stubContext(freshRec());
+    mount(<Orb {...p} />);
+    const out: number[] = [];
+    for (let i = 0; i < frames; i += 1) {
+      tick(1);
+      const halo = rec.gradients[rec.gradients.length - 2] as FakeGradient;
+      out.push(halo.r1);
+    }
+    return out;
+  }
+
+  /**
+   * The widest halo across all four phases at a full-scale audio level, against
+   * the usable radius. This is the W22 regression test proper: the clamp is
+   * invisible at rest and obvious under load, so a sweep that only sampled
+   * `idle` at level 0 would have stayed green on the defect.
+   */
+  test('the halo never exceeds the usable radius, in any phase, at any level', () => {
+    for (const phase of ['idle', 'listening', 'thinking', 'speaking'] as const) {
+      const size = 232;
+      const widest = Math.max(
+        ...haloSeries(props({ phase, inputLevel: 1, outputLevel: 1, size }), 400),
+      );
+      expect(widest, `halo at ${phase} must fit inside px/2`).toBeLessThanOrEqual(size / 2);
+    }
+  });
+
+  test('and it holds at the default size too — the defect was never 232-specific', () => {
+    const widest = Math.max(...haloSeries(props({ inputLevel: 1, outputLevel: 1 }), 400));
+    expect(widest, 'default 260 px canvas').toBeLessThanOrEqual(130);
+  });
+
+  // THE POSITIVE CONTROL, and the reason this test is not a tautology.
+  // `orbHaloRadius` clamps with a `min`, so asserting `haloR <= size/2` is
+  // satisfied by construction and would pass even if `orbHaloRadius` were deleted
+  // and the drawing stopped happening. What has to be shown is that the UNCLAMPED
+  // halo really does exceed the canvas — otherwise there was never a defect and
+  // this "fix" is a change with no cause. The measured overshoot at rest is
+  // 128.76 px against a 116 px radius, i.e. 1.11x, and 173.83 px at full scale.
+  test('POSITIVE CONTROL: the unclamped halo really would exceed the canvas', () => {
+    const size = 232;
+    const bodyAtRest = 0.3 * size;
+    const unclampedAtRest = bodyAtRest * HALO_SPAN;
+    const bodyLoud = 0.3 * size * 1.35;
+    const unclampedLoud = bodyLoud * HALO_SPAN;
+    expect(unclampedAtRest).toBeGreaterThan(size / 2);
+    expect(unclampedLoud).toBeGreaterThan(size / 2);
+    // The overshoot is what the clamp removes, and the clamp binds at BOTH ends
+    // of the level range — which is the part a level-0 sample would miss.
+    expect(orbHaloRadius(size, bodyAtRest)).toBe(size / 2);
+    expect(orbHaloRadius(size, bodyLoud)).toBe(size / 2);
+  });
+
+  // The clamp must not flatten the halo to a constant everywhere: `thinking` dips
+  // to scale 0.88, where 1.85 × 0.3 × 232 × 0.88 = 113.31 < 116, so the design
+  // FITS there and the orb must still breathe. A fix that hard-coded the radius
+  // would satisfy every assertion above and kill the only phase that breathes.
+  test('the halo still breathes in `thinking`, where the design fits unclamped', () => {
+    const size = 232;
+    const series = haloSeries(props({ phase: 'thinking', size }), 400);
+    expect(new Set(series).size, 'thinking must not be pinned to one radius').toBeGreaterThan(1);
+    // 0.3 × 232 × 0.88 × 1.85 = 113.31 < 116, so the clamp does not bind at the
+    // bottom of the ponder cycle and the glow really does breathe there.
+    expect(Math.min(...series), 'and its minimum is inside the canvas').toBeLessThan(size / 2);
+    expect(Math.min(...series)).toBeCloseTo(113.31, 1);
+  });
+});
+
 describe('Orb — lifecycle, accessibility and reduced motion', () => {
   test('is a labelled, non-textual image that publishes its state', () => {
     mount(<Orb {...props({ phase: 'idle' })} />);
@@ -436,19 +509,76 @@ describe('Orb — lifecycle, accessibility and reduced motion', () => {
     expect(orbEl()).toBeInstanceOf(HTMLCanvasElement);
   });
 
-  test('prefers-reduced-motion draws exactly one static frame and starts no loop', () => {
+  // W21. THIS TEST PREVIOUSLY PINNED THE DEFECT AS INTENDED, and the inversion
+  // below is deliberate. The old case asserted `expect(frame).toBeNull()` and
+  // `cancelCount === 0` — i.e. that `prefers-reduced-motion` started NO loop and
+  // drew exactly one frame. That is the freeze: the orb is the shell's only
+  // continuous state readout, and one static frame means a user with OS animation
+  // effects off got a disc that never breathed, never cross-faded to a phase that
+  // had just changed, and never moved for their own voice. Reduced motion is a
+  // request for less movement, not for a component that stops updating.
+  //
+  // The fix keeps the loop and zeroes only the autonomous `sin` term, so the three
+  // properties asserted here are the specification of that choice: the loop
+  // RUNS, the autonomous pulse is the ONLY thing that stops, and the measured
+  // audio still drives the radius. `radiusSeries` sweeps 400 frames (6.4 s), which
+  // is more than one full idle breath period at 1.1 rad/s, so a constant series is
+  // a real measurement of stillness rather than a phase that happens to be sampled
+  // at its turning point.
+  test('reduced motion keeps the loop and stops only the autonomous pulse', () => {
     reduceMotion = true;
     const rec = stubContext(freshRec());
-    mount(<Orb {...props({ phase: 'listening', inputLevel: 1 })} />);
-    // One frame: one halo gradient, one body gradient, one fill each.
-    expect(rec.gradients).toHaveLength(2);
-    expect(rec.fills).toBe(2);
-    expect(frame).toBeNull();
+    mount(<Orb {...props({ phase: 'idle' })} />);
+    // The loop is alive: rAF was asked for a frame.
+    expect(frame, 'the animation loop must still run under reduced motion').not.toBeNull();
+    tick(1);
+    // …and it keeps drawing every frame it is given.
+    expect(rec.gradients.length, 'two gradients per frame: halo, then body').toBe(2);
+    expect(rec.fills, 'two fills per frame: halo, then body').toBe(2);
+    // 6.4 s of frames at scale exactly 1.0 — the `sin` term is gone, so the idle
+    // breath the "the idle breath is a real motion" case measures is not here.
+    const series = radiusSeries(props({ phase: 'idle' }), 400);
+    expect(new Set(series).size, 'the autonomous breath must be exactly zero, not merely small').toBe(1);
+    expect(series[0]).toBeCloseTo(0.3 * 260, 6);
+  });
+
+  // THE POSITIVE CONTROL for the case above, in the same file on purpose. A test
+  // that asserts "the radius did not move" passes just as happily against a
+  // component that draws one frame and stops for ANY reason — a dead rAF stub, a
+  // broken effect, a phase that never advances. The control says: the SAME sweep,
+  // the SAME clock, with the preference off, does move. Without it the case above
+  // is the vacuous shape this repo has been bitten by repeatedly.
+  test('POSITIVE CONTROL: the identical sweep DOES breathe without the preference', () => {
+    reduceMotion = false;
+    const series = radiusSeries(props({ phase: 'idle' }), 400);
+    const max = Math.max(...series);
+    const min = Math.min(...series);
+    expect(max / min, 'without the preference the idle breath is real').toBeGreaterThan(1.09);
+  });
+
+  // Reduced motion must not cost FUNCTIONALITY, and the audio response is the
+  // functionality: the radius answers the user's own voice. A full-scale level
+  // must still move the orb by the same ~30% it does otherwise, and the orb must
+  // still be recognisably at unity scale while doing it.
+  test('and audio still drives the radius under reduced motion', () => {
+    reduceMotion = true;
+    const quiet = maxRadius(props({ phase: 'listening', inputLevel: 0 }));
+    const loud = maxRadius(props({ phase: 'listening', inputLevel: 1 }));
+    expect(loud, 'the measured-audio term is a readout, not an animation').toBeGreaterThan(quiet * 1.2);
+  });
+
+  // The loop must also still be CANCELLED. Dropping the rAF would leak a frame
+  // callback per mounted orb, and the unmount path is the only place that shows it.
+  test('and the loop is still cancelled on unmount', () => {
+    reduceMotion = true;
+    stubContext(freshRec());
+    mount(<Orb {...props()} />);
+    tick(2);
     act(() => {
       root?.unmount();
     });
     root = null;
-    expect(cancelCount).toBe(0);
+    expect(cancelCount).toBe(1);
   });
 
   test('a non-positive size falls back to the default instead of drawing nothing', () => {

@@ -43,6 +43,54 @@ export type OrbRgb = readonly [number, number, number];
 const GLOW_ALPHA = 0.35;
 
 /**
+ * How far the halo reaches, as a multiple of the body's radius. A design
+ * constant, NOT a fitted one: it is the "glow spills well past the rim" figure.
+ * It is, however, over budget for the canvas this orb draws into, which is why
+ * every consumer goes through {@link orbHaloRadius} and never multiplies.
+ */
+export const HALO_SPAN = 1.85;
+
+/**
+ * The halo radius, CLAMPED to the canvas it is drawn into.
+ *
+ * WHY THE CLAMP IS LOAD-BEARING, with the arithmetic rather than an assertion
+ * that it used to look wrong. The body is `BASE_RADIUS × size × scale` and the
+ * halo would be `HALO_SPAN` times that, so
+ *
+ *     haloR / usableRadius = (BASE_RADIUS × HALO_SPAN) / 0.5 × scale
+ *                          = (0.3 × 1.85) / 0.5 × scale
+ *                          = 1.11 × scale
+ *
+ * and `usableRadius` is `size / 2` — so the ratio does NOT depend on `size` at
+ * all. The halo fits only while `scale ≤ 0.90090`, and the measured per-phase
+ * scale ranges at the shipped `ORB_SIZE_PX` of 232 are:
+ *
+ *     idle       0.950 … 1.050      halo  122.32 … 135.20   usable 116
+ *     listening  0.950 … 1.350      halo  122.32 … 173.83
+ *     thinking   0.880 … 1.120      halo  113.31 … 144.21
+ *     speaking   0.950 … 1.350      halo  122.32 … 173.83
+ *
+ * Two consequences, and the first is why this is a clamp and not a bigger canvas:
+ *
+ *   1. ENLARGING THE CANVAS CANNOT FIX IT. Both sides of the inequality scale
+ *      with `size`, so there is no `size` at which `1.11 × scale ≤ 0.5` becomes
+ *      reachable. A 900 px orb clips its halo exactly as hard as a 232 px one.
+ *   2. It is over budget at REST, not only under pulse: at `scale = 1` the halo
+ *      wants 128.76 px of a 116 px radius. The worst case is 57.83 px of glow cut
+ *      off at the canvas edge (listening/speaking at a full-scale level), and the
+ *      window is `transparent`, so a hard-cut glow is a visible seam and not a
+ *      silent trim — at that radius the gradient is still at alpha 0.166.
+ *
+ * `thinking` is the one phase that dips under the threshold, and only for the
+ * ~15 % of its cycle where `sin(t × 1.9) < -0.8258`, so the halo is unclamped
+ * there and the orb still breathes. That is why the clamp is a `min` and not a
+ * constant: it removes the clipping and leaves the one place the design fits.
+ */
+export function orbHaloRadius(size: number, bodyRadius: number): number {
+  return Math.min(bodyRadius * HALO_SPAN, size / 2);
+}
+
+/**
  * The phases that colour by PHASE rather than by persona. `speaking` is absent
  * on purpose: the assistant's own voice is the one thing that must be told
  * apart by persona, and a phase-keyed table cannot express that.

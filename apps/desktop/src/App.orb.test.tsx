@@ -27,10 +27,12 @@ import { App } from './App.js';
 
 /** The options App handed to the bridge, so a test can push frames back in. */
 let bridgeOptions: {
-  onHello?: (h: { persona?: 'kareem' | 'nour' }) => void;
+  onHello?: (h: { persona?: 'kareem' | 'nour'; uplinkPaused?: boolean }) => void;
   onVoice?: (v: { phase: string; transcript?: string }) => void;
   onNotice?: (n: { code: string; detail: string; level: 'info' | 'warn' | 'error' }) => void;
   onAudio?: (audio: Uint8Array) => void;
+  onFlow?: (f: { type: 'flow'; seq: number; state: 'pause' | 'resume' }) => void;
+  onClose?: () => void;
 };
 /** The events App handed to `createDefaultPlayer`, so a test can drive levels. */
 let playerEvents: { onLevel?(level: number): void } | null = null;
@@ -176,6 +178,116 @@ async function notice(code: string, detail: string): Promise<void> {
     bridgeOptions.onNotice?.({ code, detail, level: 'warn' });
   });
 }
+
+async function flow(state: 'pause' | 'resume', seq = 1): Promise<void> {
+  await act(async () => {
+    bridgeOptions.onFlow?.({ type: 'flow', seq, state });
+  });
+}
+
+/** The transport line, which is where W23 puts the uplink state. */
+function statusLine(): HTMLElement {
+  const found = document.body.querySelector<HTMLElement>('[data-testid="bridge-status"]');
+  if (found === null) throw new Error('bridge-status not rendered');
+  return found;
+}
+
+// W23 — the backpressure subscription, AS WIRED.
+//
+// Before this, `onFlow` was among 7 of the 16 `BridgeOptions` callbacks that no
+// production call site supplied (`App.tsx` is the HUD; `SettingsView` and
+// `KeysView` are the two auxiliary windows). The bridge's latch worked, so
+// nothing was broken in the bridge — but the shell dropped every uplink PCM
+// chunk while the daemon was congested and rendered no indication of it, while
+// the transport line kept claiming it was listening. That silence is the defect.
+//
+// The mocked bridge here records whatever options App hands it, so these cases
+// assert the real subscription rather than a reimplementation of it: deleting
+// `onFlow` from `App.tsx` makes `bridgeOptions.onFlow` undefined and the
+// "the line stops claiming it is listening" case below cannot pass.
+
+describe('W23 — a paused uplink is surfaced instead of silently dropping audio', () => {
+  /**
+   * A `hello` first, so the line is not stuck on `offline`.
+   *
+   * The shell starts in `connecting` and only promotes on an inbound frame, and
+   * `offline` outranks everything — including the pause, deliberately. Without a
+   * hello every case below would read `غير متصل` and would pass or fail for a
+   * reason that has nothing to do with backpressure. Stated as a helper so the
+   * precondition is in one place rather than repeated per case.
+   */
+  async function live(): Promise<void> {
+    await act(async () => {
+      bridgeOptions.onHello?.({ persona: 'kareem' });
+    });
+  }
+
+  test('POSITIVE CONTROL: the callback App hands the bridge exists at all', async () => {
+    await mountApp();
+    expect(bridgeOptions.onFlow, 'App must subscribe to the flow frame').toBeTypeOf('function');
+  });
+
+  test('a pause replaces the "listening" claim, which would be false', async () => {
+    await mountApp();
+    await live();
+    await phase('listening');
+    expect(statusLine().textContent, 'precondition: it claims to be listening').toContain('الاستماع');
+    await flow('pause');
+    expect(statusLine().getAttribute('data-state')).toBe('uplink-paused');
+    expect(statusLine().textContent, 'it must not still claim to be listening').not.toContain('الاستماع');
+  });
+
+  test('and the text says the SERVER suspended it, not the user', async () => {
+    // The obvious user response to a "muted" line is to press the mic button,
+    // which would silence a microphone the daemon is already refusing — so the
+    // line has to name the cause, or it invites the one action that cannot help.
+    await mountApp();
+    await live();
+    await flow('pause');
+    expect(statusLine().textContent).toContain('الخادم');
+    expect(statusLine().getAttribute('title')).toContain('الالتقاط');
+  });
+
+  test('a resume restores the ordinary line', async () => {
+    await mountApp();
+    await live();
+    await flow('pause');
+    expect(statusLine().getAttribute('data-state')).toBe('uplink-paused');
+    await flow('resume', 2);
+    expect(statusLine().getAttribute('data-state')).not.toBe('uplink-paused');
+  });
+
+  // `hello.uplinkPaused` is REQUIRED on the wire (`src/ipc/protocol.ts:443`), so
+  // this is the ordinary path for a shell that connects while the daemon is
+  // already congested — and the only one that works, because `flow` is not
+  // retained for resume.
+  test('the state is adopted from hello, which is how a late shell learns of it', async () => {
+    await mountApp();
+    await act(async () => {
+      bridgeOptions.onHello?.({ persona: 'kareem', uplinkPaused: true });
+    });
+    expect(statusLine().getAttribute('data-state')).toBe('uplink-paused');
+  });
+
+  // The priority is the design: a pause must not overwrite a claim that is still
+  // true, or it trades one lie for another. Speaking is exactly that case.
+  test('speaking outranks the pause — that claim is still true', async () => {
+    await mountApp();
+    await live();
+    await phase('speaking');
+    await flow('pause');
+    expect(statusLine().getAttribute('data-state')).toBe('speaking');
+  });
+
+  test('and offline outranks both — it is the more severe truth', async () => {
+    await mountApp();
+    await act(async () => {
+      bridgeOptions.onClose?.();
+    });
+    await flow('pause');
+    expect(statusLine().getAttribute('data-state')).toBe('offline');
+  });
+});
 
 beforeEach(() => {
   bridgeOptions = {};
