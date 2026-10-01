@@ -55,7 +55,7 @@ The declined `CommandOutcome.detail` brand is recorded with its **measured** cos
 
 ## KNOWN OPEN DEBT, post-W29
 
-- **W2 rotation** — owner action, not discharged. `.env.local` is ACL-restricted; the three keys are still live.
+- **W2 rotation** — **CLOSED 2026-10-01: risk-accepted by owner decision, not blocked.** The *ACL* half landed and is verified: `.env.local` is owner-only with a protected DACL — exactly **one** ACE (`OMAR\OMAR` FullControl, **no SYSTEM entry**) and **0 inherited** rules. The five runtime secrets (`ipc.token`, `serve.pass`, `daemon.owner`, `machine.key`, `owner.key`) and the installed `keyring.dat` are each `AreAccessRulesProtected = True` with **0 inherited** ACEs. The *rotation* half was **declined**, in the owner's terms: the three keys are free-tier, so exposure carries **no financial risk**. The residual is **contingent, not established** — the keys were readable and writable by `Authenticated Users` before the ACL was closed, and whether they were accessed is not something the tree can determine; the accepted consequence is quota theft / account standing. **With rotation declined, the verified ACL is the only mitigation**, which is why its measured state is the load-bearing fact here and not a footnote.
 - **`CommandOutcome.detail`** open string — scrubbed at the `buildAckFrame` sink, not a compile error. Trigger above.
 - **`broadcast()` / `UiEventSchema`** — applied, but `broadcast()` has **zero production callers** today. The guard's production value is latent. Correct, and labelled as such.
 - **Frozen dossier** — `dossier/sections/06-api.md:38` and `PROJECT_MASTER_DOSSIER.md:3254` say `error` has no schema. Now false. **Owner ruled: leave frozen.** The supersession lives here and in `AGENTS.md`.
