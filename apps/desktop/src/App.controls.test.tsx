@@ -6,11 +6,13 @@ import { App } from './App.js';
 // The three pill controls, AS MOUNTED — the successor to `App.escape.test.tsx`.
 //
 // WHAT REPLACED WHAT, and why the file did not simply disappear. That file
-// pinned the fix for the outage trap: `BentoGrid` put one `inert` attribute on
-// the whole action slot, `inert` is inherited, and the net effect was that a
-// dead 4096 removed the button that stops the assistant. Its assertions were
-// about a SIBLING escape slot that does not exist any more, because there is no
-// blocked slot to escape from.
+// pinned the fix for the outage trap: the bento's `BentoGrid` put one `inert`
+// attribute on the whole action slot, `inert` is inherited, and the net effect
+// was that a dead 4096 removed the button that stops the assistant. Its
+// assertions were about a SIBLING escape slot that does not exist any more,
+// because there is no blocked slot to escape from. `BentoGrid.tsx` was deleted in
+// W25, so the trap this file records is now historical rather than latent — which
+// is the reason the structural assertion below is still worth keeping.
 //
 // The invariant it defended is stronger here, and it is kept: NOTHING in this
 // shell is ever inside an `inert` subtree, so a serve-health notice — which the

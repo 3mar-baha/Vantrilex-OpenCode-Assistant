@@ -107,67 +107,73 @@ function isFlowMsg(m: FlowMsg): boolean {
 //
 // Phase 1 of the agentic bridge. The daemon emits ONE frame per `execSessionShell`
 // command, carrying the whole result: `buildOutputFrame` → `OutputFrameSchema`
-// (`src/ipc/protocol.ts:908`). This block is a STRUCTURAL mirror of that schema,
-// declared rather than imported for the reason `TerminalDrawer.OutputFrameLike`
-// gives — the root `src/` tree is outside the desktop tsconfig's `include`, and
-// importing it would drag zod and the whole frame module into the Vite bundle.
+// (`src/ipc/protocol.ts`). This block is a STRUCTURAL mirror of that schema,
+// declared rather than imported because the root `src/` tree is outside the
+// desktop tsconfig's `include` and importing it would drag zod and the whole
+// frame module into the Vite bundle.
+//
+// ── WHY THE MIRROR, NOW THAT ITS CONSUMER IS GONE ─────────────────────────────
+//
+// The mirror's original justification named a collaborator:
+// `TerminalDrawer.OutputFrameLike` was the projection this type replaced, and
+// the drawer's ten-field read was what made the seam worth declaring. The drawer
+// was deleted in W25 with the bento column, so the argument has to be restated on
+// what is actually here: `OutputFrameMsg` is the SHAPE OF A FRAME THIS BRIDGE
+// RECEIVES. It is re-declared rather than imported because the desktop build
+// cannot import the root tree, and a re-declaration that nothing type-checks
+// against the original is exactly the drift the field-by-field note below exists
+// to prevent — so the reconciliation stays, and `ws-output-bound.test.ts` reads
+// the real `protocol.ts` to keep it honest.
 //
 // ── THE RECONCILIATION AGAINST THE REAL SCHEMA, FIELD BY FIELD ────────────────
 //
-// `OutputFrameSchema` declares thirteen fields. The terminal drawer's
-// `OutputFrameLike` reads TEN of them — it gained `outcome` and `sessionId` when
-// its owner found the two were losses rather than decoration. All ten exist in
-// the real frame with identical types, so the real `OutputFrame` satisfies the
-// projection by construction and the declared seam type is a strict SUPERSET of
-// what the drawer needs — which is what lets `App` hand this bridge a handler
-// typed `(frame: OutputFrameLike) => void`.
+// `OutputFrameSchema` declares thirteen fields. The deleted drawer's projection
+// read TEN of them — it gained `outcome` and `sessionId` when its owner found the
+// two were losses rather than decoration, and every field below is the record of
+// that decision rather than decoration about a live consumer. All ten exist in
+// the real frame with identical types, so the real `OutputFrame` satisfied the
+// projection by construction and the declared seam type was a strict SUPERSET of
+// what the drawer needed.
 //
-// THREE FIELDS THE PROJECTION IGNORES, and why each still earns its place here:
+// THREE FIELDS THE PROJECTION IGNORED, and why each still earns its place here:
 //
 //   `type`        the branch key. Carried so a value is never structurally
 //                 indistinguishable from any other frame.
 //   `seq`         REQUIRED on the wire (the protocol says so explicitly) so a
 //                 retained copy can be replayed through the same `seq > lastSeq`
 //                 filter as everything else. The bridge CONSUMES it — see the
-//                 branch — and the drawer does not need it, because
-//                 `linesFromOutputFrame` mints line ids from `commandId`, which
-//                 is what makes a re-delivered frame dedupe rather than double.
+//                 branch — and no consumer needs it beyond that.
 //   `outputBytes` the length BEFORE the cap. `output.length` under-reports a
 //                 truncated frame by exactly the amount the producer refused, and
 //                 `droppedBytes` alone does not distinguish "the producer capped
 //                 this" from "this is all there was".
 //
-// WHAT THE DRAWER NOW DOES WITH THE TWO THAT USED TO BE UNREAD, because a
-// comment that misdescribes a collaborator is how the next change to either
-// file is made wrong:
+// THE TWO THAT WERE ONCE UNREAD, kept as the record of the reasoning rather than
+// as a description of anything current:
 //
 //   `sessionId` the frame says which session produced the output, and the router
 //               really does carry `createSession` / `switchSession`, so a
-//               workspace holds several sessions. EVERY line now renders its own
-//               `terminal-line-session` chip — per line, not per block, so
-//               attribution survives a single line copied out of the log — with
-//               `sessionLabel` abbreviating the token and `title` plus
-//               `data-session` carrying the full id. There is no unlabelled
-//               two-session log any more.
+//               workspace holds several sessions. The drawer attributed every
+//               line to one, per line rather than per block, so attribution
+//               survived a single line copied out of the log. Nothing renders
+//               that today.
 //   `outcome`   `'ok' | 'failed' | 'unknown'`, DERIVED by the daemon in
 //               `deriveShellOutcome`. `exitCode` is `null` in the measured case
 //               (serve has no exit-code field at all), so this is the only
 //               honest verdict the frame carries — `completed` is NOT `ok`. The
-//               drawer READS it: `resolveShellOutcome` returns the frame's own
-//               value, so there is no second derivation to drift from the
-//               producer's. `deriveShellOutcomeFallback` survives only for a
-//               frame that carries NO `outcome`, and when that path is taken the
-//               drawer pushes a visible `warn` line saying so rather than passing
-//               a guess off as the producer's verdict.
+//               drawer read the frame's own value rather than deriving a second
+//               time, which is the property worth keeping if a consumer returns:
+//               one derivation, owned by the producer. `src/ipc/output-frame.test.ts`
+//               now owns the derivation's tests, break-guard included.
 //
-// WHAT THE RENDERER MUST NOT DO WITH `output`: clamp it. The producer owns
-// `MAX_OUTPUT_TEXT_BYTES` (32 KiB, cumulative, enforced pre-store by
-// `OutputAssembler`) and says so on the frame via `truncated` / `droppedBytes`.
-// A renderer that re-clamped would hide a real drop and assert a completeness
-// the frame never claimed — the `INVENTORY_MAX_SESSIONS` defect class, in a
-// place where the user is reading a build log. So `isOutputFrame` below checks
-// the frame's TYPES and its bounded `command` / `commandId` echoes, and is
-// deliberately silent about the length of `output`; the bound is enforced
+// WHAT A RENDERER MUST NOT DO WITH `output`, whenever one exists again: clamp it.
+// The producer owns `MAX_OUTPUT_TEXT_BYTES` (32 KiB, cumulative, enforced
+// pre-store by `OutputAssembler`) and says so on the frame via `truncated` /
+// `droppedBytes`. A renderer that re-clamped would hide a real drop and assert a
+// completeness the frame never claimed — the `INVENTORY_MAX_SESSIONS` defect
+// class, in a place where the user is reading a build log. So `isOutputFrame`
+// below checks the frame's TYPES and its bounded `command` / `commandId` echoes,
+// and is deliberately silent about the length of `output`; the bound is enforced
 // upstream by `buildOutputFrame`, which every frame on the wire went through.
 export type ShellOutputStatus = 'completed' | 'error' | 'pending' | 'running' | 'unknown';
 export type ShellOutputOutcome = 'ok' | 'failed' | 'unknown';
@@ -414,7 +420,17 @@ export interface BridgeOptions {
   /** Fired when a hello arrives with a lower seq — the daemon restarted. */
   readonly onGap?: () => void;
   readonly onClose?: () => void;
-  /** Phase 4: context-window telemetry for the HUD gauge. */
+  /**
+   * Phase 4: context-window telemetry. ITS ONLY CONSUMER WAS DELETED (W25) —
+   * `components/session/ContextGauge.tsx` went with the bento column, and this
+   * shell never subscribed. The dispatch below is therefore live and the surface
+   * is not: the frame arrives, the hook is optional, nothing calls it. Stated
+   * here rather than left for a reader to assume a gauge exists, because a
+   * callback documented "for the HUD gauge" over a shell with no gauge is the
+   * `layaReady: true` defect wearing a comment. Kept deliberately: it is the
+   * contract for the `context` frame this bridge already receives, and Phase 2
+   * task cards are blocked on the same producer.
+   */
   readonly onContext?: (ctx: ContextMsg) => void;
   /**
    * M3 B.3: the daemon is asking the uplink to pause or resume. The bridge
@@ -426,7 +442,17 @@ export interface BridgeOptions {
    * Phase 1 of the agentic bridge: one shell command's whole result, already
    * capped by the producer. Fired ONLY for `type: 'output'` — the handler is not
    * widened to a general frame callback, because the only thing that may render
-   * a 32 KiB untrusted text blob is a drawer that was built for it.
+   * a 32 KiB untrusted text blob is a drawer built for it.
+   *
+   * THAT DRAWER NO LONGER EXISTS. `components/terminal/TerminalDrawer.tsx` and
+   * its 8192-char `clampLine` backstop were deleted in W25 with the bento
+   * column, and no renderer surface subscribes here. So `output` is a frame the
+   * daemon builds, redacts at the sink (`buildOutputFrame`) and retains for
+   * resume, and the renderer then displays none of it. The handler is kept
+   * because the redaction and the byte bound are properties of the producer and
+   * are asserted independently (`ws-output-bound.test.ts` runs the real
+   * `buildOutputFrame`); what is gone is the only consumer, which is a product
+   * retirement recorded in `e2e/`, not a hole in the transport.
    */
   readonly onOutput?: (frame: OutputFrameMsg) => void;
   /**

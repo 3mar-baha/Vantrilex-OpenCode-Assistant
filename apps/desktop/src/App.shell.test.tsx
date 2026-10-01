@@ -11,23 +11,29 @@ import { BENTO_BASE_WIDTH_PX, auditBento, formatViolations } from './components/
  *
  * WHAT REPLACED WHAT. That file audited the bento column: four surfaces composed
  * once each, an `inert` action slot, a bounded task strip, a terminal drawer and
- * a footer of three navigation buttons. The bento column is gone from the shell
- * and every component it owned kept its OWN suite (`BentoGrid.test.tsx`,
- * `ReconnectBanner.test.tsx`, `TaskCards.test.tsx`, `TerminalDrawer.test.tsx`,
+ * a footer of three navigation buttons. The bento column is gone from the shell,
+ * and W25 then deleted the components it owned WITH their suites
+ * (`BentoGrid.test.tsx`, `TaskCards.test.tsx`, `TerminalDrawer.test.tsx`,
  * `SessionBar.test.tsx`, `SessionChip.test.tsx`, `AgentModelBadge.test.tsx`,
- * `ContextGauge.test.tsx`, `CalibrationWizard.test.tsx`, `portals.test.tsx`), so
- * the component coverage did not go with the composition assertions.
+ * `ContextGauge.test.tsx`, `portals.test.tsx`, `matrix/task-state.test.ts`,
+ * `matrix/matrix-state.test.ts`, `WaveformEmblem.test.tsx`, `Crest.test.tsx`,
+ * `sessions/store.test.ts`), so the coverage that went was coverage of code that
+ * no longer exists rather than coverage that was lost.
  *
  * WHAT IS COVERED HERE, and why each item is still worth a test on a shell this
  * small:
  *
  *   · the width budget — `auditBento` runs against the composed tree, at the
- *     window's REAL 380, and nothing masks horizontal overflow with a clip;
- *   · the vertical clip — `useAutoSize` is gone, so `overflow-hidden` on a
- *     fixed root is a HARD clip, and the only thing standing between it and an
- *     unreadable notice is the "the orb region is the only shrinkable box"
- *     invariant. That invariant is invisible to every other suite, so it is
- *     pinned here structurally;
+ *     window's REAL 380, and nothing masks horizontal overflow with a clip.
+ *     `layoutBudget.ts` is dead to the bundle and IS this file's instrument, so
+ *     the two facts are the same fact: delete the module and the overflow audit
+ *     goes with it. That is the one module in `apps/desktop/src` a dead-code
+ *     sweep must never reach, and the reason is this import;
+ *   · the vertical clip — this HUD stands down from `useAutoSize` (it is
+ *     min-bounded and square), so `overflow-hidden` on a fixed root is a HARD
+ *     clip, and the only thing standing between it and an unreadable notice is
+ *     the "the orb region is the only shrinkable box" invariant. That invariant
+ *     is invisible to every other suite, so it is pinned here structurally;
  *   · exactly three pill buttons, and no fourth one hiding elsewhere;
  *   · every control carries an Arabic label;
  *   · the geometry constants agree with `tauri.conf.json`, read from disk.
@@ -202,9 +208,9 @@ describe('the composed shell is clean at the REAL window budget', () => {
   });
 
   test('the root is fixed and clips vertically, and says why in the class list', async () => {
-    // `useAutoSize` is gone, so nothing grows the OS frame any more and this
-    // clip is HARD: a child that outgrew it would be unreachable. The next
-    // case is the one that keeps that from mattering.
+    // This HUD stands down from `useAutoSize`, so nothing grows the OS frame
+    // from here and this clip is HARD: a child that outgrew it would be
+    // unreachable. The next case is the one that keeps that from mattering.
     await mountApp();
     expect(shell().className).toContain('fixed');
     expect(shell().className).toContain('overflow-hidden');

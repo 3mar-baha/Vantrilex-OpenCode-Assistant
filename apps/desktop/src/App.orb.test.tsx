@@ -8,9 +8,14 @@ import { App } from './App.js';
 // WHAT REPLACED WHAT. That file asserted the task-card strip: inventory states
 // mapped to cards, a bounded scroll container, an overflow marker, a
 // display-only receipt. The strip is no longer rendered by this shell (the
-// whole bento column went), and it kept its own suites — `TaskCards.test.tsx`
-// for the DOM contract and `matrix/task-state.test.ts` for the mapping — so the
-// module coverage did not go with the composition assertions.
+// whole bento column went), and W25 then deleted `components/session/
+// TaskCards.tsx` and `matrix/task-state.ts` WITH their suites — `TaskCards.test.tsx`
+// for the DOM contract and `matrix/task-state.test.ts` for the mapping. So the
+// C.5 task-card capability is delivered-but-unwired rather than pending: the
+// mapping, the closed state vocabulary and the 24-card cap are gone from the
+// tree, and `inventory` has no consumer again. `e2e/inventory.spec.ts` already
+// asserted the absence from the live DOM; this is the source half of the same
+// retirement.
 //
 // WHAT IS COVERED HERE. `Orb.tsx` deliberately keeps its props OUT of the DOM:
 // it copies them into refs and paints to a canvas, so nothing about the levels

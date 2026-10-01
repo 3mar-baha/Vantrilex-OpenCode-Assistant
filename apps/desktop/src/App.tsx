@@ -30,18 +30,38 @@ import './index.css';
 // The bento column is gone, and with it the surfaces it owned: session bar and
 // chips, the agent/model badge, the context gauge, the task-card strip, the
 // terminal drawer, the persona radio pair, the calibration trigger, the
-// reconnect banner and the abort button. Every one of those COMPONENTS is still
-// in the tree with its own suite (`BentoGrid`, `SessionBar`, `SessionChip`,
-// `AgentModelBadge`, `ContextGauge`, `TaskCards`, `TerminalDrawer`,
-// `SiriWaveCanvas`, `CalibrationWizard`, `ReconnectBanner`, `WaveformEmblem`,
-// `ConfirmPortal`) — this file stopped rendering them. Only
+// reconnect banner and the abort button. Every one of those COMPONENTS was
+// deleted with its own suite (W25) — `BentoGrid`, `SessionBar`, `SessionChip`,
+// `AgentModelBadge`, `ContextGauge`, `TaskCards`, `TerminalDrawer`, `matrix/
+// task-state`, `WaveformEmblem`, `ConfirmPortal`, `sessions/store`,
+// `matrix/matrix-state`, `brand/Crest` — so the tree no longer carries a
+// component that reads as available and cannot be reached. Only
 // `App.bento.test.tsx`, `App.escape.test.tsx` and `App.task-cards.test.tsx`
 // asserted them THROUGH the shell, and those three were composition suites
 // rather than component suites; they were replaced by `App.shell.test.tsx`,
 // `App.controls.test.tsx` and `App.orb.test.tsx`.
 //
+// FOUR SURFACES SURVIVE THE DELETION, and each is dead to the bundle for a
+// DIFFERENT reason, so they are not a uniform leftover. `layoutBudget.ts` is
+// load-bearing to this file's own suite (`App.shell.test.tsx` runs the width
+// audit through it) and must never be swept; `calibration-meter.ts` is imported
+// by a live drift guard in `audio/uplink-gate.test.ts`; `CalibrationWizard.tsx`
+// and `serve-health-signal.ts` + `ReconnectBanner.tsx` are retained logic whose
+// E2E records (`e2e/calibration.spec.ts`) or whose cross-boundary contract say
+// so; `SiriWaveCanvas.tsx` and `matrix/script-check.ts` are cited as provenance
+// by files outside this write set. See the W25 report — none of the five is
+// deletable by a sweep, and the reasons are per-module, not a general amnesty.
+//
 // CONSEQUENCES THAT ARE REAL, so nobody reads this shell as feature-complete:
 //
+//   · SESSION AND AGENT SWITCHING ARE UNREACHABLE. Nothing in any renderer
+//     surface sends `switchSession` or `setSessionAgent`; the `inventory` and
+//     `agents` frames still arrive and the daemon still implements both verbs.
+//     `e2e/inventory.spec.ts` and `e2e/controls.spec.ts` are the record, and
+//     they assert the absence from the live DOM on purpose.
+//   · SHELL OUTPUT IS RECEIVED AND NEVER RENDERED. `onOutput` is unsubscribed,
+//     so the redacted `output` frame arrives at the bridge and stops there.
+//     Model switching DOES survive, in the settings window's Models tab.
 //   · PERSONA IS NOT SWITCHABLE FROM HERE. `persona` is still synced BOTH ways
 //     with the daemon (adopt on `hello`, follow `persona-changed`, and never
 //     echoed back), so the orb always wears whoever is actually speaking — but
@@ -51,20 +71,32 @@ import './index.css';
 //   · THE CONFIRM PORTAL IS GONE. FR-12 parks a command only on
 //     `tierOf(cmd.kind) === 'state-mutating'`, and this shell sends exactly one
 //     command — `deafen`, which is serve-local and never gated. So the portal
-//     could not be reached from here and is not rendered. Voice-initiated
+//     could not be reached from here and was not rendered. Voice-initiated
 //     destructive intent is unaffected: the daemon asks on its own turn and the
 //     user answers with their voice (`command-router.ts` "the ask, ON THIS TURN").
 //   · AN ABORT BUTTON NO LONGER EXISTS. Nothing in the shell can cancel a turn;
 //     barge-in (`stopSpeech`) still can, from the microphone's frame handler.
 //
+// ── `useAutoSize` IS NOT GONE — THIS HUD SIMPLY STANDS DOWN ───────────────────
+//
+// An earlier revision of the note below said `useAutoSize` was removed from the
+// tree. It was not: `SettingsView` and `KeysView` are opted in, and the hook is
+// live in both auxiliary windows. What changed is THIS surface. The HUD is
+// min-bounded and square (380 × 380), so content must not drive the OS frame and
+// the hook is simply not called here. The clip below is therefore a hard clip
+// *for this root*, not a tree-wide property, and the W20 fix is what keeps the
+// two auxiliary windows scrolling with an affordance instead of silently
+// clipping.
+
 // ── WHY THE ROOT IS `fixed … overflow-hidden`, AND WHY THAT IS SAFE HERE ──────
 //
-// `useAutoSize` is gone (the window is min-bounded and square, so content must
-// not drive the OS frame) which means there is no longer anything that GROWS
-// the window, and `overflow: hidden` on a fixed root is therefore a hard clip.
-// The old comment justifying `overflow-hidden` for rounded corners is gone with
-// it: this root has no rounded card to clip, and the clip exists for one
-// reason — to stop a flex child from ever painting outside a fixed frame.
+// This HUD stands down from `useAutoSize` (the window is min-bounded and
+// square, so content must not drive the OS frame) which means there is no longer
+// anything that GROWS the window from here, and `overflow: hidden` on a fixed
+// root is therefore a hard clip. The old comment justifying `overflow-hidden`
+// for rounded corners is gone with it: this root has no rounded card to clip,
+// and the clip exists for one reason — to stop a flex child from ever painting
+// outside a fixed frame.
 //
 // The clip is made SAFE by three properties, not by hope:
 //

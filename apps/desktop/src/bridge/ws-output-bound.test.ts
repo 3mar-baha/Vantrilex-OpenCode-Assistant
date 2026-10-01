@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { VoxauraBridge, type OutputFrameMsg, type SocketLike } from './ws.js';
 // This file's own subject, inlined by Vite's `?raw` transform. `import.meta.url`
@@ -26,23 +27,40 @@ import WS_SOURCE from './ws.ts?raw';
 //      `onOutput` without passing it — not by calling around it (it is not
 //      exported), not by taking another branch (there is exactly one call site),
 //      and not by arriving on a non-text payload (`ArrayBuffer` / `Blob`).
-//   2. The producer it delegates to is real, singular and does the capping. This
-//      suite cannot import it — the root `src/` tree is outside the desktop
-//      tsconfig's `include`, and importing `protocol.ts` would drag zod into the
-//      renderer bundle — so the daemon half is asserted by READING the source and
-//      by CROSS-REFERENCING the root suite that already measures the bound at
-//      runtime (`src/ipc/output-frame.test.ts`, 'buildOutputFrame — the cap is on
-//      the PRODUCTION path'). Reading is a real check here and not a proxy: what
-//      has to hold is a property of the producer's call graph, and the set of
-//      files that mention `buildOutputFrame` is exactly that property.
+//   2. The producer it delegates to is real, singular and does the capping — and
+//      it is MEASURED, not read. An earlier revision of this file asserted the
+//      single-shot cap by matching the literal argument
+//      `asm.pushPrefixText(input.output)` against the source text, and that
+//      assertion is what a legitimate rename of a local (`input.output` →
+//      `safeOutput`, once redaction moved ahead of the cap) broke: a test that
+//      greps source text fails on any rename, and a text assertion repaired to
+//      match again is the same trap wearing a different hat.
+//
+//      So the bound is now asserted BEHAVIOURALLY, by importing the root
+//      `protocol.ts` and running the real producer. That import was previously
+//      declared impossible in this file's header ("importing `protocol.ts` would
+//      drag zod into the renderer bundle"); it is measured to work, and the
+//      stated reason was about the BUNDLE, not about a test file — a dynamic
+//      import in a `.test.ts` is never bundled, `vite build` reaches only
+//      `main.tsx`'s graph, and zod resolves from the root `node_modules`.
+//
+//      What stays textual is the part that is genuinely structural: the SET of
+//      production modules that name `buildOutputFrame`, which is a property of
+//      the call graph and cannot be observed by running one call. Reading is
+//      right for that and wrong for everything else.
 //
 // WHAT THIS DOES NOT CLAIM. A hostile or compromised daemon can put a 50 MB
 // string in `output` and the bridge will forward it — it has to, or a real 32 KiB
-// frame would be indistinguishable from a fake one, and `TerminalDrawer`'s 8192
-// `clampLine` is the backstop that states the clamp in Arabic when it fires. The
-// transport here is loopback + a bearer the renderer must already hold, so the
-// daemon is not the adversary; asserting otherwise would be inventing a threat
-// model to justify a check.
+// frame would be indistinguishable from a fake one. The backstop that used to
+// state the clamp in Arabic when it fired was `TerminalDrawer`'s 8192-char
+// `clampLine`, and that drawer was deleted in W25 with the bento column: `output`
+// now has NO renderer consumer at all, so this suite's harness is the only place
+// the frame is exercised and the "no re-clamp" policy has no live surface to
+// protect. The policy still holds for whoever subscribes next, and the harness
+// below is what a future subscriber would be built against. The transport here is
+// loopback + a bearer the renderer must already hold, so the daemon is not the
+// adversary; asserting otherwise would be inventing a threat model to justify a
+// check.
 
 // ── LOCATING THE ROOT TREE ───────────────────────────────────────────────────
 
@@ -79,6 +97,73 @@ const ROOT_CODE = (relative: string): string =>
   ROOT_SOURCE(relative)
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^[ \t]*\/\/.*$/gm, '');
+
+/**
+ * The ONE exported surface this suite executes, narrowed to what it asserts.
+ *
+ * Declared here rather than imported as a type because the module is reached by
+ * runtime URL: TypeScript cannot resolve a `pathToFileURL` specifier statically,
+ * so the shape has to be stated or the assertions below would be untyped `any`
+ * and a renamed export would pass silently instead of failing. The structural
+ * text checks further down are what catch that case.
+ */
+interface OutputProducer {
+  readonly MAX_OUTPUT_TEXT_BYTES: number;
+  readonly buildOutputFrame: (
+    seq: number,
+    input: {
+      readonly sessionId: string;
+      readonly commandId: string;
+      readonly command: string;
+      readonly status: string;
+      readonly exitCode: number | null;
+      readonly output: string;
+      readonly durationMs: number | null;
+    },
+  ) => {
+    readonly type: string;
+    readonly output: string;
+    readonly outputBytes: number;
+    readonly droppedBytes: number;
+    readonly truncated: boolean;
+    readonly command: string;
+  };
+}
+
+/**
+ * The real producer, loaded by path across the build boundary.
+ *
+ * `REPO_ROOT` is already LOUD on failure (it throws rather than returning a
+ * sentinel), and a missing module rejects the dynamic import, so there is no
+ * path through this function that yields a stub. That matters: an injection that
+ * silently no-ops is a documented way this repo has been fooled by a green test.
+ */
+async function producerModule(): Promise<OutputProducer> {
+  const url = pathToFileURL(join(REPO_ROOT, 'src', 'ipc', 'protocol.ts')).href;
+  const mod = (await import(/* @vite-ignore */ url)) as Partial<OutputProducer>;
+  if (typeof mod.buildOutputFrame !== 'function' || typeof mod.MAX_OUTPUT_TEXT_BYTES !== 'number') {
+    throw new Error(
+      `src/ipc/protocol.ts loaded from ${url} but did not export buildOutputFrame/MAX_OUTPUT_TEXT_BYTES — every behavioural bound below would be measuring nothing`,
+    );
+  }
+  return mod as OutputProducer;
+}
+
+type ProducerInput = Parameters<OutputProducer['buildOutputFrame']>[1];
+
+/** A minimal, wire-legal producer input. */
+function producerInput(overrides: Record<string, unknown> = {}): ProducerInput {
+  return {
+    sessionId: 'ses_alpha',
+    commandId: 'cmd_1',
+    command: 'npm run build',
+    status: 'completed',
+    exitCode: 0,
+    output: 'hi',
+    durationMs: 812,
+    ...overrides,
+  } as ProducerInput;
+}
 
 /** Every production `.ts` under `src/`, repo-relative, tests and archive excluded. */
 function productionModules(): readonly string[] {
@@ -277,27 +362,86 @@ describe('isOutputFrame cannot be bypassed by a frame that skips validation', ()
 // ── 2 · THE PRODUCER IT DELEGATES TO IS REAL, SINGULAR, AND CAPS ──────────────
 
 describe('the bound the renderer delegates to: 32 KiB, one producer', () => {
-  test('`MAX_OUTPUT_TEXT_BYTES` is 32 KiB and is enforced twice on the producer', () => {
-    const protocol = ROOT_CODE('ipc/protocol.ts');
-    // The constant.
-    expect(protocol).toMatch(/export const MAX_OUTPUT_TEXT_BYTES = 32 \* 1024;/);
+  test('`MAX_OUTPUT_TEXT_BYTES` is 32 KiB and is enforced twice on the producer', async () => {
+    const { MAX_OUTPUT_TEXT_BYTES, buildOutputFrame } = await producerModule();
+    // The constant, measured rather than matched: the number the whole
+    // delegation is written against, taken from the module that owns it.
+    expect(MAX_OUTPUT_TEXT_BYTES).toBe(32 * 1024);
+
     // Enforcement 1 — the accumulator, which caps CUMULATIVELY and before it
     // retains a fragment, so the bound holds on memory and not only on the
-    // emitted string.
-    expect(protocol).toMatch(/if \(this\.storedBytes \+ n > MAX_OUTPUT_TEXT_BYTES\)/);
-    // Enforcement 2 — the schema refine, in BYTES rather than UTF-16 code units,
-    // so 32 KiB of Arabic cannot become 128 KiB of wire.
-    expect(protocol).toMatch(
-      /\.refine\(\(s\) => Buffer\.byteLength\(s, 'utf8'\) <= MAX_OUTPUT_TEXT_BYTES, 'output exceeds MAX_OUTPUT_TEXT_BYTES'\)/,
-    );
-    // Both run on the ONLY production path: `buildOutputFrame` constructs an
-    // assembler and PARSES, so a producer that skipped the assembler still cannot
-    // emit an over-cap frame.
-    const builder = /export function buildOutputFrame\([\s\S]*?\n\}/.exec(protocol)?.[0] ?? '';
+    // emitted string. Enforcement 2 — the schema refine, in BYTES rather than
+    // UTF-16 code units, so 32 KiB of Arabic cannot become 128 KiB of wire.
+    //
+    // BOTH are asserted by RUNNING the producer rather than by matching its
+    // source, and that choice is the whole reason for the change. A source match
+    // on `asm.pushPrefixText(input.output)` was here until a legitimate rename
+    // of that local broke it; the same failure mode reaches a match on the
+    // method name, and a match on anything inside a function body is one
+    // refactor away from being a test that measures nothing.
+    //
+    //   · a MULTI-BYTE body over the cap must be cut at BYTES, not at code
+    //     units — the distinction `Buffer.byteLength` exists to make, and the
+    //     one a `text.length` check would silently get wrong by 2×;
+    //   · the frame must SAY it dropped, because the renderer's whole
+    //     "no re-clamp" policy is downstream of that honesty.
+    const arabic = 'س'.repeat(MAX_OUTPUT_TEXT_BYTES); // 2 bytes per char
+    const built = buildOutputFrame(7, producerInput({ output: arabic }));
+    expect(built.type).toBe('output');
+    expect(Buffer.byteLength(built.output, 'utf8'), 'the cap is in BYTES').toBe(MAX_OUTPUT_TEXT_BYTES);
+    expect(built.truncated, 'and the frame says so').toBe(true);
+    // `outputBytes` is the size of the text the producer HANDED over, and
+    // `droppedBytes` is what the cap cut — the two together account for the
+    // whole body. Asserted as an identity rather than as two loose numbers,
+    // because a producer that reported the EMITTED size would make
+    // `outputBytes - droppedBytes` meaningless and no single-value check would
+    // notice. (`outputBytes` deliberately measures the redacted text, not the raw
+    // stdout: reporting the raw length would leak the length of the secret
+    // removed — `protocol.ts`.)
+    expect(built.outputBytes).toBe(2 * MAX_OUTPUT_TEXT_BYTES);
+    expect(built.droppedBytes).toBe(built.outputBytes - MAX_OUTPUT_TEXT_BYTES);
+
+    // The other direction, because a cap that eats a normal reply is a
+    // regression the first case cannot see: clean output in, byte-identical out.
+    const clean = 'built in 812ms\n';
+    const carried = buildOutputFrame(8, producerInput({ output: clean }));
+    expect(carried.output).toBe(clean);
+    expect(carried.truncated).toBe(false);
+    expect(carried.droppedBytes).toBe(0);
+  });
+
+  test('the cap runs on the SINGLE-SHOT path — measured, not matched', async () => {
+    // The property the deleted text assertion was reaching for, stated as a
+    // behaviour: `buildOutputFrame` is the only frame constructor a producer can
+    // use (the sibling test below proves nothing else builds one), so if an
+    // oversized single-shot `output` came out whole the cap would be
+    // unreachable in production. This is the case that fails if the assembler is
+    // ever bypassed on this path.
+    const { MAX_OUTPUT_TEXT_BYTES, buildOutputFrame } = await producerModule();
+    const built = buildOutputFrame(9, producerInput({ output: 'x'.repeat(MAX_OUTPUT_TEXT_BYTES + 5_000) }));
+    expect(Buffer.byteLength(built.output, 'utf8')).toBeLessThanOrEqual(MAX_OUTPUT_TEXT_BYTES);
+    expect(built.truncated).toBe(true);
+
+    // Redaction runs BEFORE the cap, and that order is load-bearing rather than
+    // stylistic: `[REDACTED]` is 10 bytes, so redacting after the cap could grow
+    // an already-at-cap string past the bound and throw inside the schema parse —
+    // a redaction that takes down the producer. An over-cap body carrying a
+    // credential must therefore still produce a frame rather than throw.
+    const atCap = `gho_${'a'.repeat(40)} ` + 'y'.repeat(MAX_OUTPUT_TEXT_BYTES);
+    const scrubbed = buildOutputFrame(10, producerInput({ output: atCap }));
+    expect(
+      Buffer.byteLength(scrubbed.output, 'utf8'),
+      'redaction cannot push the frame past the cap',
+    ).toBe(MAX_OUTPUT_TEXT_BYTES);
+    expect(scrubbed.output).not.toContain(`gho_${'a'.repeat(40)}`);
+
+    // …and the only structural claim left is about the accumulator the builder
+    // constructs and the parse it runs through, which is a property of the call
+    // graph rather than of any one local's name.
+    const builder = /export function buildOutputFrame\([\s\S]*?\n\}/.exec(ROOT_CODE('ipc/protocol.ts'))?.[0] ?? '';
     expect(builder, 'buildOutputFrame was not found — this check is vacuous if it reads nothing').not.toBe('');
     expect(builder).toContain('new OutputAssembler()');
     expect(builder).toContain('OutputFrameSchema.parse');
-    expect(builder, 'the cap runs on the single-shot path too').toContain('asm.pushPrefixText(input.output)');
   });
 
   test('`buildOutputFrame` has exactly ONE production importer', () => {

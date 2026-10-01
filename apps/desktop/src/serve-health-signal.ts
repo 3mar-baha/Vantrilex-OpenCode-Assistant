@@ -53,18 +53,46 @@
 // comment in this file used to call the probe set "the exact complement"; that
 // was wrong by one member and the test that pinned it inherited the claim.
 //
-// ── WHAT THE ALLOWLIST IS FOR, BEYOND THE RECOVERY FOLD ──────────────────────
+// ── WHAT THE ALLOWLIST WAS FOR, BEYOND THE RECOVERY FOLD ─────────────────────
 //
-// The mirror has a second, larger job: it is the specification the renderer
-// checks its own layout against. `BentoGrid`'s blocked slot is an `inert`
+// The mirror had a second, larger job: it was the specification the renderer
+// checked its own layout against. The bento's blocked slot was an `inert`
 // attribute, and `inert` is inherited by the whole subtree — so one control
 // placed on the wrong side of that line takes out every control below it. When
 // serve drops, the STOP control and the MUTE control must be on the other side
 // of the line, because the daemon's allowlist is what says the router will still
-// honour them. `App.escape.test.tsx` mounts the shell, clicks every control in
-// the escape slot, and asserts each command it sends is in this set — so the
-// mirror is load-bearing at runtime (in `reconnectFromAck` below), at compile
+// honour them. `App.escape.test.tsx` mounted the shell, clicked every control in
+// the escape slot, and asserted each command it sends is in this set — so the
+// mirror was load-bearing at runtime (in `reconnectFromAck` below), at compile
 // time (`SERVE_COMMAND_CLASS` is an exhaustive `Record`), and in the DOM.
+//
+// ── W25: THIS MODULE IS DEAD, AND ITS HEADER WAS ALREADY WRONG ────────────────
+//
+// It is retained rather than deleted, and the reason is that a sweep is the
+// wrong instrument here. Three of the claims above are now false, and the
+// falsity is the finding:
+//
+//   1. "NO producer emits a serve-health signal" is no longer true.
+//      `src/runtime/serve-health.ts` IS wired into the daemon (`ServeHealthMonitor`
+//      is constructed in `daemon.ts` and `withServeGate` wraps the dispatch), and
+//      the three literals below ARE emitted. This file's own sibling claim — that
+//      `serve-health.ts`'s header says "not wired into the daemon at all yet" —
+//      was the stale half, and `src/runtime/serve-health.ts` has since been
+//      corrected. So the blocker this module was built around no longer exists.
+//   2. `App.escape.test.tsx` DOES NOT EXIST. It was replaced by
+//      `App.shell.test.tsx` / `App.controls.test.tsx` / `App.orb.test.tsx`, so the
+//      "load-bearing … in the DOM" claim above has had no referent since that
+//      replacement, independent of W25.
+//   3. `BentoGrid` was deleted in W25 along with the `inert` slot it owned, so
+//      there is no blocked slot left to keep the STOP and MUTE controls out of.
+//
+// What that leaves is a tested mirror of a LIVE daemon allowlist with no
+// consumer: the daemon emits serve-health notices today, `App.tsx` renders them
+// as ordinary one-line message text, and there is no reconnect affordance and no
+// blocked action surface. Whether the compact 380 px shell should have one is a
+// PRODUCT decision, and it is not a dead-code question. The mirror and its 17
+// tests are the design that would implement it, so they are kept and named here
+// rather than deleted.
 import { reconnectReducer, type ReconnectState } from './components/bento/ReconnectBanner.js';
 import type { CommandKind } from './bridge/ws.js';
 
@@ -72,10 +100,12 @@ import type { CommandKind } from './bridge/ws.js';
  * The three literals `src/runtime/serve-health.ts` defines. Copied as literals,
  * not imported: the root `src/` tree is outside the desktop tsconfig's `include`
  * and importing the real module would drag zod into the Vite bundle — the same
- * read-only rule `TerminalDrawer.OutputFrameLike` follows.
+ * read-only rule every other structural mirror in this tree follows.
  *
  * RECONCILE: if `serve-health.ts` renames one of these, this set is the place
- * that has to change. Nothing else in the renderer hard-codes them.
+ * that has to change. Nothing else in the renderer hard-codes them, which was
+ * true when the mirror had a consumer and is now a warning rather than a
+ * convenience — a set nothing reads cannot notice a rename.
  */
 export const SERVE_HEALTH_CODES = ['serve-degraded', 'serve-reconnecting', 'serve-reconnect-exhausted'] as const;
 
