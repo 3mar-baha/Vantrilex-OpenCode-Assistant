@@ -620,10 +620,48 @@ fn write_protected_secret(path: &Path, secret: &str, label: &str) -> Result<(), 
     if let Err(e) = fs::write(path, secret) {
         return Err(format!("{label}: {e}"));
     }
+    lock_or_delete(path, label)
+}
+
+/// Apply the owner-only DACL to a file that already exists, fail-closed.
+///
+/// This is the ADOPT half of `write_protected_secret`, and it exists because
+/// "we only protect what we create" was the defect this closes. A secret
+/// written by an older install — or by the Node daemon, whose `{ mode: 0o600 }`
+/// is a silent no-op on Windows — carries whatever ACL its parent directory
+/// granted. Every `ensure_*` function then adopted it through a
+/// `read_to_string` fast path that returned the value WITHOUT re-locking, so
+/// the weak descriptor was accepted as permanent on every later launch. The
+/// creation path looked correct the whole time, which is why the gap read as
+/// "protected" in review: `machine.key` was the only one of the five with an
+/// adopt branch, and it is the only one that was ever correct.
+///
+/// Fail-closed and delete, for the same reason `write_protected_secret` does:
+/// leaving the file would mean the next launch adopts it again and the ACL is
+/// never retried. Deleting a credential is recoverable (a fresh one is
+/// generated); leaving a world-readable one is not.
+///
+/// Windows notes, because this is not a one-liner and two of these are the
+/// reason it works:
+///
+///   1. `SetNamedSecurityInfoW` needs `WRITE_DAC`, and the file's owner holds it
+///      on an INHERITED descriptor via `(F)`, so re-locking an inherited file
+///      succeeds. Measured on all five live secrets, which were all inherited
+///      before this change and all protected after it.
+///   2. The owner is granted `READ_CONTROL` and `WRITE_DAC` IMPLICITLY on
+///      Windows, whatever the DACL says. That is why the fail-closed branch
+///      below is hard to reach and hard to test — see
+///      `a_lock_that_cannot_be_applied_is_reported_not_swallowed` for the two
+///      stagings that were tried and discarded.
+///
+/// Ordering is what keeps the daemon out of the way, and it was measured rather
+/// than reasoned about: `ensure_owner_marker` runs inside `ensure_daemon`,
+/// BEFORE the daemon is spawned, and the daemon then rewrites the marker in
+/// place. An in-place write does not touch the security descriptor, so the lock
+/// survives the rewrite — verified on a live install by `icacls` after the
+/// daemon had republished the file. No open handle is ever contended.
+fn lock_or_delete(path: &Path, label: &str) -> Result<(), String> {
     if let Err(e) = restrict_to_owner(path) {
-        // Do not leave an unprotected secret on disk: the next launch will
-        // re-read it via the `read_to_string` fast path and would then never
-        // retry the ACL, so the weak file would be adopted as permanent.
         let _ = fs::remove_file(path);
         return Err(format!("{label}: {e}"));
     }
@@ -861,10 +899,10 @@ fn ensure_machine_key() -> Result<String, String> {
 
     if let Ok(existing) = fs::read(&path) {
         if existing.len() == MACHINE_KEY_BYTES {
-            if let Err(e) = restrict_to_owner(&path) {
-                let _ = fs::remove_file(&path);
-                return Err(format!("machine.key: {e}"));
-            }
+            // Adopted, so re-lock it. Same helper as every other secret: this
+            // branch was already correct, and keeping it on the shared path is
+            // what stops it from drifting back into a private copy.
+            lock_or_delete(&path, "machine.key")?;
             return Ok(to_hex(&existing));
         }
         // Wrong length: it cannot be a key this install generated, and adopting
@@ -879,10 +917,7 @@ fn ensure_machine_key() -> Result<String, String> {
 
     let key = secure_random_bytes::<MACHINE_KEY_BYTES>()?;
     fs::write(&path, &key).map_err(|e| format!("machine.key: {e}"))?;
-    if let Err(e) = restrict_to_owner(&path) {
-        let _ = fs::remove_file(&path);
-        return Err(format!("machine.key: {e}"));
-    }
+    lock_or_delete(&path, "machine.key")?;
     Ok(to_hex(&key))
 }
 
@@ -934,6 +969,10 @@ fn ensure_ipc_token() -> Result<String, String> {
     if let Ok(existing) = fs::read_to_string(&path) {
         let trimmed = existing.trim();
         if !trimmed.is_empty() {
+            // Adopted, so re-lock it. See `lock_or_delete`: the file this reads
+            // may have been written by an older install, and its ACL is not
+            // something this function gets to assume.
+            lock_or_delete(&path, "ipc.token")?;
             return Ok(trimmed.to_string());
         }
     }
@@ -964,6 +1003,8 @@ fn ensure_serve_password() -> Result<String, String> {
     if let Ok(existing) = fs::read_to_string(&path) {
         let trimmed = existing.trim();
         if !trimmed.is_empty() {
+            // Adopted, so re-lock it — same reason as `ensure_ipc_token`.
+            lock_or_delete(&path, "serve.pass")?;
             return Ok(trimmed.to_string());
         }
     }
@@ -1035,20 +1076,41 @@ fn ensure_owner_key() -> Result<String, String> {
     if let Ok(existing) = fs::read_to_string(&path) {
         let trimmed = existing.trim();
         if !trimmed.is_empty() {
+            // Adopted, so re-lock it — same reason as `ensure_ipc_token`.
+            lock_or_delete(&path, "owner.key")?;
+            ensure_owner_marker(&dir)?;
             return Ok(trimmed.to_string());
         }
     }
     let key = generate_secret()?;
     fs::create_dir_all(&dir).map_err(|e| format!("runtime dir: {e}"))?;
     write_protected_secret(&path, &key, "owner.key")?;
-    // Only when absent: this runs before the holder probe, and truncating an
-    // existing marker would erase the identity of the very daemon we are about
-    // to adopt.
-    let marker = dir.join("daemon.owner");
-    if !marker.exists() {
-        write_protected_secret(&marker, "", "daemon.owner")?;
-    }
+    ensure_owner_marker(&dir)?;
     Ok(key)
+}
+
+/// Make sure `daemon.owner` exists AND is protected, on every launch.
+///
+/// This is a separate function because the marker is the one credential whose
+/// ADOPT path was worse than a missing re-lock: the whole block used to sit
+/// after the `return Ok(trimmed)` fast path in `ensure_owner_key`, so on any
+/// install that already had `owner.key` — that is, every install that had ever
+/// run — the marker was never even looked at. Its ACL was whatever it was
+/// created with, forever. That is the measured `(I)` on `daemon.owner`, and no
+/// amount of hardening the creation path would have touched it.
+///
+/// Never truncates an existing marker: this runs before the holder probe, and
+/// overwriting would erase the identity of the very daemon we are about to
+/// adopt. `lock_or_delete` only changes the descriptor, never the bytes.
+fn ensure_owner_marker(dir: &Path) -> Result<(), String> {
+    let marker = dir.join("daemon.owner");
+    if marker.exists() {
+        // Adopted: re-lock without touching the contents. The daemon rewrites
+        // this file in place after binding, and an in-place write preserves the
+        // security descriptor, so locking it here survives that rewrite.
+        return lock_or_delete(&marker, "daemon.owner");
+    }
+    write_protected_secret(&marker, "", "daemon.owner")
 }
 
 /// The published holder identity. Only the fields this side acts on are
@@ -2886,6 +2948,183 @@ mod s2_secret_tests {
             Some(v) => std::env::set_var("VOICE_RUNTIME_DIR", v),
             None => std::env::remove_var("VOICE_RUNTIME_DIR"),
         }
+    }
+
+    /// THE GAP THIS CLOSES. `ensure_ipc_token`, `ensure_serve_password` and
+    /// `ensure_owner_key` all read an existing file and returned the value
+    /// WITHOUT re-applying the DACL, so a file written by an older install —
+    /// or by the Node daemon, whose `{ mode: 0o600 }` is a silent no-op on
+    /// Windows — kept the parent directory's inherited ACL forever. Measured on
+    /// this machine before the fix: `ipc.token`, `serve.pass` and `daemon.owner`
+    /// all carried `BUILTIN\Administrators:(I)(F)`, i.e. the WS-4097 bearer
+    /// token was readable by any local administrator.
+    ///
+    /// The audit recorded **0** tests for the adopt path, which is why three of
+    /// the five secrets stayed exposed while `machine.key` — the only one that
+    /// already had an adopt branch, and the only one that was correct — had
+    /// three.
+    ///
+    /// Each secret is staged the way an older install leaves it (created, then
+    /// `icacls /reset` to put it back on the inherited profile ACL), adopted,
+    /// and required to come back protected. `machine.key` is included in the
+    /// sweep so a future edit cannot quietly regress the one that was already
+    /// right: the cost of it being right once is that removing it looks like an
+    /// unrelated cleanup.
+    #[test]
+    fn every_adopted_secret_is_relocked_not_assumed() {
+        let _guard = env_lock();
+        let dir = std::env::temp_dir().join(format!(
+            "voxaura-adopt-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+
+        // These three short-circuit every `ensure_*` before it touches a file,
+        // so a value inherited from the developer's own shell would make this
+        // test assert nothing. Cleared explicitly rather than assumed absent.
+        let shadowed = [
+            "VOICE_RUNTIME_IPC_TOKEN",
+            "OPENCODE_SERVER_PASSWORD",
+            "VOXAURA_OWNER_KEY",
+        ];
+        let restore_env: Vec<(String, String)> = shadowed
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().map(|v| ((*k).to_string(), v)))
+            .collect();
+        for k in shadowed {
+            std::env::remove_var(k);
+        }
+
+        let restore = std::env::var("VOICE_RUNTIME_DIR").ok();
+        std::env::set_var("VOICE_RUNTIME_DIR", &dir);
+
+        // Created, not adopted, so each file starts life genuinely locked down.
+        let token = ensure_ipc_token().expect("provision ipc.token");
+        let password = ensure_serve_password().expect("provision serve.pass");
+        let owner = ensure_owner_key().expect("provision owner.key");
+        let key = ensure_machine_key().expect("provision machine.key");
+
+        let secrets: [(&str, PathBuf, &str); 5] = [
+            ("ipc.token", dir.join("ipc.token"), token.as_str()),
+            ("serve.pass", dir.join("serve.pass"), password.as_str()),
+            ("owner.key", dir.join("owner.key"), owner.as_str()),
+            ("machine.key", dir.join("machine.key"), key.as_str()),
+            ("daemon.owner", dir.join("daemon.owner"), ""),
+        ];
+        for (label, path, _) in &secrets {
+            assert!(path.exists(), "{label} was not provisioned");
+            assert!(
+                dacl_is_protected(path),
+                "{label} must be locked down when this install CREATED it"
+            );
+        }
+
+        // Put every one back on the inherited profile ACL — the state a file
+        // written by an older install is in, and the precondition adoption has
+        // to repair. Without this the test would pass on the creation path
+        // alone, which is the exact way the original gap stayed invisible.
+        for (label, path, _) in &secrets {
+            icacls_reset(path);
+            assert!(
+                !dacl_is_protected(path),
+                "precondition failed for {label}: the DACL was expected to be inheritable \
+                 before adoption, so this test would prove nothing"
+            );
+        }
+
+        // Re-adopt. Same values, since these are adopted and not regenerated —
+        // if any of them came back different the function silently rotated a
+        // credential instead of locking the existing one down.
+        assert_eq!(
+            ensure_ipc_token().expect("adopt ipc.token"),
+            token,
+            "adopting must not rotate the token"
+        );
+        assert_eq!(
+            ensure_serve_password().expect("adopt serve.pass"),
+            password,
+            "adopting must not rotate the serve password"
+        );
+        assert_eq!(
+            ensure_owner_key().expect("adopt owner.key"),
+            owner,
+            "adopting must not rotate the owner key"
+        );
+        assert_eq!(
+            ensure_machine_key().expect("adopt machine.key"),
+            key,
+            "adopting must not rotate the machine key"
+        );
+
+        for (label, path, _) in &secrets {
+            assert!(
+                dacl_is_protected(path),
+                "{label} was adopted onto an INHERITED DACL and stayed inherited. Adoption \
+                 must RE-APPLY the owner-only protected DACL, exactly as machine.key already \
+                 did — the other three secrets were the gap."
+            );
+            // Readability, which is the assertion that killed the icacls
+            // approach: it reported success and produced a file its own named
+            // grantee could not open.
+            assert!(
+                fs::metadata(path).is_ok(),
+                "{label} became unreadable to its owner after the re-lock"
+            );
+        }
+
+        // `daemon.owner` is adopted too, and re-locking it must NOT have
+        // truncated it: `ensure_owner_key` runs BEFORE the holder probe, so
+        // clobbering the marker would erase the identity of the daemon about to
+        // be adopted and force a pointless respawn.
+        let marker = dir.join("daemon.owner");
+        let before = fs::read(&marker).expect("marker readable");
+        ensure_owner_key().expect("re-adopt owner key");
+        assert_eq!(
+            fs::read(&marker).expect("marker still readable"),
+            before,
+            "re-locking the marker must not rewrite its bytes"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        match restore {
+            Some(v) => std::env::set_var("VOICE_RUNTIME_DIR", v),
+            None => std::env::remove_var("VOICE_RUNTIME_DIR"),
+        }
+        for (k, v) in restore_env {
+            std::env::set_var(k, v);
+        }
+    }
+
+    /// `lock_or_delete` is the fail-closed step shared by the create path and every
+    /// adopt path. Its error branch must surface an `Err` and must not leave a
+    /// readable file behind.
+    ///
+    /// SCOPE, STATED HONESTLY. What this asserts is the error wiring: a lock
+    /// that cannot be applied is reported, not swallowed into an `Ok`. It does
+    /// NOT assert the delete-on-failure cleanup, because on Windows that branch
+    /// cannot be staged from a test — the OWNER of a file holds implicit
+    /// `READ_CONTROL` and `WRITE_DAC` no matter what the DACL says, so
+    /// `SetNamedSecurityInfoW` on an owner-accessible path effectively cannot
+    /// fail. (Two stagings were tried and discarded: a path whose parent is a
+    /// FILE, which fails at `create_dir_all` before the DACL call is ever made;
+    /// and a DACL with `WRITE_DAC` removed from the owner's ACE, which the
+    /// implicit grant overrides. Both "passed" while proving nothing.) The
+    /// delete itself remains covered only by inspection of `lock_or_delete`.
+    #[test]
+    fn a_lock_that_cannot_be_applied_is_reported_not_swallowed() {
+        let path = secret_file("lock-err", "gone.token");
+        // Created then removed, so the ACL step has a real target that is gone.
+        fs::write(&path, "x").expect("seed");
+        fs::remove_file(&path).expect("remove");
+        let err = lock_or_delete(&path, "gone.token")
+            .expect_err("a lock that cannot be applied must not report success");
+        assert!(
+            err.contains("gone.token"),
+            "the error must name the file that could not be locked, got: {err}"
+        );
+        assert!(!path.exists(), "nothing to leave behind");
     }
 
     /// A wrong-length key must be refused and removed, never adopted: it cannot

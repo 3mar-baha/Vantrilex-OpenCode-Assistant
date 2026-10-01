@@ -3,9 +3,11 @@ import { describe, expect, test } from 'vitest';
 import {
   containsSecret,
   createLogger,
+  CREDENTIAL_FAMILIES,
   GENERIC_SK_EXCLUSIONS,
   LIVE_PREFIXES,
   REDACTION_MARKER,
+  REDACTION_PATTERNS,
   redactObject,
   redactSecrets,
   redactString,
@@ -14,7 +16,9 @@ import {
 // Every fixture is SYNTHETIC and built from a known-good prefix plus a run of
 // filler characters. No real key value is read, echoed or committed here —
 // `.env.local` holds live keys and is never opened by this file or by the code
-// under test.
+// under test. Where a family has a multi-segment shape (SendGrid, JWT) the
+// sample lives in `CREDENTIAL_FAMILIES` itself, because a `prefix + filler`
+// string is not that family's real shape and would test the wrong regex.
 const synthetic = (prefix: string): string => `${prefix}${'A'.repeat(48)}`;
 
 describe('secret redaction (I-2)', () => {
@@ -30,29 +34,105 @@ describe('secret redaction (I-2)', () => {
     expect(containsSecret(synthetic('gsk_'))).toBe(true);
   });
 
-  // One case per live pool, so a failure names the provider that regressed.
-  // The old pattern list had NO `sk-or-v1-` entry at all, which is the gap
-  // this whole change exists to close.
-  for (const prefix of LIVE_PREFIXES) {
-    test(`redacts the ${prefix}* pool`, () => {
-      const key = synthetic(prefix);
-      expect(redactString(`key=${key}`)).toBe(`key=${REDACTION_MARKER}`);
-      expect(redactString(`pool groq exhausted, next ${key} at index 1`)).toBe(
-        `pool groq exhausted, next ${REDACTION_MARKER} at index 1`,
-      );
-      expect(containsSecret(key)).toBe(true);
-    });
+  // ── THE COVERAGE GAP THIS BLOCK EXISTS TO CLOSE ──────────────────────────
+  //
+  // `LIVE_PREFIXES` was `['sk-or-v1-', 'sk-fish-', 'gsk_']` — the three pools
+  // THIS BUILD holds, which is the wrong question. The redactor's job is to
+  // survive a config dump from any provider, and 15 synthetic shapes pushed
+  // through the real function showed 12 passing through untouched: no `AIza`,
+  // no `gh[pousr]_`, no `xox`, no JWT. A `gho_…` GitHub PAT is not a
+  // hypothetical shape here — it is the exact material in the incident where a
+  // serve error echoed whole config files, live credentials included.
+  //
+  // Each family gets its OWN test, driven off the table in the module under
+  // test, so a failure names the provider that regressed rather than asserting
+  // that a string appears in an array.
+  for (const family of CREDENTIAL_FAMILIES) {
+    for (const sample of family.samples) {
+      test(`redacts the ${family.id} family (${sample.slice(0, 8)}…)`, () => {
+        // Whole-sample redaction: nothing of the credential survives, including
+        // the multi-segment shapes (SendGrid's second dot, a JWT's payload).
+        expect(redactString(sample)).toBe(REDACTION_MARKER);
+        expect(containsSecret(sample)).toBe(true);
+        // AND the surrounding text survives. A redactor that eats the whole
+        // message passes the assert above and is useless in a log.
+        expect(redactString(`leaked ${sample} in config`)).toBe(`leaked ${REDACTION_MARKER} in config`);
+        // Mid-sentence position, the shape a provider error actually arrives in.
+        expect(redactString(`upstream rejected ${sample}, retrying`)).toBe(
+          `upstream rejected ${REDACTION_MARKER}, retrying`,
+        );
+      });
+    }
   }
 
-  // Anti-vacuity: the generic long-tail `sk-` fallback would happily match
-  // `sk-or-v1-…` too, which would let a deleted specific pattern pass its own
-  // test. These two assertions keep the specific patterns load-bearing and keep
-  // the two lists from drifting apart.
+  /**
+   * ANTI-SHADOWING — the property that makes the loop above non-vacuous.
+   *
+   * A test passes if ANY pattern catches the sample. So a family whose pattern
+   * was deleted but whose shape is also matched by some OTHER pattern would
+   * keep passing green, and the coverage would be fiction. This asserts the
+   * opposite: for each family, no OTHER family's regex matches its samples —
+   * which is exactly the condition that fails when its prefix is removed.
+   *
+   * This is the check the old code needed and did not have; the negative
+   * lookahead on the generic `sk-` fallback is the trick that makes it pass for
+   * the `sk-` families specifically.
+   */
+  test('no family is shadowed by another pattern — every one is load-bearing', () => {
+    // Walk the SHIPPED compiled list rather than a re-typed copy: a test that
+    // re-declared the patterns would pass while the real list drifted.
+    for (const family of CREDENTIAL_FAMILIES) {
+      const own = new RegExp(family.pattern);
+      for (const sample of family.samples) {
+        const alsoCaught = REDACTION_PATTERNS.filter((re) => re.source !== own.source).filter((re) => {
+          re.lastIndex = 0;
+          return re.test(sample);
+        });
+        expect(
+          alsoCaught.map((re) => re.source),
+          `${family.id} sample is ALSO matched by another pattern — deleting ` +
+            `${family.id}'s own pattern would leave its test GREEN`,
+        ).toEqual([]);
+      }
+    }
+  });
+
+  test('every family declares a prefix, a pattern and at least one sample', () => {
+    for (const family of CREDENTIAL_FAMILIES) {
+      expect(family.prefix.length, family.id).toBeGreaterThan(2);
+      expect(family.pattern.length, family.id).toBeGreaterThan(4);
+      expect(family.samples.length, family.id).toBeGreaterThan(0);
+      for (const sample of family.samples) {
+        // The sample must be the family's REAL shape, not `prefix + filler`:
+        // assert the family's own regex matches it, which is what makes the
+        // per-family test above a test of that regex.
+        expect(new RegExp(family.pattern).test(sample), `${family.id} sample shape`).toBe(true);
+      }
+    }
+  });
+
+  test('the family table covers at least twelve credential families', () => {
+    // A floor, not a target. The gate in the remediation plan is 12; dropping
+    // below it should fail here rather than in a reviewer's reading.
+    expect(CREDENTIAL_FAMILIES.length).toBeGreaterThanOrEqual(12);
+    expect(new Set(CREDENTIAL_FAMILIES.map((f) => f.id)).size).toBe(CREDENTIAL_FAMILIES.length);
+  });
+
+  test('LIVE_PREFIXES is derived from the family table, not maintained beside it', () => {
+    // The original defect was two hand-maintained lists that could disagree.
+    expect(LIVE_PREFIXES).toEqual(CREDENTIAL_FAMILIES.map((f) => f.prefix));
+  });
+
+  // Anti-vacuity for the generic long-tail `sk-` fallback: it must skip every
+  // NAMED `sk-` family, which is what keeps the per-family tests honest.
   test('the generic sk- fallback does not shadow a specific prefix', () => {
     for (const tail of GENERIC_SK_EXCLUSIONS) {
       const key = `sk-${tail}${'A'.repeat(48)}`;
       expect(redactString(key), `generic fallback must skip sk-${tail}`).not.toBe(key);
     }
+    // And it still catches an UNNAMED `sk-` provider, or the whole point of it
+    // (a future shape needs no audit cycle) is lost.
+    expect(redactString(`sk-${'A'.repeat(40)}`)).toBe(REDACTION_MARKER);
   });
 
   test('every sk- prefix is declared in both the pattern list and the exclusion list', () => {
@@ -68,10 +148,31 @@ describe('secret redaction (I-2)', () => {
       'BRAIN_REJECTED retryable=false remediation=KeyAdvanced',
       'voice=male-default briefings=bluf mic=armed',
       'rotating taskbar-icon cache for the explorer shell',
+      // Written because the new families add short prefixes that appear in
+      // ordinary English-adjacent text. Each of these was checked against the
+      // new patterns, not assumed safe.
+      'HF model distilbert-base-uncased cached in .cache/huggingface',
+      'npm install finished in 3s, added 0 packages',
+      'the key-value store holds 12 entries',
+      'jwt already verified by the upstream proxy',
+      'connect-src self ws://127.0.0.1:4097',
+      'accountKey is null in the response body',
+      'taskbar-icon cache cleared for the explorer shell',
+      'eyeball rendering skipped on the low-power path',
     ];
     for (const line of clean) {
-      expect(redactString(line)).toBe(line);
-      expect(containsSecret(line)).toBe(false);
+      expect(redactString(line), line).toBe(line);
+      expect(containsSecret(line), line).toBe(false);
+    }
+  });
+
+  test('redactString is idempotent on its own marker and on already-redacted text', () => {
+    // Load-bearing for the sink redactions: a caller that pre-redacts must not
+    // be double-processed, and re-scrubbing a shipped frame must be a no-op.
+    expect(redactString(REDACTION_MARKER)).toBe(REDACTION_MARKER);
+    for (const family of CREDENTIAL_FAMILIES) {
+      const once = redactString(`leaked ${family.samples[0]} here`);
+      expect(redactString(once), family.id).toBe(once);
     }
   });
 

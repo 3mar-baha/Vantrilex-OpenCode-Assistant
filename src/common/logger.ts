@@ -30,44 +30,237 @@ import type { OrchestratorConfig } from './config.js';
 export const REDACTION_MARKER = '[REDACTED]';
 
 /**
- * Every provider prefix this build can actually hold. These are the live pools,
- * not guesses — Groq (STT), Fish Audio (TTS) and OpenRouter (brain, intake,
- * planner and narrator) — plus a generic long-tail `sk-` fallback so a future
- * provider shape is covered without another audit cycle. Exported so a test can
- * assert each one is caught without duplicating the literal.
+ * ONE credential family: the prefix, the pattern that catches it, and the
+ * SYNTHETIC samples a test pushes through the real function.
+ *
+ * WHY THIS IS A TABLE AND NOT A BARE ARRAY. The previous shape was
+ * `LIVE_PREFIXES = ['sk-or-v1-', 'sk-fish-', 'gsk_']` beside a separate hand-typed
+ * pattern list, and the two could disagree. They did: 15 synthetic credential
+ * shapes pushed through the real `redactString` — OpenAI/Anthropic, Google,
+ * GitHub, Slack, Stripe, npm, HuggingFace, SendGrid, Mailgun, AWS and JWT — and
+ * **12 of 15 passed through untouched**, because the pattern list only ever
+ * named the three pools this build holds. A `gho_…` GitHub PAT is not academic:
+ * it is the exact shape in the incident where a serve error echoed whole config
+ * files, live credentials included.
+ *
+ * So the family is declared ONCE and both consumers read it: `pattern` becomes
+ * the regex the redactor runs, and `sample` becomes what the test feeds it. A
+ * family therefore cannot be documented without being caught, and a pattern
+ * cannot exist without a sample proving it fires. `samples` (plural) because a
+ * family's prefix is often a character class — GitHub alone has five token
+ * types (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`) and all five leak equally.
+ *
+ * NO REAL KEY IS READ, ECHOED OR STORED HERE. Every `sample` is a hand-built
+ * string of the right shape; the table is part of the shipped source and is
+ * therefore read by anyone with the repo.
  */
-export const LIVE_PREFIXES: readonly string[] = ['sk-or-v1-', 'sk-fish-', 'gsk_'];
+export interface CredentialFamily {
+  /** Stable id — it is the test name, so a failure names the family. */
+  readonly id: string;
+  /** The literal prefix, as a reader recognises it. May be a character class. */
+  readonly prefix: string;
+  /** Regex SOURCE. Compiled once, globally, in `REDACTION_PATTERNS`. */
+  readonly pattern: string;
+  /** Synthetic value(s) in this family's real shape. Never real material. */
+  readonly samples: readonly string[];
+}
 
 /**
- * The 8-char floors stop ordinary prose from being mangled; the specific
- * prefixes run before the generic one so they win. Every regex is module-level
- * and global, so `lastIndex` is reset at each use rather than inherited from a
- * previous `test()`/`replace()` call.
+ * The credential families this redactor covers, in APPLICATION ORDER: specific
+ * prefixes first, generic fallbacks last. The order is load-bearing and is
+ * asserted by a test rather than trusted.
+ *
+ * The 8-char floors are on every tail, and they are the reason ordinary prose
+ * survives: `hf_` and `npm_` are common enough in English-adjacent text that a
+ * 4-char floor would mangle sentences, while no real credential of any family
+ * here is shorter than 20 characters of body.
  */
+export const CREDENTIAL_FAMILIES: readonly CredentialFamily[] = [
+  // ── this build's own pools (Groq STT, Fish TTS, OpenRouter brain/intake) ──
+  {
+    id: 'openrouter',
+    prefix: 'sk-or-v1-',
+    pattern: 'sk-or-v1-[A-Za-z0-9_-]{8,}',
+    samples: ['sk-or-v1-' + '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd'],
+  },
+  {
+    id: 'fish-audio',
+    prefix: 'sk-fish-',
+    pattern: 'sk-fish-[A-Za-z0-9_-]{8,}',
+    samples: ['sk-fish-' + '0123456789abcdef0123456789abcdef01234567'],
+  },
+  {
+    id: 'groq',
+    prefix: 'gsk_',
+    pattern: 'gsk_[A-Za-z0-9]{8,}',
+    samples: ['gsk_' + '0123456789abcdef0123456789abcdef01234567'],
+  },
+  // ── other `sk-` providers: named, so each is independently load-bearing ──
+  {
+    id: 'anthropic',
+    prefix: 'sk-ant-',
+    pattern: 'sk-ant-[A-Za-z0-9_-]{8,}',
+    samples: ['sk-ant-' + 'api03-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd'],
+  },
+  {
+    id: 'openai',
+    prefix: 'sk-proj-',
+    pattern: 'sk-proj-[A-Za-z0-9_-]{8,}',
+    samples: ['sk-proj-' + '0123456789abcdef0123456789abcdef01234567'],
+  },
+  // ── non-`sk-` families, none of which the old list named ──
+  {
+    id: 'google',
+    prefix: 'AIza',
+    pattern: 'AIza[0-9A-Za-z_-]{20,}',
+    samples: ['AIza' + 'Sy0123456789abcdefghijklmnopqrstuvw'],
+  },
+  {
+    id: 'github',
+    prefix: 'gh[pousr]_',
+    pattern: 'gh[pousr]_[A-Za-z0-9]{20,}',
+    samples: [
+      'ghp_' + '0123456789abcdefghijklmnopqrstuvwxyz',
+      'gho_' + '0123456789abcdefghijklmnopqrstuvwxyz',
+      'ghu_' + '0123456789abcdefghijklmnopqrstuvwxyz',
+      'ghs_' + '0123456789abcdefghijklmnopqrstuvwxyz',
+      'ghr_' + '0123456789abcdefghijklmnopqrstuvwxyz',
+    ],
+  },
+  {
+    id: 'slack',
+    prefix: 'xox[abprs]-',
+    pattern: 'xox[abprs]-[A-Za-z0-9-]{10,}',
+    samples: [
+      'xoxb-' + '012345678901-0123456789012-0123456789012-abcdefghijklmnopqrstuvwx',
+      'xoxp-' + '012345678901-0123456789012-abcdefghijklmnopqrstuvwx',
+    ],
+  },
+  {
+    id: 'stripe',
+    prefix: '[rs]k_live_',
+    pattern: '[rs]k_live_[A-Za-z0-9]{16,}',
+    samples: [
+      'sk_live_' + '0123456789abcdef01234567',
+      'rk_live_' + '0123456789abcdef01234567',
+    ],
+  },
+  {
+    id: 'npm',
+    prefix: 'npm_',
+    pattern: 'npm_[A-Za-z0-9]{20,}',
+    samples: ['npm_' + '0123456789abcdefghijklmnopqrstuvwx'],
+  },
+  {
+    id: 'huggingface',
+    prefix: 'hf_',
+    pattern: 'hf_[A-Za-z0-9]{20,}',
+    samples: ['hf_' + '0123456789abcdefghijklmnopqrstuvwx'],
+  },
+  {
+    id: 'sendgrid',
+    prefix: 'SG.',
+    pattern: 'SG\\.[A-Za-z0-9_-]{8,}(?:\\.[A-Za-z0-9_-]{8,})?',
+    // The real key is `SG.<22>.<43>`; the second segment is optional in the
+    // pattern so a TRUNCATED sendgrid key still loses its first segment rather
+    // than half of it surviving.
+    samples: ['SG.' + '0123456789abcdefghijkl.0123456789abcdefghijklmnopqrstuvwxyz0123456789abc'],
+  },
+  {
+    id: 'mailgun',
+    prefix: 'key-',
+    pattern: 'key-[0-9a-fA-F]{32,}',
+    samples: ['key-' + '0123456789abcdef0123456789abcdef'],
+  },
+  {
+    id: 'aws-access-key-id',
+    prefix: 'AKIA',
+    // `{16,}` not `{16}`: the real key is AKIA + exactly 16, so a floor of 16
+    // is the precision and the open end is what stops a PADDED or extended id
+    // from being half-scrubbed. Prose cannot reach it — the `AKIA` run has to
+    // be followed by 16 more uppercase alphanumerics.
+    pattern: '(?:AKIA|ASIA|AROA|AGPA|AIDA)[0-9A-Z]{16,}',
+    samples: ['AKIA' + 'Q7X3MPL2N9D4TRB1', 'ASIA' + 'Q7X3MPL2N9D4TRB1'],
+  },
+  {
+    id: 'azure-account-key',
+    prefix: 'AccountKey=',
+    pattern: 'AccountKey=[A-Za-z0-9+/=]{40,}',
+    samples: [
+      'AccountKey=' + 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUY=' +
+        'ghijklmnopqrstuvwxyz012345',
+    ],
+  },
+  {
+    id: 'jwt',
+    prefix: 'eyJ',
+    // A JWT's first segment is always `eyJ` (base64 of `{"`). Consuming the
+    // FOLLOWING segments matters as much as the first — redacting only the
+    // header leaves a payload and a signature on the page — but the trailing
+    // groups are optional so a header-only or `alg:none` token is still caught
+    // whole rather than passing through.
+    pattern: 'eyJ[A-Za-z0-9_-]{10,}(?:\\.[A-Za-z0-9_-]{4,}){0,2}',
+    samples: [
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' +
+        '.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0' +
+        '.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+    ],
+  },
+];
+
+/**
+ * Every prefix the families cover, flattened. Kept as its own export because
+ * consumers (and the anti-shadowing check) reason about prefixes, not patterns.
+ */
+export const LIVE_PREFIXES: readonly string[] = CREDENTIAL_FAMILIES.map((f) => f.prefix);
+
+/**
+ * Tails (what follows the leading `sk-`) that the generic fallback must skip —
+ * every named family whose prefix begins `sk-`. `ant-` and `proj-` came with
+ * their families for the same reason `or-v1-` and `fish-` did: an unnamed `sk-`
+ * provider is already covered by the generic fallback, so without the exclusion
+ * its own pattern could be deleted and its test would still pass.
+ */
+export const GENERIC_SK_EXCLUSIONS: readonly string[] = CREDENTIAL_FAMILIES.filter((f) =>
+  f.prefix.startsWith('sk-'),
+).map((f) => f.prefix.slice(3));
+
+/** Escape a literal for embedding in a RegExp source. */
+function escapeLiteral(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * The 8-char floors stop ordinary prose from being mangled; the specific
  * prefixes run before the generic one so they win. Every regex is module-level
  * and global, so `lastIndex` is reset at each use rather than inherited from a
  * previous `test()`/`replace()` call.
  *
- * The generic fallback carries a negative lookahead that makes it INDEPENDENT of
- * the specific patterns: without it, `sk-[A-Za-z0-9_-]{20,}` also matches
- * `sk-or-v1-AAA…`, so deleting a specific pattern would change nothing and its
- * test would pass vacuously. With the lookahead, removing a specific pattern
- * leaves a real hole. The two lists are cross-checked by a test so a future
- * prefix cannot be added to one and forgotten in the other.
+ * The generic `sk-` fallback carries a negative lookahead that makes it
+ * INDEPENDENT of the named families: without it, `sk-[A-Za-z0-9_-]{20,}` also
+ * matches `sk-or-v1-AAA…`, so deleting a specific pattern would change nothing
+ * and its test would pass vacuously. With the lookahead, removing a specific
+ * pattern leaves a real hole. The two lists are cross-checked by a test so a
+ * future prefix cannot be added to one and forgotten in the other.
+ *
+ * `Bearer`/`Basic` stay last: they are transport shapes rather than provider
+ * shapes, and an `Authorization: Basic` header is short enough to need its own
+ * floor rather than a provider prefix.
  */
-const SECRET_PATTERNS: readonly RegExp[] = [
-  /sk-or-v1-[A-Za-z0-9_-]{8,}/g,
-  /sk-fish-[A-Za-z0-9_-]{8,}/g,
-  /gsk_[A-Za-z0-9]{8,}/g,
-  /sk-(?!(?:or-v1-|fish-))[A-Za-z0-9_-]{20,}/g,
+/**
+ * Compiled, in application order: family patterns first (declaration order),
+ * then the generic `sk-` fallback, then the two transport shapes.
+ *
+ * Exported so the shadowing audit in `logger.test.ts` can enumerate the exact
+ * list the redactor runs rather than re-typing it — a test that re-declared the
+ * patterns would pass while the shipped list drifted.
+ */
+export const REDACTION_PATTERNS: readonly RegExp[] = [
+  ...CREDENTIAL_FAMILIES.map((f) => new RegExp(f.pattern, 'g')),
+  new RegExp(`sk-(?!(?:${GENERIC_SK_EXCLUSIONS.map((t) => escapeLiteral(t)).join('|')}))[A-Za-z0-9_-]{20,}`, 'g'),
   /Bearer\s+[A-Za-z0-9._~+/=-]{4,}/gi,
   /Basic\s+[A-Za-z0-9+/=]{8,}/gi,
 ];
-
-/** Tails (what follows the leading `sk-`) that the generic fallback must skip. */
-export const GENERIC_SK_EXCLUSIONS: readonly string[] = ['or-v1-', 'fish-'];
 
 /**
  * `key = value` pairs whose NAME declares the value secret. The name is
@@ -106,7 +299,7 @@ const MAX_NODES = 1000;
 /** Replace every secret-shaped run in one string. Never throws. */
 export function redactString(input: string): string {
   let out = input;
-  for (const pattern of SECRET_PATTERNS) {
+  for (const pattern of REDACTION_PATTERNS) {
     pattern.lastIndex = 0;
     out = out.replace(pattern, REDACTION_MARKER);
   }
@@ -237,7 +430,7 @@ function scan(value: unknown, depth: number, seen: WeakSet<object>, budget: Budg
 }
 
 function matchesAny(input: string): boolean {
-  for (const pattern of SECRET_PATTERNS) {
+  for (const pattern of REDACTION_PATTERNS) {
     pattern.lastIndex = 0;
     if (pattern.test(input)) return true;
   }
