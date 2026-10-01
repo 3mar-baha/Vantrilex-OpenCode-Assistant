@@ -8,10 +8,6 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** Current known baseline. Lower is better; raise it only when a warning is
- *  deliberately accepted, and say why in the commit that does so. */
-const BASELINE = 8;
-
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const BASELINE_FILE = join(ROOT, 'scripts', 'lint-baseline.json');
 
@@ -107,10 +103,55 @@ if (warnings === 0 && errors === 0 && out.trim().length > 0) {
   process.exit(2);
 }
 
-// A committed baseline file wins when present, so the number is reviewable in a
-// diff rather than buried in this script.
-const onDisk = existsSync(BASELINE_FILE) ? Number(readFileSync(BASELINE_FILE, 'utf8').trim()) : null;
-const expected = onDisk ?? BASELINE;
+// The baseline lives in scripts/lint-baseline.json, not in this script, so the
+// number is reviewable in a diff rather than buried in code. It is REQUIRED, and
+// an absent or unreadable one is a hard error rather than a fallback.
+//
+// WHY NO FALLBACK. This file used to carry `const BASELINE = 8` and compare
+// against `onDisk ?? BASELINE`, with the constant commented "Current known
+// baseline". That is dead code while the JSON exists - and dead code whose
+// failure mode is SILENCE. Deleting or corrupting the JSON did not fail the gate;
+// it quietly compared the tree against a stale guess of 8. On a tree that
+// produces 4 warnings a 7-warning regression would have passed, and on a tree
+// producing 12 it would have failed with a number nobody had ever reviewed. A
+// second copy of a number can only ever drift from the first, and a gate that
+// degrades to a guess when its input is missing is exactly the "coverage that
+// reads as present while being absent" defect this repo keeps finding.
+//
+// So there is exactly one source of truth and it is mandatory. `Number.isFinite`
+// is the content check as well as the existence check: a truncated or
+// non-numeric baseline yields NaN, which would otherwise pass every comparison
+// below (`NaN > n` and `NaN < n` are both false) and silently disarm the gate.
+const expected = readBaseline();
+function readBaseline() {
+  let raw;
+  try {
+    raw = readFileSync(BASELINE_FILE, 'utf8');
+  } catch (err) {
+    console.error(
+      `lint-baseline: cannot read ${BASELINE_FILE}\n` +
+        `  (${err.code ?? err.message})\n` +
+        '\n' +
+        '  The baseline is REQUIRED and there is no fallback number in this script.\n' +
+        '  Guessing one would compare the tree against a stale, unreviewed figure.\n' +
+        '  Restore it from version control, or write the measured count yourself\n' +
+        '  if the tree really moved.',
+    );
+    process.exit(1);
+  }
+  const n = Number(raw.trim());
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+    console.error(
+      `lint-baseline: ${BASELINE_FILE} does not hold a warning count.\n` +
+        `  contents: ${JSON.stringify(raw)}\n` +
+        '\n' +
+        '  It must be a single non-negative integer. A NaN baseline would compare\n' +
+        '  false against every count and silently disarm the gate.',
+    );
+    process.exit(1);
+  }
+  return n;
+}
 
 console.log(`oxlint: ${warnings} warning(s), ${errors} error(s); baseline ${expected}`);
 
