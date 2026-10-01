@@ -2,6 +2,15 @@
 
 > **Canonical status:** Governance. State-survival truth. Implements FR-10 (see `01`).
 > Types: `05` §5.2–§5.3 · Reconnect: `25` · Gate-5 updates: `16` §16.7.3.
+>
+> **This file is two documents and the boundary matters.** §§10.1–10.6 are a frozen
+> FR-10 **specification** and are not re-derived against the tree — a normative
+> rule is not a claim about the code, and "fixing" one to match an implementation
+> would destroy the record of what was specified. Everything from `## Security
+> remediation` onward is a **gate ledger**: measured figures recorded at the
+> moment they were true, appended chronologically, never overwritten. Where a
+> ledger row is a plain claim about the current tree rather than history, it is
+> marked as such and re-derived; where it is history it stands.
 
 ## 10.1 — Checkpoint Protocol (normative)
 
@@ -576,12 +585,21 @@ when. So the historical rows stand.
 
 What was wrong is that **no single row told a reader which number is current**,
 so a reader landing on a mid-file row (for example the v0.4.x `220`, or the
-v0.7.1 `509`) had no way to know they were reading a fossil. That is now fixed:
-the current numbers are in the `## v0.7.2` section below, each with the command
-that produces it.
+v0.7.1 `509`) had no way to know they were reading a fossil. **That was fixed
+once by pointing at the `## v0.7.2` section, and that pointer has itself gone
+stale**: this file now runs to v0.8.2 and carries a longer tail than the
+section it named. `AGENTS.md` is the only document `npm run docs:verify` holds
+to these figures, and it re-derives every one of them on each run, so **the
+current numbers are the ones in `AGENTS.md` § Gates, each produced by a command
+that gate itself runs.** The pointer here is kept only to say *where the count
+of record lives*, not to restate it.
 
-For reference, the trailing root values that looked stale, now reconciled:
-220 → 491 → 498 → 509 → 572 → **573**. Desktop: 89 → 92 → 95 → 149 → **153**.
+For reference, the trailing root values that looked stale, reconciled as far as
+this file records them: 220 → 491 → 498 → 509 → 572 → 573 → 905 → 1197.
+Desktop: 89 → 92 → 95 → 149 → 153 → 141 → 265 → 589. **The chain stops here
+deliberately:** the figures past v0.8.2 belong to `AGENTS.md` and are re-derived
+on every gate run, so appending them to a historical ledger would create a
+second place to go stale.
 
 **On the 572 → 573 step specifically.** This wave is running inside a
 multi-worker remediation swarm, and the root suite is not yet stable: a
@@ -602,9 +620,9 @@ halves** and is corrected to 726 unit (573 root + 153 desktop) and **27** Rust.
 JS gate and needs the MSVC environment loaded on Windows.
 
 **E2E 18 / 14 specs** is counted from the spec files (18 `test(` across 14
-`*.spec.ts`) and has been consistent since v0.7.0. The older `15/15` and `11/11`
-rows are historical. The count is structural and re-derivable without the E2E
-lock, but it was last *executed* by whoever ran the gate for the row that
+`*.spec.ts`) and was consistent between v0.7.0 and v0.8.0. The older `15/15` and
+`11/11` rows are historical. The count is structural and re-derivable without the
+E2E lock, but it was last *executed* by whoever ran the gate for the row that
 records it.
 
 ---
@@ -1194,3 +1212,80 @@ a named failure, or reports **NO VALID EVIDENCE**.
   and Node does no directory resolution for relative specifiers. Declined as
   cosmetic risk against ~20 live doc anchors, and **recorded with the fix named**
   so the next reader does not rediscover it.
+
+---
+
+## 2026-10-01 — W14/W15: the audit surface audited, and Triad A re-opened
+
+The close-out wave. Its finding is mostly about this file and its siblings, not
+about the product.
+
+### Triad A: the "all six closed" heading was a tally that never read its items
+
+`AGENTS.md` carried `## Known defects — Triad A (status: all six closed)` above
+**fourteen** entries. Six against fourteen is not a rounding error; it is the
+shape of an assertion that counted a subset and called it the whole. The prior
+pass had marked some items fixed and left **several unaccounted**, and
+unaccounted is not settled.
+
+Re-derived this wave **by reading the cited lines**, not by trusting the earlier
+verdict: **nine settled, four open (A.7, A.8, A.9, A.10), one partial (A.14),
+fourteen accounted, none left blank.** The heading's verdict is retracted rather
+than edited into something kinder. The generalisable failure is the one this
+repository keeps meeting: a number in a heading that no gate re-derives.
+
+### Ledger rows changed, and why
+
+Two rows in this file were **claims about the tree wearing a historical row's
+clothes**, and those are the only ones touched. The specification above them is
+untouched.
+
+| Row | Was | Now | Why |
+|---|---|---|---|
+| "How to read the test counts" (this section) | "the current numbers are in the `## v0.7.2` section below" | points at `AGENTS.md` § Gates, and the chain is extended to v0.8.2 | the pointer itself went stale: the file now runs to v0.8.2. `docs:verify` re-derives only `AGENTS.md`, so a second copy of the figure here is a second thing to rot. |
+| "E2E 18 / 14 specs … consistent since v0.7.0" | unqualified | "consistent between v0.7.0 and v0.8.0" | v0.8.0's own gate table records **33 across 18 specs**, so "has been consistent since v0.7.0" was false as written for the whole span. |
+| trailing reconciliation chain | `… → 573`, desktop `… → 153` | `… → 1197`, desktop `… → 589`, stopping there on purpose | the chain named a v0.7.2-era figure as terminal while this file's own later rows recorded 905 and 1197. |
+
+**Nothing else was rewritten.** The 182/220/491/498/509/572 rows, the v0.7.0
+and v0.7.2 sections and the `§§10.1–10.6` specification all stand as recorded,
+because a ledger that overwrites its past is worse than one that disagrees with
+itself.
+
+### Gates at this entry
+
+Measured on this tree, 2026-10-01. `docs:verify` executed (not re-read), and it
+is the only row here that is machine-verified; it re-derives the `AGENTS.md`
+figures this file defers to.
+
+| Stage | Result |
+|---|---|
+| `npm run docs:verify` | exit 0 — **35/35** claims match |
+| `npm run test` | root **1594 passed + 1 skipped** (97 files) |
+| `cd apps/desktop && npm run test` | **506 passed + 0 skipped** (36 files) |
+| `cargo test` | **54** (`#[test]` count in `main.rs`; needs MSVC, not run this wave) |
+| E2E | **47 across 19 specs** (static count) |
+| production modules | **76 live / 7 dead / 1 test-only** of 84 |
+
+### The four open Triad A defects, restated so they are not lost
+
+They ship. None is a backlog item with an owner.
+
+- **A.8** reports a live OpenRouter outage as `intake-invalid` (a malformed
+  reply) rather than `intake-failed`, because one flag serves two meanings at
+  `coordinator.ts:663-688`.
+- **A.9** re-synthesises every repeated narration: `AudioCache` appears zero
+  times in `daemon.ts`, so the cache cannot be hit on the hot path.
+- **A.10** turns an external tmp-cleaner into a turn-level ENOENT — `cache.ts:76`
+  reads a blob with no `try`.
+- **A.7** is latent only while `setRenewalAt` has zero production callers; the
+  moment an owner-known date is wired it will show a 0-day advisory.
+
+### Not verified this wave
+
+- **No `cargo test` was executed** (MSVC environment not loaded, and the brief
+  excluded it). The Rust figure above is the `#[test]` count in `main.rs`, which
+  is what `docs:verify` checks and what every row in this file has always meant.
+- **No `npm run test:e2e`** (port-bound; the brief excluded it). The E2E figure
+  is the static spec count and is labelled as such.
+- **`VIXAURA-REMEDIATION-PLAN.md` is committed as the plan of record** but was
+  not independently re-verified item-by-item here.

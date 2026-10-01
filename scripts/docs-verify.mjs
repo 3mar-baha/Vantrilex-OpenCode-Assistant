@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// docs:verify — mechanically re-derive every number AGENTS.md and README.md
-// claims, and fail if the code disagrees.
+// docs:verify — mechanically re-derive every number AGENTS.md claims, and fail
+// if the code disagrees. AGENTS.md is the ONLY audit surface: README.md,
+// docs/10-CHECKPOINT.md and CONTRIBUTING.md are read by no check here, and the
+// exemption is stated at the UNVERIFIED gate below rather than implied here.
 //
 // WHY THIS EXISTS. The five highest-severity process defects in this repository
 // were not code bugs; they were documents asserting things the code contradicted.
