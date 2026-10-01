@@ -7,8 +7,6 @@ import { OrchestratorError } from '../common/errors.js';
 import {
   Coordinator,
   PlanSchema,
-  INTAKE_MODEL,
-  COORDINATOR_MODEL,
   type ChatFn,
   type IntakeAck,
   type IntakeContext,
@@ -45,11 +43,19 @@ import {
 //     A reference comparison against the same imported const, so it is identity,
 //     not a heuristic. `coordinator.ts` imports it from `permission.ts`; so does
 //     this file; one ESM instance, one object.
-//   intake / intake-reask ⇔ `model === INTAKE_MODEL`, split by the re-ask's own
-//     3 s budget (`coordinator.ts:611`).
-//   intake-failover ⇔ `model === COORDINATOR_MODEL` and no schema (the failover leg
-//     passes `options: undefined`, `coordinator.ts:539`).
-//   plan ⇔ `model === COORDINATOR_MODEL` and a schema that is not the addressee one.
+//   plan ⇔ a strict schema that is not the addressee one — only `plan()` sends
+//     one (`PLAN_RESPONSE_FORMAT`, `coordinator.ts:817`).
+//   intake-reask ⇔ no schema and the re-ask's own 3 s budget (`coordinator.ts:746`).
+//   intake-failover ⇔ no schema and NO options object at all (the failover leg
+//     passes `options: undefined`, `coordinator.ts:673`).
+//   intake ⇔ no schema, with a budget — the primary intake (`coordinator.ts:672`).
+//
+// WHY THE MODEL IS NOT IN THAT LIST. Two of those slots once held different
+// slugs, so the classifier used to compare `model` against `INTAKE_MODEL` /
+// `COORDINATOR_MODEL`. A quota outage put both on one slug, the first branch
+// swallowed every call, and `plan` became unassignable. Shape is a property of
+// the CALL SITE and survives a slug swap; a slug is a config value that gets
+// swapped for outage reasons. Do not "simplify" this back to a model comparison.
 //
 // WHAT IT WILL NOT DO. It does not decide anything. Every `decision` printed is
 // `parseAddressee`'s, verbatim, from the reply the product itself received; every
@@ -120,6 +126,17 @@ export interface HeadlessBrainOptions {
   /** The only egress. Throwing here is recorded, never swallowed. */
   readonly dispatch: (text: string) => Promise<{ receipt: string; state: string }>;
   readonly onPermissionRequired?: (pending: PendingPermission) => void;
+  /**
+   * Slot overrides, forwarded to `Coordinator`.
+   *
+   * Unset in production — the shipped constants are the point. They exist so a
+   * test can drive the chain through BOTH configurations at once: distinct slots,
+   * and the collided pair a quota outage produces. A classification guard that can
+   * only ever see one configuration cannot claim to be independent of it.
+   */
+  readonly intakeModel?: string;
+  readonly coordinatorModel?: string;
+  readonly fallbackModel?: string;
 }
 
 /** Raw completions are logged, not archived; 4 KB is enough to read a verdict. */
@@ -167,6 +184,9 @@ export class HeadlessBrain {
       chat: this.instrumentedChat,
       dispatch: this.instrumentedDispatch,
       activeSessionId: options.activeSessionId,
+      ...(options.intakeModel !== undefined ? { intakeModel: options.intakeModel } : {}),
+      ...(options.coordinatorModel !== undefined ? { coordinatorModel: options.coordinatorModel } : {}),
+      ...(options.fallbackModel !== undefined ? { fallbackModel: options.fallbackModel } : {}),
       // ALWAYS wired, not only when the caller supplied a hook. The ask is the
       // load-bearing output of this whole file: a trace that reported a turn as
       // "nothing dispatched" without also reporting WHETHER THE GATE ASKED would
@@ -201,14 +221,40 @@ export class HeadlessBrain {
     const schemaKind: ChatCall['schema'] =
       options?.responseFormat === ADDRESSEE_RESPONSE_FORMAT ? 'addressee' : options?.responseFormat === undefined ? 'none' : 'other';
     let stage: ChatStage = 'unclassified';
+    // WHY SHAPE, NOT SLUG. The obvious classifier is `model === INTAKE_MODEL` /
+    // `model === COORDINATOR_MODEL`, and it was exactly that. A quota outage put
+    // both slots on the same slug, so the first `if` swallowed every call and the
+    // coordinator branch became unreachable dead code — `stage` could never be
+    // `'plan'`, which silently broke `lastPlanOf` and printed `approve.plan ===
+    // null` for a plan the chain had actually built. A model slug is a CONFIG
+    // VALUE that gets swapped for outage reasons; the request's SHAPE is what each
+    // call site is for. So shape decides, and the model is not consulted at all —
+    // every branch below is true regardless of which slug answered.
     if (schemaKind === 'addressee') {
+      // The gate is the only caller passing the addressee schema — identity
+      // against the shared const, not a heuristic.
       stage = 'gate';
-    } else if (model === INTAKE_MODEL) {
-      // The re-ask is the same model with a 3 s budget instead of 10 s
-      // (`coordinator.ts:611`); the primary intake uses 10 s.
-      stage = options?.timeoutMs === 3_000 ? 'intake-reask' : 'intake';
-    } else if (model === (COORDINATOR_MODEL as string)) {
-      stage = schemaKind === 'none' ? 'intake-failover' : 'plan';
+    } else if (schemaKind === 'other') {
+      // A strict schema that is NOT the gate's. Only `plan()` sends one
+      // (`PLAN_RESPONSE_FORMAT`, coordinator.ts:283/817). Intentionally does not
+      // compare the schema object to that const: this file does not import it, and
+      // `'other'` already means "some schema the gate did not ask for".
+      stage = 'plan';
+    } else if (options?.timeoutMs === 3_000) {
+      // The re-ask is the primary intake's shape with a 3 s budget instead of 10 s
+      // (coordinator.ts:746 vs :672), and it goes to the same model that produced
+      // the claiming ack. Only the budget separates the two legs.
+      stage = 'intake-reask';
+    } else if (options === undefined) {
+      // The failover leg passes NO options object at all (`coordinator.ts:673`),
+      // while the primary intake always passes a budget. That is the shape
+      // difference, and it holds even when both slots name the same model — a
+      // slug comparison cannot distinguish these two legs at all under a
+      // collision, because there is only one slug to compare.
+      stage = 'intake-failover';
+    } else {
+      // The primary intake: no schema, and a budget — the only remaining shape.
+      stage = 'intake';
     }
     try {
       const raw = await this.options.chat(model, system, user, options);

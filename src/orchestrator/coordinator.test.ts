@@ -40,11 +40,41 @@ function gateReplyFor(system: string): string {
       });
 }
 
-function chatFor(responses: Record<string, string>): (model: string, system: string, u: string) => Promise<string> {
+/**
+ * Responses are keyed by ROLE, not by model slug.
+ *
+ * WHY THIS CHANGED 2026-10-01. These helpers used to be `Record<modelSlug,
+ * reply>`, which silently assumed INTAKE_MODEL and COORDINATOR_MODEL are two
+ * DIFFERENT strings. When intake was re-pointed at `thinkingmachines/inkling:free`
+ * — the only free model that still answers, and already the planner's slug —
+ * every `{ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }` literal in
+ * this file collapsed to ONE key, PLAN_OK won, intake was handed a plan, and 15
+ * of 30 tests failed. The harness, not the coordinator, was wrong: it was keyed
+ * on something that is configuration rather than on the thing that actually
+ * distinguishes the legs.
+ *
+ * The discriminator that does not move is the SYSTEM PROMPT. `intakeSystem()`
+ * opens "You take Arabic voice transcripts", `COORDINATOR_SYSTEM` opens "You are
+ * the planner for Voxaura", and the re-ask is `intakeSystem() + REASK_CONSTRAINT`
+ * so it keeps the intake prefix — which is correct, because no test here needs
+ * the re-ask answered differently from the first intake. The one sterner plan
+ * retry prefixes `COORDINATOR_SYSTEM`, so it keeps the plan prefix too.
+ */
+type RoleResponses = { readonly intake?: string; readonly plan?: string };
+
+/** The gate is a third stage and is answered by `gateReplyFor`, never here. */
+function roleOf(system: string): 'intake' | 'plan' {
+  if (system.startsWith('You take Arabic voice transcripts')) return 'intake';
+  if (system.startsWith('You are the planner for Voxaura')) return 'plan';
+  throw new Error(`unclassifiable system prompt: ${JSON.stringify(system.slice(0, 60))}`);
+}
+
+function chatFor(responses: RoleResponses): (model: string, system: string, u: string) => Promise<string> {
   return async (model: string, system: string) => {
     if (system.includes('addressee gate')) return gateReplyFor(system);
-    if (!(model in responses)) throw new Error(`unexpected model call: ${model}`);
-    return responses[model] as string;
+    const out = responses[roleOf(system)];
+    if (out === undefined) throw new Error(`unexpected ${roleOf(system)} call: ${model}`);
+    return out;
   };
 }
 
@@ -78,7 +108,14 @@ const PLAN_OK = JSON.stringify({
 
 describe('coordinator chain', () => {
   test('model slugs match the locked roster', () => {
-    expect(INTAKE_MODEL).toBe('dots-studio/dots-3-note-preview:free');
+    // INTAKE_MODEL was re-picked by measurement on 2026-10-01 after the old
+    // slug's free tier returned 429. See the record at the constant in
+    // coordinator.ts — including the part that matters most: the 429 is
+    // KEY-SCOPED (`free_model_daily_requests.remaining = 0`, one 50/day pool
+    // per key), so only two of sixteen free models answered at all, and this
+    // is one of them. Both slugs stay free.
+    expect(INTAKE_MODEL).toBe('thinkingmachines/inkling:free');
+    expect(INTAKE_MODEL.endsWith(':free')).toBe(true);
     expect(COORDINATOR_MODEL).toBe('thinkingmachines/inkling:free');
   });
 
@@ -90,7 +127,7 @@ describe('coordinator chain', () => {
     const never = new Promise<void>(() => undefined);
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
-      chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+      chat: chatFor({ intake: INTAKE_OK, plan: PLAN_OK }),
       speak: () => {
         speakStarted = true;
         return never;
@@ -116,7 +153,7 @@ describe('coordinator chain', () => {
     console.error = (...args: unknown[]): void => void errors.push(args[0]);
     try {
       const coordinator = new Coordinator({
-        chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+        chat: chatFor({ intake: INTAKE_OK, plan: PLAN_OK }),
         speak: async () => {
           throw new Error('fish down');
         },
@@ -148,7 +185,7 @@ describe('coordinator chain', () => {
     console.error = (...args: unknown[]): void => void errors.push(args[0]);
     try {
       const coordinator = new Coordinator({
-        chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+        chat: chatFor({ intake: INTAKE_OK, plan: PLAN_OK }),
         speak: async () => {
           throw new Error('fish 401 with sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
         },
@@ -177,7 +214,7 @@ describe('coordinator chain', () => {
     const coordinator = new Coordinator({
       chat: (model, system, user) => {
         systems.push(system);
-        return chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK })(model, system, user);
+        return chatFor({ intake: INTAKE_OK, plan: PLAN_OK })(model, system, user);
       },
       dispatch: async () => ({ receipt: 'r' }),
       activeSessionId: () => 'ses_a' as never,
@@ -202,7 +239,7 @@ describe('coordinator chain', () => {
     const coordinator = new Coordinator({
       chat: (model, system, user) => {
         systems.push(system);
-        return chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK })(model, system, user);
+        return chatFor({ intake: INTAKE_OK, plan: PLAN_OK })(model, system, user);
       },
       dispatch: async () => ({ receipt: 'r' }),
       activeSessionId: () => 'ses_a' as never,
@@ -216,7 +253,7 @@ describe('coordinator chain', () => {
     const order: string[] = [];
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
-      chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+      chat: chatFor({ intake: INTAKE_OK, plan: PLAN_OK }),
       speak: async (text) => void order.push(`speak:${text}`),
       dispatch: async (text) => {
         order.push('dispatch');
@@ -245,7 +282,7 @@ describe('coordinator chain', () => {
     let dispatched = 0;
     let spoken = 0;
     const coordinator = new Coordinator({
-      chat: chatFor({ [INTAKE_MODEL]: 'not json at all', [COORDINATOR_MODEL]: 'still not json' }),
+      chat: chatFor({ intake: 'not json at all', plan: 'still not json' }),
       speak: async () => void (spoken += 1),
       dispatch: async () => {
         dispatched += 1;
@@ -261,12 +298,12 @@ describe('coordinator chain', () => {
   });
 
   test('dots3 serves intake directly with reasoning suppression when healthy', async () => {
-    const calls: Array<{ model: string; options: unknown }> = [];
+    const calls: Array<{ model: string; options: unknown; system: string }> = [];
     const coordinator = new Coordinator({
       chat: async (model: string, system: string, user: string, options?: unknown) => {
         if (system.includes('addressee gate')) return gateReplyFor(system);
-        calls.push({ model, options });
-        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+        calls.push({ model, options, system });
+        return roleOf(system) === 'intake' ? INTAKE_OK : PLAN_OK;
       },
       dispatch: async () => ({ receipt: 'msg_d' }),
       activeSessionId: () => 'ses_a' as never,
@@ -275,8 +312,11 @@ describe('coordinator chain', () => {
     expect(result.ok).toBe(true);
     expect(result.intakeModel).toBe(INTAKE_MODEL);
     expect(result.receipt).toBe('msg_d');
+    // `system` is on the record only so the role-keyed helpers can be counted
+    // by role rather than by slug; it is not what this assertion is about.
     expect(calls[0]).toEqual({
       model: INTAKE_MODEL,
+      system: expect.any(String),
       options: { reasoning: { effort: 'none' }, maxTokens: 200, temperature: 0.2, timeoutMs: 10_000 },
     });
     // Coordinator stage runs with strict schema enforcement and a planning ceiling.
@@ -289,7 +329,7 @@ describe('coordinator chain', () => {
       options: { timeoutMs: 25_000, temperature: 0.2, maxTokens: 300 },
     });
     expect((planCall.options as { responseFormat: { type: string } }).responseFormat.type).toBe('json_schema');
-    expect(calls.filter((c) => c.model === INTAKE_MODEL)).toHaveLength(2);
+    expect(calls.filter((c) => roleOf(c.system) === 'intake')).toHaveLength(2);
   });
 
   test('a dead primary fails over to the fallback intake model', async () => {
@@ -338,7 +378,7 @@ describe('coordinator chain', () => {
       chat: async (model: string, system: string) => {
         systems.push(system);
         if (system.includes('addressee gate')) return gateReplyFor(system);
-        if (model === INTAKE_MODEL) return INTAKE_OK;
+        if (roleOf(system) === 'intake') return INTAKE_OK;
         plans += 1;
         return plans === 1 ? 'just some prose, no json here' : PLAN_OK;
       },
@@ -357,7 +397,7 @@ describe('coordinator chain', () => {
     const spoken: string[] = [];
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
-      chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: 'oops' }),
+      chat: chatFor({ intake: INTAKE_OK, plan: 'oops' }),
       speak: async (text) => void spoken.push(text),
       dispatch: async (text) => {
         dispatched.push(text);
@@ -378,7 +418,7 @@ describe('coordinator chain', () => {
     const evil = JSON.stringify({ steps: [{ id: 's1', kind: 'shell', detail: 'rm -rf build output' }] });
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
-      chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: evil }),
+      chat: chatFor({ intake: INTAKE_OK, plan: evil }),
       dispatch: async (text) => {
         dispatched.push(text);
         return { receipt: 'msg_z' };
@@ -411,7 +451,7 @@ describe('coordinator chain', () => {
   test('no active session returns the plan with a null receipt', async () => {
     let dispatched = 0;
     const coordinator = new Coordinator({
-      chat: chatFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK }),
+      chat: chatFor({ intake: INTAKE_OK, plan: PLAN_OK }),
       dispatch: async () => {
         dispatched += 1;
         return { receipt: 'x' };
@@ -444,7 +484,7 @@ describe('coordinator chain', () => {
 // SEPARATELY, which is what lets the daemon speak the ack while Inkling plans.
 describe('M2 Pattern 1 — coordinator split', () => {
   /** Records which model answered, so "did it reach the planner" is provable. */
-  function modelsFor(responses: Record<string, string>) {
+  function modelsFor(responses: RoleResponses) {
     const seen: string[] = [];
     const chat = async (model: string, system: string): Promise<string> => {
       // The Phase B gate is a third stage, not one of the two this test is
@@ -452,8 +492,8 @@ describe('M2 Pattern 1 — coordinator split', () => {
       // `seen` keeps meaning "the models intake and planning used".
       if (system.includes('addressee gate')) return gateReplyFor(system);
       seen.push(model);
-      const out = responses[model];
-      if (out === undefined) throw new Error(`unexpected model call: ${model}`);
+      const out = responses[roleOf(system)];
+      if (out === undefined) throw new Error(`unexpected ${roleOf(system)} call: ${model}`);
       return out;
     };
     return { seen, chat };
@@ -463,7 +503,7 @@ describe('M2 Pattern 1 — coordinator split', () => {
     // This is the latency claim in test form. Measured intake p50 is 901 ms and
     // plan p50 1950 ms; if intake touched the planner there would be nothing
     // to gain by splitting the method at all.
-    const { seen, chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK });
+    const { seen, chat } = modelsFor({ intake: INTAKE_OK, plan: PLAN_OK });
     const coordinator = new Coordinator({
       chat,
       dispatch: async () => ({ receipt: 'never' }),
@@ -482,7 +522,7 @@ describe('M2 Pattern 1 — coordinator split', () => {
   });
 
   test('plan never re-runs intake: it consumes the ack it is handed', async () => {
-    const { seen, chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK });
+    const { seen, chat } = modelsFor({ intake: INTAKE_OK, plan: PLAN_OK });
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
       chat,
@@ -544,7 +584,7 @@ describe('M2 Pattern 1 — coordinator split', () => {
           controller.abort();
           return gateReplyFor(system);
         }
-        if (model === INTAKE_MODEL) return INTAKE_OK;
+        if (roleOf(system) === 'intake') return INTAKE_OK;
         // The barge arrives while the 25 s planning call is in flight.
         controller.abort();
         return PLAN_OK;
@@ -570,7 +610,7 @@ describe('M2 Pattern 1 — coordinator split', () => {
   test('a signal already aborted on entry cancels without calling the planner', async () => {
     const controller = new AbortController();
     controller.abort();
-    const { seen, chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: PLAN_OK });
+    const { seen, chat } = modelsFor({ intake: INTAKE_OK, plan: PLAN_OK });
     const coordinator = new Coordinator({
       chat,
       dispatch: async () => ({ receipt: 'x' }),
@@ -589,7 +629,7 @@ describe('M2 Pattern 1 — coordinator split', () => {
     const destructive = JSON.stringify({
       steps: [{ id: 's1', kind: 'shell', detail: 'rm -rf /tmp/build' }],
     });
-    const { chat } = modelsFor({ [INTAKE_MODEL]: INTAKE_OK, [COORDINATOR_MODEL]: destructive });
+    const { chat } = modelsFor({ intake: INTAKE_OK, plan: destructive });
     const dispatched: string[] = [];
     const coordinator = new Coordinator({
       chat,
@@ -689,7 +729,7 @@ describe('M2 Pattern 6a — never assert results', () => {
     const coordinator = new Coordinator({
       chat: async (model, system, user, options) => {
         if (system.includes('addressee gate')) return gateReplyFor(system);
-        if (model === COORDINATOR_MODEL) return PLAN_OK;
+        if (roleOf(system) === 'plan') return PLAN_OK;
         return chat(model, system, user, options);
       },
       dispatch: async (text) => {
@@ -793,7 +833,7 @@ describe('gate transport budget', () => {
           seen = (options ?? {}) as { timeoutMs?: number };
           return gateReplyFor(system);
         }
-        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+        return roleOf(system) === 'intake' ? INTAKE_OK : PLAN_OK;
       },
       dispatch: async (text) => {
         dispatched.push(text);
@@ -831,7 +871,7 @@ describe('gate transport budget', () => {
           // Simulates the transport aborting at the new ceiling.
           throw Object.assign(new Error('brain exceeded 12.0s ceiling'), { name: 'AbortError' });
         }
-        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+        return roleOf(system) === 'intake' ? INTAKE_OK : PLAN_OK;
       },
       dispatch: async (text) => {
         dispatched.push(text);
@@ -867,7 +907,7 @@ describe('gate transport budget', () => {
     const coordinator = new Coordinator({
       chat: async (model, system) => {
         if (system.includes('addressee gate')) throw new Error('upstream 500');
-        return model === INTAKE_MODEL ? INTAKE_OK : PLAN_OK;
+        return roleOf(system) === 'intake' ? INTAKE_OK : PLAN_OK;
       },
       dispatch: async (text) => {
         dispatched.push(text);

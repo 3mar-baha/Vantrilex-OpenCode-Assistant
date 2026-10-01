@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 
 import { ADDRESSEE_RESPONSE_FORMAT, type AddresseeVerdict } from '../orchestrator/permission.js';
 import { OrchestratorError } from '../common/errors.js';
-import type { ChatFn } from '../orchestrator/coordinator.js';
+import { COORDINATOR_MODEL, INTAKE_MODEL, type ChatFn } from '../orchestrator/coordinator.js';
 import type { SessionId } from '../common/brands.js';
 import {
   HeadlessBrain,
@@ -250,6 +250,9 @@ describe('the instrumented chain, driven with no network and no key', () => {
     gate?: string | (() => string);
     plan?: string;
   }): ChatFn {
+    // Answers by SHAPE, not by model — the same rule `turn.ts` classifies by, and
+    // the reason it can: with two slots on one slug there is nothing else to key
+    // on. A fixture that switched on `model` could not tell these legs apart.
     return async (_model, _system, _user, options) => {
       if (options?.responseFormat === ADDRESSEE_RESPONSE_FORMAT) {
         return typeof replies.gate === 'function' ? replies.gate() : (replies.gate ?? '{}');
@@ -482,6 +485,89 @@ describe('the instrumented chain, driven with no network and no key', () => {
     const trace = await brain.turn('شوف لي الجلسات');
     expect(trace.dispatches).toHaveLength(0);
     expect(trace.gateVerdict).not.toBeNull();
+  });
+
+  test('the classifier reads SHAPE, so two slots sharing one slug still classify', async () => {
+    // THE POINT OF THE FIX. A quota outage put `INTAKE_MODEL` and
+    // `COORDINATOR_MODEL` on the same slug. The classifier used to compare
+    // `model`, so the intake branch swallowed every call, the coordinator branch
+    // was unreachable, `stage` could never be `'plan'`, and `lastPlanOf` found
+    // nothing — the report printed `approve.plan === null` for a plan the chain
+    // had actually built. That collision is the SHIPPED state, so the ordinary
+    // fixtures below already exercise it; this test states it explicitly and
+    // asserts the shape each leg is recognised by, so a future "simplification"
+    // back to a slug comparison fails here and names the reason.
+    // BOTH configurations, driven explicitly, so this keeps its meaning when an
+    // outage moves the slots apart again. Distinct is the historical layout;
+    // collided is what ships today.
+    const configurations: ReadonlyArray<readonly [string, string, string]> = [
+      ['distinct', 'vendor/intake:free', 'vendor/planner:free'],
+      ['collided', 'vendor/shared-slot:free', 'vendor/shared-slot:free'],
+    ];
+    for (const [label, intake, planner] of configurations) {
+      const brain = new HeadlessBrain({
+        intakeModel: intake,
+        coordinatorModel: planner,
+        fallbackModel: planner,
+        chat: fakeChat({
+          gate: JSON.stringify({ addressed: true, needs_opencode: false, decision: 'answer', ask_ar: '', approves_id: '', reason_en: 'q' }),
+        }),
+        activeSessionId: () => undefined,
+        dispatch: async () => ({ receipt: 'nope', state: 'running' }),
+      });
+      const trace = await brain.turn('شو رأيك؟');
+      const shape = trace.chatCalls.map((c) => `${c.stage}:${c.schema}`);
+      // Intake is schema-less with a budget; the gate carries the addressee schema.
+      // Both are recognised by shape alone, with no slug comparison involved.
+      expect(shape, label).toContain('intake:none');
+      expect(shape, label).toContain('gate:addressee');
+      expect(trace.chatCalls.filter((c) => c.stage === 'unclassified'), label).toHaveLength(0);
+    }
+    // The shipped constants are asserted to be the collided pair, so if an outage
+    // moves them apart the loop above still covers that case rather than the test
+    // quietly becoming weaker.
+    expect(INTAKE_MODEL).toBe(COORDINATOR_MODEL);
+  });
+
+  test('a plan call is classified `plan` even though the slots share a slug', async () => {
+    // The direct symptom: `lastPlanOf` scans for `stage === 'plan'`, so a plan the
+    // classifier cannot name is a plan the dispatch-failed path cannot recover.
+    // This drives the full ask-then-approve chain with a throwing dispatch, the
+    // exact path where the recovery matters, and asserts the plan survives.
+    const COLLIDED = 'vendor/shared-slot:free';
+    const holder: { brain: HeadlessBrain | null } = { brain: null };
+    const brain = new HeadlessBrain({
+      intakeModel: COLLIDED,
+      coordinatorModel: COLLIDED,
+      fallbackModel: COLLIDED,
+      chat: fakeChat({
+        gate: () =>
+          JSON.stringify({
+            addressed: true,
+            needs_opencode: true,
+            decision: holder.brain?.pendingPermission === null ? 'ask_permission' : 'approve',
+            ask_ar: holder.brain?.pendingPermission === null ? 'بدي أبعت للـ OpenCode؟' : '',
+            approves_id: holder.brain?.pendingPermission?.id ?? '',
+            reason_en: 'fixture',
+          }),
+      }),
+      activeSessionId: () => SES_1,
+      dispatch: async () => {
+        throw new OrchestratorError('SERVE_UNREACHABLE', true, 'session.prompt failed with HTTP 400');
+      },
+    });
+    holder.brain = brain;
+    await brain.turn('شوف لي الجلسات');
+    const approve = await brain.turn('اي هلا سويت');
+
+    expect(approve.chatCalls.filter((c) => c.stage === 'plan'), 'the plan leg was classified').not.toHaveLength(0);
+    // One slug for every leg: proof the classification came from the request
+    // shape, not from which model happened to be named.
+    expect(approve.chatCalls.every((c) => c.model === COLLIDED), 'the fixture really did collide the slots').toBe(true);
+    expect(approve.chatCalls.filter((c) => c.stage === 'unclassified')).toHaveLength(0);
+    expect(new Set(approve.chatCalls.map((c) => c.stage)).size, 'several distinct stages from one slug').toBeGreaterThanOrEqual(3);
+    expect(approve.plan?.steps, 'recovered from the ledger through PlanSchema').toHaveLength(1);
+    expect(approve.result.plan?.steps).toHaveLength(1);
   });
 
   test('the stage classifier reads the product\'s own schema object, not a prompt', async () => {

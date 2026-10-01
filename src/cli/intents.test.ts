@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
-import { COORDINATOR_MODEL, GATE_TIMEOUT_MS, INTAKE_MODEL, type ChatFn, type ChatOptions } from '../orchestrator/coordinator.js';
+import {
+  COORDINATOR_MODEL,
+  Coordinator,
+  GATE_TIMEOUT_MS,
+  INTAKE_MODEL,
+  type ChatFn,
+  type ChatOptions,
+} from '../orchestrator/coordinator.js';
 import { ADDRESSEE_CHAT_OPTIONS, ADDRESSEE_RESPONSE_FORMAT, PERMISSION_TTL_MS, addresseeSystem } from '../orchestrator/permission.js';
 import { INTENT_CASES, probePermissionSlot, replayGateChat, runIntentTable, structuralFaultsOf, type IntentRow } from './intents.js';
 
@@ -218,10 +225,70 @@ describe('PermissionSlot, through its own methods', () => {
     expect(probePermissionSlot('p', 't', PERMISSION_TTL_MS).ttlMs).toBe(30_000);
   });
 
-  test('the intake model constant is the shipped one', () => {
+  test('the intake model constant is the shipped one', async () => {
     // Pinned because the table's accuracy figures are only meaningful against the
     // models the product actually routes to.
-    expect(INTAKE_MODEL).toBe('dots-studio/dots-3-note-preview:free');
-    expect(COORDINATOR_MODEL).toBe('thinkingmachines/inkling:free');
+    //
+    // The property asserted is the CONTRACT, not a literal slug. This test used to
+    // hard-code `dots-studio/dots-3-note-preview:free` and went red the day a quota
+    // outage moved `INTAKE_MODEL` onto `thinkingmachines/inkling:free` — a test
+    // that must be hand-edited every time a slot is swapped measures the edit, not
+    // the product. Two things stay true across a swap: both slots are free-tier
+    // `:free` slugs, and the REAL chain routes intake to `INTAKE_MODEL` and the
+    // plan to `COORDINATOR_MODEL`. The second half is measured by running
+    // `Coordinator` with a spy `chat`, so it fails if a call site stops honouring
+    // its slot rather than merely if the slug text changes.
+    expect(INTAKE_MODEL).toMatch(/^[\w.-]+\/[\w.:-]+:free$/);
+    expect(COORDINATOR_MODEL).toMatch(/^[\w.-]+\/[\w.:-]+:free$/);
+
+    const seen: Array<{ model: string; hasSchema: boolean; hasOptions: boolean }> = [];
+    const holder: { coordinator: Coordinator | null } = { coordinator: null };
+    const chat: ChatFn = async (model, _system, _user, options) => {
+      seen.push({ model, hasSchema: options?.responseFormat !== undefined, hasOptions: options !== undefined });
+      // Identity against the imported const, exactly as `turn.ts` does it — two
+      // of the three legs here carry a schema, so "has one" is not enough to tell
+      // the gate from the plan.
+      if (options?.responseFormat === ADDRESSEE_RESPONSE_FORMAT) {
+        const pending = holder.coordinator?.pendingPermission ?? null;
+        return JSON.stringify({
+          addressed: true,
+          needs_opencode: true,
+          decision: pending === null ? 'ask_permission' : 'approve',
+          ask_ar: pending === null ? 'نمشي؟' : '',
+          approves_id: pending?.id ?? '',
+          reason_en: 'fixture',
+        });
+      }
+      return options?.responseFormat !== undefined
+        ? '{"steps":[{"id":"s1","kind":"prompt","detail":"d"}]}'
+        : '{"reply_ar":"تمام","task_en":"do the thing"}';
+    };
+    const coordinator = new Coordinator({
+      chat,
+      dispatch: async () => ({ receipt: 'msg_never' }),
+      activeSessionId: () => undefined,
+    });
+    holder.coordinator = coordinator;
+
+    // `intake()` is the leg `INTAKE_MODEL` names; `plan()` is the leg
+    // `COORDINATOR_MODEL` names. Both are the product's own methods, so a call
+    // site that stops honouring its slot fails here rather than passing on a
+    // slug that happens to match.
+    const ack = await coordinator.intake('شوف لي الجلسات');
+    expect(ack.ok, ack.detail ?? '').toBe(true);
+    expect(ack.intakeModel, 'the ack records which slot served intake').toBe(INTAKE_MODEL);
+    expect(seen, 'intake is exactly one schema-less call, with a budget').toEqual([
+      { model: INTAKE_MODEL, hasSchema: false, hasOptions: true },
+    ]);
+
+    // The gate stops the plan on `answer`, so the plan leg is only reachable
+    // through the permission dance: turn one asks, turn two approves by id.
+    const asked = await coordinator.plan(ack);
+    expect(asked.needsPermission, asked.detail ?? '').toBe(true);
+    const approved = await coordinator.plan(ack);
+    expect(approved.plan?.steps, approved.detail ?? '').toHaveLength(1);
+    const planCall = seen[seen.length - 1];
+    expect(planCall?.model, 'the plan leg routes to the coordinator slot').toBe(COORDINATOR_MODEL);
+    expect(planCall?.hasSchema, 'and the plan leg is the one carrying a schema').toBe(true);
   });
 });

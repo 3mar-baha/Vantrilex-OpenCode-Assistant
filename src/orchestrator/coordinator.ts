@@ -28,7 +28,92 @@ import {
 // prompt-only) — so PLAN_RESPONSE_FORMAT is load-bearing, not decorative.
 // "Nemotron" survives in the handoff envelope only as the coordinator role
 // name defined by the mission-handoff skill contract, not as a model slug.
-export const INTAKE_MODEL = 'dots-studio/dots-3-note-preview:free';
+//
+// INTAKE MODEL — MEASURED REPLACEMENT 2026-10-01.
+//
+// WHY dots-3 WENT, AND WHY THE OBVIOUS FIX WAS WRONG. The reported symptom was
+// HTTP 429 and the model was not the cause. `GET /api/v1/key` on this key says:
+//     is_free_tier: true, total_credits: 0,
+//     free_model_daily_requests: { used: 72, limit: 50, remaining: 0 }
+// OpenRouter's free tier is ONE 50-requests-per-day pool PER KEY, shared by
+// every ':free' model, and the 429 body names it outright — "Rate limit
+// exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model
+// requests per day", with X-RateLimit-Remaining: 0 and
+// X-RateLimit-Reset: 1790899200000 (2026-10-02T00:00:00Z). A burst probe made
+// the scope unambiguous in one run: dots-3 answered 200 x8 then 429 x4
+// mid-burst, and the model probed immediately after it returned 429 x12. THE
+// LIMIT IS KEY-SCOPED, NOT MODEL-SCOPED, so "swap to another :free model" is
+// not a fix by itself.
+//
+// A SWEEP OF ALL 16 FREE MODELS, one real call each, in this exact production
+// request shape, at remaining=0:
+//   200 VALID clean ....... thinkingmachines/inkling:free      863ms
+//   200 VALID clean ....... thinkingmachines/inkling-small:free 707ms
+//   429 free-models-per-day  nvidia/nemotron-3-super-120b-a12b, dots-3,
+//                            gemma-4-31b-it, gemma-4-26b-a4b-it,
+//                            nemotron-3-ultra-550b, nemotron-3.5-lightning,
+//                            nemotron-3-nano-omni, nemotron-3.5-content-safety,
+//                            qwen3.8-27b, ling-3.0-flash-sante,
+//                            north-mini-code, laguna-xs-2.1, laguna-s-2.1
+//   400 ................... liquid/lfm-2.5-2.6b ("Reasoning is mandatory for
+//                            this endpoint and cannot be disabled")
+// `used` stayed at 72 across the whole sweep, so the two Thinking Machines
+// models are not drawing on the daily pool while the other fourteen are.
+// `google/gemma-4-31b-it:free` — offered to me as an example — is 429 0/3. It
+// would have reproduced the outage under a new slug. The `:free` flag means
+// zero-cost, not zero-quota.
+//
+// WHY inkling. It is one of only two models measured to answer at all, and the
+// better-measured of the two. Intake reliability, production option set
+// ({effort:'none'}, maxTokens 200, temp 0.2, 10 s AbortController), 12 distinct
+// real Arabic utterances: 12/12 schema-valid, p50 743 ms, max 1986 ms,
+// 0/12 CJK, 0/12 other non-Arabic script, finish_reason 'stop' every time.
+//
+// REASONING — CONFIRMED, NOT ASSUMED, and this is the load-bearing claim.
+// inkling IS a reasoning model, so the brief's warning applies to it. The
+// confirmation is a controlled comparison in one session, same model, same
+// prompt, only the reasoning parameter differing: with no `reasoning` field the
+// response reports completion_tokens_details.reasoning_tokens = 338; with
+// `reasoning: {effort:'none'}` it reports 0 on every one of the 12 calls, with
+// 37-60 completion tokens and finish_reason 'stop'. The budget is not being
+// eaten, so content:null — the failure that cost this project an incident — is
+// absent. The contrast cases are the same evidence from the other side:
+// lfm-2.5-2.6b rejects effort:none outright with HTTP 400, and
+// nemotron-3-ultra-550b-a55b (same family, same effort:none) returned
+// content:null 1-in-3 before the quota died.
+//
+// WHY NOT nemotron-3-super-120b-a12b, WHICH MEASURED BEST ON QUALITY. Before
+// the pool hit 0 it was 8/8 valid, p50 331 ms, max 412 ms, 0/8 CJK — the best
+// quality and latency of anything measured, and the model this constant
+// carried for an hour. It is not the answer because it is 429 today and stays
+// 429 until 2026-10-02T00:00:00Z. Shipping the best model that cannot run is
+// not unblocking a stage. If the daily budget is ever funded, this is the
+// measured first choice and the note should be revisited.
+//
+// THE TRADEOFF, STATED PLAINLY. Two real costs, neither hidden:
+//  (1) INTAKE_MODEL now equals COORDINATOR_MODEL, so the intake failover at
+//      `for (const model of [intakeModel, fallbackModel])` calls the SAME model
+//      twice and buys no diversity. Intake only reaches the fallback on a hard
+//      primary failure, and the fallback runs with brain.ts DEFAULTS
+//      (maxTokens 300, NO effort:'none'), which is the one configuration
+//      measured to truncate: that path returned HTTP 200 with
+//      extractJson()=null and surfaced as `intake-invalid` during this work.
+//      So the failover is a weak backstop, not a real one. Fixing it means
+//      giving intake a distinct fallback constant, which is outside this
+//      change's write set.
+//  (2) inkling's latency has a tail: 1 of 13 calls exceeded the 10 s ceiling
+//      while the same utterance completed in 796 ms on a later call. The
+//      10 s budget absorbs that as `intake-failed` and the turn still fails
+//      closed, so this is a reliability cost, not a correctness one.
+//
+// dots-3 was disqualified on contamination, not latency — 3 of 8 lines the user
+// would HEAR were polluted: "فهمت، سأحذف太平洋 dist فورًا و أ})" (Han), "بIni شغل
+// البناء" (Latin glued mid-word), and one reply_ar that came back entirely in
+// English. north-mini-code parses cleanly but fabricates ("Load package.json
+// and compress its contents" for an ask to summarise it; "تم حذف مجلد dist
+// بنجاح" for work that had not run) — the outcome-claim class
+// `claimsOutcome()` exists to catch, and north-mini emits it 3-in-8.
+export const INTAKE_MODEL = 'thinkingmachines/inkling:free';
 export const COORDINATOR_MODEL = 'thinkingmachines/inkling:free';
 
 /**

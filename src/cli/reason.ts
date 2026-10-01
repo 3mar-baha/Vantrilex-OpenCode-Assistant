@@ -75,12 +75,38 @@ function brainChat(): ChatFn {
  */
 const APPROVAL_UTTERANCE = 'اي هلا سويت، كمّل';
 
+/**
+ * The model that actually split the utterance, or an honest "did not run".
+ *
+ * Read off the ack the chain produced, never a slug typed here. The old heading
+ * said `Dots3` unconditionally, which became a false label the day a quota
+ * outage moved the intake slot onto another slug: the report named a model that
+ * never ran. A display that lies about which model served is worse than one that
+ * prints nothing, so the constant lives in `coordinator.ts` and this file never
+ * restates it. On a failed intake no model served, and `intakeModel` is absent.
+ */
+function intakerOf(trace: TurnTrace): string {
+  return trace.ack.intakeModel ?? '(no intake model — intake did not produce an ack)';
+}
+
+/**
+ * The model that actually built the plan, or an honest "did not run".
+ *
+ * Same rule as `intakerOf`: read off the ledger rows the chain recorded. The old
+ * heading said `Inkling` unconditionally, which was false on every turn where the
+ * plan never happened and on every turn where another model built it.
+ */
+function plannerOf(trace: TurnTrace): string {
+  const call = trace.chatCalls.filter((c) => c.stage === 'plan').at(-1);
+  return call?.model ?? '(no plan call — nothing decomposed the task)';
+}
+
 /** Print one turn's trace. Every field names the module behind it. */
 function printTurn(trace: TurnTrace, label: string): void {
   out.heading(`${label} — "${out.clip(trace.text, 90)}"`);
   out.field('turn wall clock', `${trace.ms} ms`);
 
-  out.heading('STAGE 1 · INTAKE — Dots3 splits the utterance');
+  out.heading(`STAGE 1 · INTAKE — ${intakerOf(trace)} splits the utterance`);
   out.source('src/orchestrator/coordinator.ts', 'Coordinator.intake()');
   out.field('ok', String(trace.ack.ok));
   if (trace.ack.ok) {
@@ -130,7 +156,7 @@ function printTurn(trace: TurnTrace, label: string): void {
     out.field('gate asked', 'no');
   }
 
-  out.heading('STAGE 3 · PLAN — Inkling decomposes the task');
+  out.heading(`STAGE 3 · PLAN — ${plannerOf(trace)} decomposes the task`);
   out.source('src/orchestrator/coordinator.ts', 'Coordinator.plan() → PlanSchema');
   if (trace.plan === null) {
     const why = trace.result.detail ?? 'no plan';
