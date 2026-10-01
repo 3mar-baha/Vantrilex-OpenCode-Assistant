@@ -1,0 +1,11 @@
+{
+  "name": "voxaura-sidecar",
+  "private": true,
+  "version": "0.8.2",
+  "type": "module",
+  "dependencies": {
+    "groq-sdk": "0.9.1",
+    "lru-cache": "11.5.3",
+    "zod": "3.25.76"
+  }
+}
