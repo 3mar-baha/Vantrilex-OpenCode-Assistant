@@ -34,6 +34,12 @@ import { join, resolve, dirname } from 'node:path';
 const DOC_ROOT = process.env.DOCS_VERIFY_ROOT ?? process.cwd();
 const ROOT = process.cwd();
 const results = [];
+// Per-suite ceiling detail for the section printed after the table. The table
+// cell is CLAMPED (see CELL below), so a 14-entry list cannot fit in it and a
+// clamped list is a list a reader cannot check. The full enumeration is printed
+// unclamped, which is what makes "which declared reasons were active in this
+// run" answerable rather than asserted.
+const skipCeilingReport = [];
 const add = (name, documented, derived, status) => results.push({ name, documented, derived, status });
 const fail = (name, doc, der) => add(name, doc, der, 'FAIL');
 const pass = (name, doc, der) => add(name, doc, der, 'ok');
@@ -224,6 +230,8 @@ function vitestCounts(cwd, include) {
       files: null,
       collectError: false,
       problem: `vitest exited ${exit} and wrote no parsable JSON to stdout (${body.length} bytes)`,
+      filesList: [],
+      skipDetail: [],
     };
   }
   // `numTotalTests` is authoritative and already accounts for `test.each`
@@ -243,13 +251,27 @@ function vitestCounts(cwd, include) {
     files: Array.isArray(json.testResults) ? json.testResults.length : null,
     passed: json.numPassedTests ?? null,
     failed: json.numFailedTests ?? null,
-    // `numPendingTests` is vitest's name for a skipped test, and it is the
-    // field the documented `+ N skipped` figure is compared against. The root
-    // suite's single skip is `src/daemon.test.ts:1216`,
-    // `test.skipIf(process.platform === 'win32')`, which is permanent on this
-    // platform by design: `ensureIpcToken` refuses to generate where a 0600
-    // mode is a no-op, because the Rust supervisor provisions that path with a
-    // protected DACL instead.
+    // `numTotalTests` IS the documented figure, and it is the only stable one.
+    //
+    // MEASURED 2026-10-01 at 6a90518, the same commit, the same 671 tracked
+    // files and a junctioned `node_modules` on both sides:
+    //
+    //   working tree : 1595 passed |  1 skipped  (1596 total)
+    //   clean clone  : 1583 passed | 13 skipped  (1596 total)
+    //
+    // The TOTAL agrees and the pass/skip split does not, because which
+    // `test.runIf` prerequisites are satisfied is a property of the artifacts on
+    // the disk, not of the tree. A count that changes because `dist/` exists is
+    // a machine property, so the claim is `numTotalTests` and the skip figure
+    // became the NAMED CEILING below. Comparing the document's first number to
+    // `numPassedTests` — which is what this did — cannot be satisfied by any
+    // single figure: the working tree already read 1594 against a derived 1595
+    // at this commit, and a clean clone reads 1583.
+    //
+    // What `numTotalTests` buys is closure in BOTH directions, which is why the
+    // ceiling's one declared entry is safe: a test appearing or disappearing
+    // moves the total, and a skip guard that stops skipping here moves the total
+    // the other way. Neither can be absorbed by a ceiling.
     //
     // The figure does not move with serve liveness, STRUCTURALLY rather than
     // by measurement: `vitest.config.ts` negates `src/**/*.live.test.ts` out
@@ -262,6 +284,37 @@ function vitestCounts(cwd, include) {
     // `numPendingTests` is NOT measured here and is not assumed.
     skipped: json.numPendingTests ?? null,
     todos: json.numTodoTests ?? 0,
+    // The files the run ACTUALLY collected, and the per-assertion skip detail.
+    //
+    // WHY THE COLLECTED SET COMES FROM THE REPORTER AND NOT A SECOND COPY OF
+    // `vitest.config.ts`'s GLOBS. A hand-written include list here would be a
+    // claim that goes stale the moment a glob is edited, and it would go stale in
+    // the dangerous direction: a `runIf` in a file this script stopped scanning
+    // would leave the ceiling untouched AND unaccounted, so the run would report
+    // one fewer permitted entry than the file actually contains. Reading the
+    // set from the reporter cannot drift, and it is the same set the ceiling has
+    // to reason about — a `runIf` in a file vitest never collects cannot produce
+    // a skip, so exempting it is correct rather than lax.
+    filesList: Array.isArray(json.testResults)
+      ? json.testResults.map((t) => t?.name).filter((n) => typeof n === 'string')
+      : [],
+    // Per-assertion `status: 'skipped'` is the ONLY way to tell WHICH guard
+    // produced a skip. `numPendingTests` is a bare integer: 1 in the working
+    // tree and 13 in a clean clone are the same field with the same meaning, and
+    // no integer can say which of the declared prerequisites was satisfied. A
+    // ceiling a reader cannot resolve is the "13, none of which I can account
+    // for" case, so the detail is parsed and matched by (file, title) against
+    // the declared entries.
+    skipDetail: Array.isArray(json.testResults)
+      ? json.testResults.flatMap((t) =>
+          (Array.isArray(t?.assertionResults) ? t.assertionResults : [])
+            .filter((a) => a?.status === 'skipped')
+            .map((a) => ({
+              file: typeof t?.name === 'string' ? t.name : '',
+              title: typeof a?.title === 'string' ? a.title : '',
+            })),
+        )
+      : [],
     collectError,
     problem: collectError ? collectErrorReason(json) : null,
   };
@@ -281,24 +334,345 @@ function countsLine(c) {
   return `${c.failed} failed / ${c.skipped} skipped${todo} / ${c.tests} total`;
 }
 
+// ── the declared skip ceiling ────────────────────────────────────────────────
+//
+// WHY A CEILING AND NOT AN EQUALITY. The measured problem, at 6a90518, same
+// commit, same 671 tracked files, `node_modules` junctioned on both sides:
+//
+//   working tree : 1595 passed |  1 skipped  (1596 total)
+//   clean clone  : 1583 passed | 13 skipped  (1596 total)
+//
+// `numPendingTests` was the claim and it is a function of which gitignored
+// artifacts exist on the disk: 12 of the 13 `test.runIf` sites in this tree
+// declare a prerequisite that a clean checkout does not have, and one of the 13
+// declares a prerequisite that a clean checkout DOES have (the installed app's
+// runtime dir, which lives in the user's profile and travels with the machine
+// rather than the repository). An equality therefore had no satisfiable value
+// that was true of both, which is why this commit was red before the change
+// below and green after it.
+//
+// So the ceiling is a set of NAMED entries, each one a guard that can turn a
+// test into a skip without deleting it:
+//
+//   1 declared platform guard   `test.skipIf(process.platform === 'win32')`
+//   + one entry per `test.runIf` site in a file the run actually collected
+//
+// and the document states the CARDINALITY of that set. That is the checked
+// claim: the number in AGENTS.md is compared against the number of named
+// entries derived here, so adding a `runIf` without raising the ceiling is a
+// visible failure, and removing one is too. Neither direction is silent.
+//
+// WHAT A CEILING IS NOT. It is not a licence to skip. Two checks sit on top of
+// it and both fail the run:
+//
+//   - the ceiling HOLDS: `observed <= permitted`. A suite that gains a skip
+//     beyond the ceiling goes red.
+//   - every observed skip is ACCOUNTED FOR by a named entry, matched on
+//     (file, title). A `test.skip(...)` with no declared guard is an
+//     unaccounted skip and goes red, even though it is inside the ceiling —
+//     which is the "13, none of which I can account for" case made fatal.
+//
+// The report also names which declared entries were ACTIVE, so a reader can
+// tell "13 of 13 permitted" from "13, none of which I can account for".
+
+/**
+ * The declared (NOT derived) skip guards, each located by a literal condition.
+ *
+ * WHY ONE ENTRY IS DECLARED WHILE THE OTHER THIRTEEN ARE DERIVED. A
+ * `test.runIf` site is a syntactic fact: the call is in the file or it is not.
+ * A `test.skipIf` guard's condition is an arbitrary expression —
+ * `process.platform === 'win32'`, `isWin32()`, `!(a && b)` — and no text scan can
+ * evaluate it. Scanning for the substring `process.platform` would also match
+ * the ACTIVE half of the pair, because this same file declares
+ * `test.skipIf(process.platform !== 'win32')` (`src/daemon.test.ts:858`), which
+ * RUNS on this platform and skips nothing. Counting it would inflate the ceiling
+ * by one on every platform, which is the failure mode a ceiling exists to
+ * prevent.
+ *
+ * So this entry is declared and NAMED, and it is located by its literal
+ * condition rather than by a line number, so a line shift in the file does not
+ * silently relocate it. If the declared literal cannot be found, the claim FAILS
+ * and says which file and which literal — the alternative is a ceiling that
+ * quietly loses an entry and permits one more unexplained skip, which is the
+ * hole the "must fail when the observed skip count exceeds it" requirement is
+ * about.
+ *
+ * DECLARING ONE BOUND DOES NOT WEAKEN THE CHECK, and the two-sided pinning is
+ * the argument:
+ *
+ *   - delete the guard      → one entry and one test both disappear, so the
+ *                             ceiling cardinality and the total BOTH fall and
+ *                             both are compared against the document. Red twice.
+ *   - change the condition so it stops skipping here
+ *                           → the guard becomes an ordinary passing test, so the
+ *                             total RISES by one. Red.
+ *
+ * The total claim is what makes the second case catchable, and it is the reason
+ * the ruling moved the test-count claim off `numPassedTests` onto
+ * `numTotalTests`: a total is the only figure in the reporter that moves when a
+ * test appears or disappears for ANY reason.
+ */
+const DECLARED_SKIP_GUARDS = [
+  {
+    kind: 'platform',
+    file: 'src/daemon.test.ts',
+    guard: 'test.skipIf',
+    condition: "process.platform === 'win32'",
+    // BREAK-PROBE TARGET, and the probe is a DOCUMENT edit, not a source edit:
+    // this is the only string in the file a reader would change to move the
+    // ceiling, so it is the string worth breaking. Changing it makes the entry
+    // unlocatable (nothing matches the literal) rather than silently relocating
+    // it, which is the property that lets a stale `file:line` be avoided.
+    why: 'permanent by design — ensureIpcToken refuses to generate where a 0600 mode is a Windows no-op, because the Rust supervisor provisions that path with a protected DACL instead',
+  },
+];
+
+/**
+ * Repo-relative, forward-slashed, lower-cased path key.
+ *
+ * ONE normaliser for BOTH sides of every match. The reporter emits
+ * `O:/opencode-Vantrilex/src/daemon.test.ts` with forward slashes, while
+ * `process.cwd()` on this platform is `O:\opencode-Vantrilex` with backslashes,
+ * so a `path.replace(ROOT, '')` keyed on the raw value is a silent no-op and the
+ * two sides of a (file, title) match never agree. The existing display-only uses
+ * of that replace are unaffected either way; a MATCH cannot afford to be.
+ */
+const rootSlash = resolve(ROOT).replace(/\\/g, '/').toLowerCase();
+const fileKey = (p) =>
+  p
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .replace(rootSlash + '/', '');
+
+/**
+ * Index of the `)` that closes the `(` at `openIdx`, skipping string literals
+ * and `//` comments. -1 if the file ends unbalanced.
+ *
+ * WHY NOT A REGEX. The guard's own argument is an expression containing nested
+ * calls, quoted strings and commas —
+ * `existsSync(join(resolve('apps/desktop/src-tauri/sidecar'), 'dist/cli.js'))` —
+ * so the only way to find where the guard call ends is to count parentheses.
+ * Widening a regex until a real prerequisite fits is the alternative this file
+ * has already paid for once, in the `describe.skipIf` derivation.
+ */
+function matchParen(source, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      for (i += 1; i < source.length; i += 1) {
+        if (source[i] === '\\') { i += 1; continue; }
+        if (source[i] === ch) break;
+      }
+      continue;
+    }
+    // A `//` comment can hold a paren. Skipping it is not defensive: a comment
+    // above a guard that mentions `test.runIf(x)` is a plausible edit, and
+    // counting its parens would desynchronise every site after it.
+    if (ch === '/' && source[i + 1] === '/') {
+      const nl = source.indexOf('\n', i);
+      if (nl < 0) return -1;
+      i = nl;
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Every `test.<guard>(<condition>)(<title>` site in a source file.
+ *
+ * The title is read as the FIRST string literal after the guard call's closing
+ * paren, which is the test's own name and therefore the exact string the JSON
+ * reporter echoes back in `assertionResults[].title`. Matching on the reporter's
+ * own `title` rather than on `fullName` avoids re-deriving the enclosing
+ * `describe` titles — a second derivation of the test tree, which would be a
+ * third place for a rename to go unnoticed. MEASURED 2026-10-01 on a probe
+ * carrying a `runIf`, a `skipIf` on each side of a platform test and a `test.skip`:
+ * `ancestorTitles: ['W19 the real shipped payload']`, `title: 'a skipped named
+ * block A'`, `status: 'skipped'`, and `numPendingTests: 1`.
+ *
+ * A site whose shape does not parse is DROPPED here and reported as a problem by
+ * `declaredSkipEntries`, which fails the claim. Dropping it silently would
+ * shrink the ceiling, which is the one direction that must never happen
+ * quietly.
+ */
+function guardedTestSites(source, guard) {
+  const needle = guard + '(';
+  const out = [];
+  for (let i = source.indexOf(needle); i >= 0; i = source.indexOf(needle, i + 1)) {
+    const condStart = i + needle.length;
+    const condEnd = matchParen(source, condStart - 1);
+    if (condEnd < 0) continue;
+    const condition = source.slice(condStart, condEnd).replace(/\s+/g, ' ').trim();
+    let k = condEnd + 1;
+    while (k < source.length && /\s/.test(source[k])) k += 1;
+    if (source[k] !== '(') continue;
+    let t = k + 1;
+    while (t < source.length && /\s/.test(source[t])) t += 1;
+    const quote = source[t];
+    if (quote !== "'" && quote !== '"' && quote !== '`') continue;
+    const titleEnd = source.indexOf(quote, t + 1);
+    if (titleEnd < 0) continue;
+    out.push({
+      line: source.slice(0, i).split('\n').length,
+      condition,
+      title: source.slice(t + 1, titleEnd),
+    });
+  }
+  return out;
+}
+
+/**
+ * The ceiling: every named entry a skip in this suite is allowed to be.
+ *
+ * `problems` is non-empty when an entry could not be established, and a problem
+ * FAILS the claim rather than reducing the count. That is the deliberate
+ * direction: a ceiling that shrinks on a parse failure permits skips nobody
+ * declared, which is the whole defect class this file is about.
+ */
+function declaredSkipEntries(filesList) {
+  const entries = [];
+  const problems = [];
+  for (const d of DECLARED_SKIP_GUARDS) {
+    const p = join(ROOT, d.file);
+    if (!existsSync(p)) {
+      problems.push(`declared guard: ${d.file} does not exist`);
+      continue;
+    }
+    const sites = guardedTestSites(readFileSync(p, 'utf8'), d.guard).filter(
+      (s) => s.condition === d.condition,
+    );
+    if (sites.length === 0) {
+      problems.push(`declared guard: no ${d.guard}(${d.condition}) in ${d.file}`);
+      continue;
+    }
+    if (sites.length > 1) {
+      problems.push(
+        `declared guard: ${sites.length} sites match ${d.guard}(${d.condition}) in ${d.file} ` +
+          `(lines ${sites.map((s) => s.line).join(', ')}) — a ceiling entry must name ONE test`,
+      );
+      continue;
+    }
+    entries.push({
+      kind: d.kind,
+      file: d.file,
+      line: sites[0].line,
+      title: sites[0].title,
+      condition: d.condition,
+      why: d.why,
+    });
+  }
+  for (const f of filesList) {
+    const src = readFileSync(f, 'utf8');
+    for (const s of guardedTestSites(src, 'test.runIf')) {
+      entries.push({
+        kind: 'runIf',
+        file: fileKey(f),
+        line: s.line,
+        title: s.title,
+        condition: s.condition,
+        why: null,
+      });
+    }
+  }
+  // A (file, line) collision means the same call site was counted twice — only
+  // reachable if a declared guard were itself `test.runIf`. Reported, not
+  // deduplicated: a ceiling whose cardinality depends on an unstated
+  // precedence rule is a ceiling nobody can review.
+  const seen = new Map();
+  for (const e of entries) {
+    const k = `${e.file}:${e.line}`;
+    if (seen.has(k)) problems.push(`duplicate skip-guard site counted twice — ${k}`);
+    else seen.set(k, e);
+  }
+  return { entries, problems };
+}
+
+/**
+ * Compare one run's skips against the named ceiling.
+ *
+ * `unaccounted` is the load-bearing output and it is a FAILURE, not a note: a
+ * skip the ceiling permits but cannot name is a guard nobody declared, which is
+ * the "coverage that reads as present while being absent" shape. A plain
+ * `test.skip(...)` lands here — MEASURED, it reports identically to a
+ * `runIf`-guarded skip (`status: 'skipped'`, counted in `numPendingTests`) and
+ * differs only in that no declared entry matches its (file, title).
+ */
+function skipCeilingVerdict(entries, counts) {
+  const permitted = new Map(entries.map((e) => [`${e.file}\u0000${e.title}`, e]));
+  const activeKeys = new Set();
+  const unaccounted = [];
+  for (const s of counts.skipDetail) {
+    const k = `${fileKey(s.file)}\u0000${s.title}`;
+    if (permitted.has(k)) activeKeys.add(k);
+    else unaccounted.push({ ...s, file: fileKey(s.file) });
+  }
+  // STANDING RULE, the one that matters here: a set-based "all observed are
+  // permitted" is vacuously true over an EMPTY declared set, and an empty
+  // derived set is exactly what a broken scanner produces. `entries.length` is
+  // therefore asserted by the caller and the caller fails on zero, and the
+  // vacuous-true shape is additionally blocked by requiring that a run with
+  // skips has at least one active entry.
+  return {
+    observed: counts.skipped,
+    permitted: entries.length,
+    active: entries.filter((e) => activeKeys.has(`${e.file}\u0000${e.title}`)),
+    unaccounted,
+  };
+}
+
 /**
  * Report one suite's claims. Shared by the root and desktop blocks so the two
  * cannot drift apart again — they are the same check, and the copy that made
  * "some failing" appear once already cost a rewrite.
  *
- * The documented form is `root **N passed + M skipped** (F files)`. BOTH
- * numbers are checked against the reporter's own fields, separately:
- * `numPassedTests` and `numPendingTests`. The previous check compared the
- * document's first number to `numTotalTests`, which counts a skip as a test, so
- * a truthful skip count made the figure unresolvable and the only spelling that
- * parsed was the one that hid the skip.
+ * The documented form is `root **N total** (F files)` — the TOTAL, against
+ * `numTotalTests`. `numPassedTests` is the field the document's first number was
+ * compared against before the ceiling change, and that is the field which is a
+ * function of the machine: at 6a90518 the same commit reads 1595 passed with
+ * `dist/` present and 1583 in a clean clone. `numTotalTests` reads 1596 in both.
+ * The total is the only figure in the reporter that moves when a test appears or
+ * disappears for ANY reason, which is what lets it carry the closure argument
+ * the ceiling's one declared entry depends on.
+ *
+ * The desktop suite stays on `numPassedTests`, DELIBERATELY and not by
+ * oversight. Its skip count is a measured, machine-stable 0 — the desktop tree
+ * declares no `runIf`, `skipIf`, `skip` or `todo` — so the two metrics coincide
+ * today and switching it would change no verdict. It is a separate decision,
+ * because the day a desktop guard is added the passed/total distinction starts
+ * to bite there, and that change should be made against a measurement rather
+ * than smuggled in here.
  *
  * The skip count is a CLAIM, not decoration: deleting it turns this into a
  * no-op that still exits 0, which is the failure mode UNVERIFIED-as-error
  * exists to prevent. A suite with a todo cannot be written in this form, which
  * is stated rather than papered over — `countsLine` surfaces the todo count.
  */
-function reportSuite({ counts, countRe, filesRe, runLabel, testsLabel, skippedLabel, filesLabel }) {
+// `doc` is a parameter, not the closed-over `agents`, so `docs-verify-self-test`
+// can drive this whole path against a synthetic document. That is the difference
+// between a self-test of the arithmetic and a self-test of the claim: the former
+// calls a helper, the latter proves the checker reads a number and compares it.
+// It defaults to the real document, so the production path is unchanged.
+function reportSuite({
+  doc = agents,
+  counts,
+  countRe,
+  filesRe,
+  runLabel,
+  testsLabel,
+  skippedLabel,
+  filesLabel,
+  testsMetric = 'passed',
+  skipCheck = 'equality',
+  ceilingRe,
+  ceilingLabel,
+}) {
   if (!counts.ok) {
     // No JSON. If the run also exited non-zero this is a real failure — a crash,
     // a bad config, a missing binary — and calling it UNVERIFIED would hide it
@@ -325,24 +699,168 @@ function reportSuite({ counts, countRe, filesRe, runLabel, testsLabel, skippedLa
   else if (counts.exit !== 0) fail(runLabel, 'no failures', `vitest exited ${counts.exit} with 0 failed tests — ${line}`);
   else pass(runLabel, 'no failures', line);
 
-  const m = agents.match(countRe);
-  const docPassed = m?.[1];
-  const docSkipped = m?.[2];
-  if (docPassed == null) unverified(testsLabel, 'not stated', String(counts.passed));
-  else if (Number(docPassed) === counts.passed) pass(testsLabel, docPassed, String(counts.passed));
-  else fail(testsLabel, docPassed, String(counts.passed));
-  if (docSkipped == null) unverified(skippedLabel, 'not stated', String(counts.skipped));
-  else if (Number(docSkipped) === counts.skipped) pass(skippedLabel, docSkipped, String(counts.skipped));
-  else fail(skippedLabel, docSkipped, String(counts.skipped));
+  // The metric is a PARAMETER, not an assumption baked into the shared helper.
+  // The previous version compared the document's first number to
+  // `counts.passed` unconditionally, which was the machine-dependent field for
+  // the root suite; a shared helper that hardcodes a metric is how the two suites
+  // get checked against different things without anybody deciding it.
+  const testsDerived = testsMetric === 'total' ? counts.tests : counts.passed;
+  if (doc.match(countRe)?.[1] == null) unverified(testsLabel, 'not stated', String(testsDerived));
+  else if (Number(doc.match(countRe)[1]) === testsDerived) pass(testsLabel, doc.match(countRe)[1], String(testsDerived));
+  else fail(testsLabel, doc.match(countRe)[1], String(testsDerived));
+
+  if (skipCheck === 'ceiling') {
+    reportSkipCeiling({ doc, counts, ceilingRe, skippedLabel, ceilingLabel });
+  } else {
+    // Group 2 of the `N passed + M skipped` form. The root suite does not reach
+    // this branch — it uses the ceiling — so the index is read from the document
+    // again rather than from a hoisted `m` that only the desktop form has.
+    const docSkipped = (doc.match(countRe) ?? [])[2];
+    if (docSkipped == null) unverified(skippedLabel, 'not stated', String(counts.skipped));
+    else if (Number(docSkipped) === counts.skipped) pass(skippedLabel, docSkipped, String(counts.skipped));
+    else fail(skippedLabel, docSkipped, String(counts.skipped));
+  }
 
   if (counts.files == null) {
     unverified(filesLabel, '-', 'no testResults array in the json document');
     return;
   }
-  const docFiles = (agents.match(filesRe) ?? [])[1];
+  const docFiles = (doc.match(filesRe) ?? [])[1];
   if (docFiles == null) unverified(filesLabel, 'not stated', String(counts.files));
   else if (Number(docFiles) === counts.files) pass(filesLabel, docFiles, String(counts.files));
   else fail(filesLabel, docFiles, String(counts.files));
+}
+
+/**
+ * Two claims about the named skip ceiling, and they are not the same claim.
+ *
+ *   1. `root vitest skipped` — the DOCUMENT's stated ceiling against the number
+ *      of entries derived from the tree. This is the checked claim that makes
+ *      the maintenance burden intended: adding a `test.runIf` raises the derived
+ *      count, the document still says the old number, and the run goes red. The
+ *      burden is the point; the alternative is a ceiling nobody reviews.
+ *
+ *   2. `root vitest skip ceiling` — the RUN against the ceiling. Observed skips
+ *      must be within the ceiling, and every one of them must be attributable to
+ *      a named entry. This is the claim that bites, and it is separate from (1)
+ *      on purpose: a document that restates a stale ceiling and a run that skips
+ *      more than the ceiling are different defects, and one message each is
+ *      actionable where a merged one is not.
+ *
+ * `entries.length === 0` FAILS rather than passing an empty ceiling. A
+ * vacuously-true "all observed skips are permitted" over an empty declared set
+ * is the standing-rule failure this repository has hit repeatedly, and a broken
+ * scanner is exactly how it would be reached here.
+ */
+function reportSkipCeiling({ doc, counts, ceilingRe, skippedLabel, ceilingLabel }) {
+  const { entries, problems } = declaredSkipEntries(counts.filesList);
+  const verdict = skipCeilingVerdict(entries, counts);
+  const activeNames = verdict.active.map(
+    (e) => `${e.file}:${e.line} ${e.title} (${guardName(e)})`,
+  );
+  const detail =
+    `${verdict.observed} observed / ${verdict.permitted} permitted · ` +
+    `${verdict.active.length} of ${verdict.permitted} named entries active`;
+
+  // Claim 1: the document's stated cardinality, as BOTH halves.
+  //
+  // `docTotal` is the sum the document asserts and `docRunIf` is the `runIf`
+  // half it names. They are checked SEPARATELY rather than by comparing the sum,
+  // because a sum matches under compensating errors: a document that said
+  // "14 = 1 platform + 12 runIf" while the tree held 13 would pass a sum check
+  // and misdescribe the tree in the one place a reader looks to check it. The
+  // derived halves are counted from the entries themselves, so the platform
+  // entry and the `runIf` entries are separately falsifiable.
+  const m = doc.match(ceilingRe) ?? [];
+  const docTotal = m[1];
+  const docRunIf = m[2];
+  const derRunIf = entries.filter((e) => e.kind === 'runIf').length;
+  const derDeclared = entries.length - derRunIf;
+  const halves =
+    `derived ${entries.length} = ${derDeclared} declared guard(s) + ${derRunIf} test.runIf site(s)`;
+  if (entries.length === 0) {
+    // Named explicitly because a zero here would otherwise make BOTH claims
+    // pass: the document cannot say 0, and "0 observed <= 0 permitted" is true.
+    fail(skippedLabel, docTotal ?? 'not stated', `0 named entries — the derivation is empty${problems.length > 0 ? ': ' + problems.join('; ') : ''}`);
+  } else if (docTotal == null) {
+    unverified(skippedLabel, 'not stated', halves);
+  } else if (Number(docTotal) !== entries.length) {
+    fail(skippedLabel, docTotal, halves);
+  } else if (Number(docRunIf) !== derRunIf) {
+    // The total is right and the split is wrong. Named separately because the fix
+    // is different: this is a prose correction, not a tree correction, and a
+    // message that said only "the ceiling is wrong" would send the reader to
+    // count `runIf` sites in the tree.
+    fail(skippedLabel, `${docTotal} (of which ${docRunIf} runIf)`, `${halves} — the total matches, the runIf half does not`);
+  } else {
+    pass(skippedLabel, `${docTotal} = ${derDeclared} declared + ${docRunIf} runIf`, halves);
+  }
+
+  // Claim 2: the run against the ceiling.
+  //
+  // BOTH VIOLATIONS ARE REPORTED IN ONE MESSAGE, and the COUNT is checked FIRST.
+  // That ordering is load-bearing rather than cosmetic. An earlier version tested
+  // `unaccounted.length > 0` before `observed > permitted`, which made the count
+  // check almost unreachable: a suite that genuinely gains skips gains
+  // UNDECLARED ones, so the naming check always fired first and the
+  // "observed > permitted" branch could only be reached by inventing a duplicate
+  // of an existing entry. A check that is nearly unreachable is a check that
+  // cannot be shown to work, and this one has to be shown. Checking the count
+  // first means the common failure is reported as what it is — the suite gained
+  // skips beyond the ceiling — with the unaccounted names attached so the reader
+  // learns both facts in one line.
+  if (problems.length > 0) {
+    fail(ceilingLabel, 'no problems', problems.join('; '));
+    return;
+  }
+  if (entries.length === 0) {
+    fail(ceilingLabel, '0 observed / 0 permitted', 'no named entries — every ceiling check over an empty set is vacuous');
+    return;
+  }
+  const overCeiling = verdict.observed > verdict.permitted;
+  const unnamed = verdict.unaccounted.length;
+  if (overCeiling || unnamed > 0) {
+    const parts = [];
+    if (overCeiling) {
+      parts.push(
+        `${verdict.observed} observed > ${verdict.permitted} permitted — the suite gained ` +
+          `${verdict.observed - verdict.permitted} skip(s) beyond the declared ceiling`,
+      );
+    }
+    if (unnamed > 0) {
+      const named = verdict.unaccounted.map((s) => `${s.file} "${s.title}"`).join(', ');
+      parts.push(
+        `${unnamed} skip(s) match no declared guard: ${named}` +
+          (overCeiling ? '' : ' — within the ceiling, but not attributable to one'),
+      );
+    }
+    fail(ceilingLabel, 'observed <= permitted, all named', parts.join('; '));
+  } else if (verdict.observed > 0 && verdict.active.length === 0) {
+    // Unreachable given the branch above, and kept anyway: a skip that matched no
+    // entry while `unaccounted` is empty is an accounting bug, and this is where
+    // it would be silent.
+    fail(ceilingLabel, 'observed <= permitted, all named', `${verdict.observed} observed but no entry matched — accounting is broken`);
+  } else {
+    pass(ceilingLabel, 'observed <= permitted, all named', detail);
+  }
+  skipCeilingReport.push({ entries, verdict, activeNames });
+}
+
+/**
+ * The guard call as written, for naming an entry in the printed list and in the
+ * `--json` payload.
+ *
+ * BOTH kinds are rendered through this one function rather than the ternary at
+ * each use site, and that is not tidiness. The first version wrote
+ * `e.guardName(e)` — a property access on the entry object where a function was
+ * meant — and it threw the moment the first `runIf` entry became ACTIVE, which
+ * is to say it would have thrown in the working tree and not in a clean clone.
+ * A crash inside claim reporting is the worst failure mode available: the run
+ * dies with a stack trace instead of a verdict, and the reader learns nothing
+ * about the ceiling. The `--json` consumer would have seen no document at all.
+ */
+function guardName(e) {
+  return e.kind === 'platform' ? `test.skipIf(${e.condition})` : `test.runIf(${e.condition})`;
 }
 
 function countRustTests() {
@@ -672,8 +1190,26 @@ function describeNonCode(t) {
 // the whole suite twice. This is the only guard that proves the anchor checker
 // WORKS rather than that its source contains certain words.
 if (process.argv.includes('--self-test')) {
-  const { selfTestCitedAnchors } = await import('./docs-verify-self-test.mjs');
-  const res = selfTestCitedAnchors(ROOT, citedAnchors);
+  const { selfTestCitedAnchors, selfTestSkipCeiling } = await import('./docs-verify-self-test.mjs');
+  // `results` is handed over as a reader rather than the array, because the
+  // cases below need to INSPECT what a synthetic run claimed. Passing the array
+  // would let a case read the real gate's verdicts and pass vacuously — the
+  // exact "coverage that reads as present while being absent" shape this file
+  // exists to prevent. `resetResults` is why one case cannot see another's
+  // output either.
+  const resetResults = () => { results.length = 0; skipCeilingReport.length = 0; };
+  const readResults = () => results.map((r) => ({ ...r }));
+  const res = [
+    ...selfTestCitedAnchors(ROOT, citedAnchors),
+    ...selfTestSkipCeiling({
+      ROOT,
+      declaredSkipEntries,
+      skipCeilingVerdict,
+      reportSuite,
+      resetResults,
+      readResults,
+    }),
+  ];
   let bad = 0;
   for (const [name, ok] of res) {
     console.log('  ' + (ok ? 'PASS' : 'FAIL') + '  ' + name);
@@ -699,14 +1235,33 @@ const agents = existsSync(join(DOC_ROOT, 'AGENTS.md'))
   : '';
 const pkg = JSON.parse(read('package.json'));
 
-// 1–4. The root and desktop vitest suites.
+// 1–5. The root and desktop vitest suites.
 //
-// Four claims each, not two: the run itself ("no failures"), the passed count,
-// the SKIP count, and the file count. The skip is a claim rather than a
-// footnote because a correct-by-design skip is a fact about the platform, and a
-// document that must write `+ 0 skipped` to satisfy the checker has been told
-// to state something false. `src/daemon.test.ts:1216` skips on win32 by design:
-// `ensureIpcToken` refuses to generate where a 0600 mode is a no-op, because the
+// FOUR claims for the root suite — the run itself ("no failures"), the TOTAL,
+// the skip CEILING, and the file count — and four for the desktop suite, where
+// the skip is still an equality because its count is a measured, machine-stable
+// 0.
+//
+// WHY THE ROOT CLAIM IS THE TOTAL AND NOT THE PASS COUNT. This is the change
+// this commit exists for, and the measurement is in `vitestCounts` above: at
+// 6a90518 the same commit reads 1595 passed + 1 skipped in the working tree and
+// 1583 passed + 13 skipped in a clean clone, with 1596 total on both sides. The
+// pass/skip SPLIT is a function of which gitignored artifacts exist on the disk,
+// so no single figure could satisfy both environments and the check was red
+// before this change. The total is a function of the tree.
+//
+// WHY THE SKIP IS A CEILING AND NOT A FIGURE. For the same reason, from the
+// other direction: 12 of the 13 `test.runIf` prerequisites in this tree are
+// gitignored artifacts a clean checkout does not have, and the 13th is the
+// installed app's runtime dir, which lives in the user's profile and so
+// TRAVELS WITH THE MACHINE. An equality had no satisfiable value. The ceiling is
+// a set of named entries — see `DECLARED_SKIP_GUARDS` and
+// `declaredSkipEntries` — and the document states its cardinality, so adding a
+// guard without raising the ceiling is a visible failure in both directions.
+//
+// The skip remains a CLAIM, not a footnote. A correct-by-design skip is a fact
+// about the platform: `src/daemon.test.ts:1216` skips on win32 because
+// `ensureIpcToken` refuses to generate where a 0600 mode is a no-op, and the
 // Rust supervisor provisions that path with a protected DACL instead.
 //
 // The optional `(?: [^**]*)?` in each pattern tolerates a reason INSIDE the
@@ -717,19 +1272,51 @@ const pkg = JSON.parse(read('package.json'));
 // trains a reader to `git checkout AGENTS.md`.
 reportSuite({
   counts: vitestCounts('.', []),
-  countRe: /root \*\*(\d+) passed \+ (\d+) skipped(?: [^**]*)?\*\*/,
-  filesRe: /root \*\*\d+ passed \+ \d+ skipped(?: [^**]*)?\*\* \((\d+) files\)/,
+  // The documented form is `root **N total** (F files)` and the claim is
+  // `numTotalTests`. The `+ M skipped` half of the old form is GONE from the
+  // root sentence, not merely unread: a number the document states in the claim
+  // shape but no check consumes is the "coverage that reads as present while
+  // being absent" shape in prose, and there is already a sentence further down
+  // this file about a figure that was quoted for a cycle after it went unchecked.
+  //
+  // The optional `(?: [^**]*)?` in each pattern tolerates a reason INSIDE the
+  // bold — `**1596 total (97 files, 1 skip observed)**` — and the recommended
+  // spelling puts it outside instead, in prose the parser does not read. The
+  // pattern is strict about the numbers and loose about the words around them,
+  // for the reason the test-reachability patterns already state: a false FAIL
+  // trains a reader to `git checkout AGENTS.md`.
+  countRe: /root \*\*(\d+) total(?: [^**]*)?\*\*/,
+  filesRe: /root \*\*\d+ total(?: [^**]*)?\*\* \((\d+) files\)/,
   runLabel: 'root vitest (no failures)',
   testsLabel: 'root vitest tests',
   skippedLabel: 'root vitest skipped',
   filesLabel: 'root vitest files',
+  testsMetric: 'total',
+  skipCheck: 'ceiling',
+  // The ceiling's cardinality, read out of the SAME sentence that names the
+  // platform skip. `skip ceiling **N** (1 win32 platform skip + M test.runIf
+  // prerequisites)` — both numbers are captured so the claim can name which half
+  // drifted, because "the ceiling is wrong" is not an actionable message and
+  // "13 runIf sites, the document says 12" is.
+  //
+  // The pattern states the two halves rather than a bare `**N**` on purpose: a
+  // document that says "a named ceiling of 14" without saying what the 14 is
+  // cannot be reviewed, which is the whole point of naming the entries. A bare
+  // number would be a check that verifies arithmetic.
+  ceilingRe: /skip ceiling \*\*(\d+)\*\* \(1 win32 platform skip \+ (\d+) test\.runIf prerequisites\)/,
+  ceilingLabel: 'root vitest skip ceiling',
 });
 
-// The desktop suite takes the same shape as the root one, for the same reason:
-// its documented number used to be compared against `numTotalTests`, so a
-// desktop skip would have been absorbed into the total silently. Measured
-// 2026-10-01: the desktop tree has zero `skipIf`/`skip`/`todo`, so its skip
-// count is a measured 0 rather than an assumption.
+// The desktop suite takes the same shape as the root one, and KEEPS the equality
+// skip check and the `passed` metric, for a measured reason rather than by
+// omission: 2026-10-01, the desktop tree declares zero `runIf`, `skipIf`, `skip`
+// and `todo` call sites, so its skip count is a measured 0 that no environment
+// can move, and `passed` and `total` coincide at 506.
+//
+// That is the whole justification, and it is a MEASURED one, which is why the
+// root suite's change does not silently become the desktop suite's. The moment a
+// desktop guard is added this suite develops the same machine-dependence, and
+// then `testsMetric`/`skipCheck` are two options away from the root's treatment.
 reportSuite({
   counts: vitestCounts('apps/desktop', []),
   countRe: /desktop \*\*(\d+) passed \+ (\d+) skipped(?: [^**]*)?\*\*/,
@@ -739,7 +1326,46 @@ reportSuite({
   skippedLabel: 'desktop vitest skipped',
   filesLabel: 'desktop vitest files',
 });
-// 5. Cargo
+
+// 6. Every DECLARED skip guard must still be locatable, checked here as well as
+//    inside the ceiling — not as a second verdict on the same fact, but because
+//    the ceiling's message does not lead with it.
+//
+//    `reportSkipCeiling` already reports an unlocatable guard as a problem and
+//    fails the run-check claim, so the gate is red either way. The reason for the
+//    second claim is DIAGNOSTIC, and it is measured rather than assumed: while
+//    break-testing a deleted guard (probe-shrunk-suite-5e1a) the reader saw three
+//    red claims, two of which were about counts, and had to read the third to
+//    learn that a guard had been deleted. A check whose failure is genuine but
+//    whose message points at the wrong cause is half a check — and "a figure
+//    nobody reviews" is the failure mode this file exists to prevent.
+//
+//    It is also CHEAP, which is the other reason it is here rather than only
+//    inside the ceiling: `declaredSkipEntries([])` scans no file, so this costs
+//    one literal lookup and needs no test run at all.
+const guardLiveness = declaredSkipEntries([]);
+if (guardLiveness.problems.length > 0) {
+  fail(
+    'skip guards declared',
+    `${DECLARED_SKIP_GUARDS.length} declared guard(s) located`,
+    guardLiveness.problems.join('; '),
+  );
+} else if (DECLARED_SKIP_GUARDS.length === 0) {
+  // Unreachable while the array is a non-empty literal, and kept for the reason
+  // this file keeps making the same point: a claim whose subject is an empty set
+  // passes vacuously. `DECLARED_SKIP_GUARDS.length` is the one input in this
+  // file that is a literal rather than a derivation, so it is the one that can
+  // be emptied by an edit that looks like a deletion.
+  fail('skip guards declared', 'at least one', 'the declared guard list is empty — every ceiling check over it is vacuous');
+} else {
+  pass(
+    'skip guards declared',
+    `${DECLARED_SKIP_GUARDS.length} declared guard(s)`,
+    DECLARED_SKIP_GUARDS.map((d) => `${d.file} · ${d.guard}(${d.condition})`).join('; '),
+  );
+}
+
+// 7. Cargo
 const cargo = countRustTests();
 if (cargo != null) {
   const doc = (agents.match(/`cargo test` \*\*(\d+)\*\*/) ?? [])[1];
@@ -748,7 +1374,7 @@ if (cargo != null) {
   else fail('cargo tests', doc, String(cargo));
 }
 
-// 6. E2E — static derivation, clearly labelled as such. Running Playwright here
+// 8. E2E — static derivation, clearly labelled as such. Running Playwright here
 //    would need ports 4096/4097/4197 and would fight the developer's own dev
 //    server, so this is a count, not an execution.
 const e2e = countE2ETests();
@@ -762,7 +1388,7 @@ if (e2e) {
   } else unverified('e2e tests', 'not stated', String(e2e.tests));
 }
 
-// 7. Reachability
+// 9. Reachability
 const reach = reachability();
 for (const [label, docRe, der] of [
   ['live modules', /LIVE production modules\s*:\s*(\d+)/, reach.live],
@@ -776,7 +1402,7 @@ for (const [label, docRe, der] of [
   else fail(label, doc, String(der));
 }
 
-// 8. Gate composition — compare the documented chain to the actual script.
+// 10. Gate composition — compare the documented chain to the actual script.
 const actualChain = (pkg.scripts['test:vantrilex'] ?? '').split('&&').map((s) => s.trim());
 const documented = (agents.match(/`test:vantrilex` is \*\*(.+?)\*\*/) ?? [])[1] ?? '';
 // Map each real stage to the word the doc must contain for it.
@@ -800,7 +1426,7 @@ if (docStageCount !== expectedStageCount) {
   fail('gate stage count', String(docStageCount), String(expectedStageCount));
 } else pass('gate stage count', String(docStageCount), String(expectedStageCount));
 
-// 9. Narrative claims — persona reach into each system prompt.
+// 11. Narrative claims — persona reach into each system prompt.
 const prefs = personaRefCounts();
 if (prefs == null) {
   unverified('persona refs', '-', 'a system-prompt file is missing');
@@ -817,7 +1443,7 @@ if (prefs == null) {
   }
 }
 
-// 10. Narrative claims — the earcon removal, checked two independent ways.
+// 12. Narrative claims — the earcon removal, checked two independent ways.
 const ear = earconFacts();
 for (const [label, re, der] of [
   ['earcon modules', /holds \*\*(\d+)\*\* files matching `earcon\*`/, ear.modules],
@@ -838,7 +1464,7 @@ for (const [label, re, der] of [
   else fail(label, doc, String(der));
 }
 
-// 11. Narrative claims — knowledge/ production importers, and the barrel split.
+// 13. Narrative claims — knowledge/ production importers, and the barrel split.
 const kf = knowledgeImportFacts();
 for (const [label, re, der] of [
   ['knowledge importers', /half-connected\.\*\* It now has \*\*(\d+)\*\* production importers/, kf.importers],
@@ -850,7 +1476,7 @@ for (const [label, re, der] of [
   else fail(label, doc, String(der));
 }
 
-// 12. Module-level test reachability.
+// 14. Module-level test reachability.
 //
 //     The count is over ALL production modules, not just the shipping-reachable
 //     ones, and that distinction is load-bearing. `docs:verify` also reports 7
@@ -893,7 +1519,7 @@ for (const [label, re, der] of [
   }
 }
 
-// 13. Every `file.ts:NNN` anchor AGENTS.md cites must still resolve to a line
+// 15. Every `file.ts:NNN` anchor AGENTS.md cites must still resolve to a line
 //     that exists. This does NOT prove the line is still the right one.
 const anchors = citedAnchors();
 const dangling = anchors.filter((a) => !a.ok);
@@ -937,6 +1563,25 @@ if (process.argv.includes('--json')) {
         derived: String(r.derived),
         status: r.status,
       })),
+      // The named ceiling, enumerated. The human table CLAMPS its derived cell,
+      // and a clamped list of 14 entries cannot be read, so a consumer of this
+      // document that wanted to know WHICH declared guards were active in the
+      // run had no way to find out. Additive: `doctor --bundle` reads `checks`
+      // and ignores this.
+      skipCeiling: skipCeilingReport.map((r) => ({
+        observed: r.verdict.observed,
+        permitted: r.verdict.permitted,
+        active: r.activeNames,
+        unaccounted: r.verdict.unaccounted.map((u) => `${u.file} :: ${u.title}`),
+        entries: r.entries.map((e) => ({
+          kind: e.kind,
+          file: e.file,
+          line: e.line,
+          title: e.title,
+          condition: e.condition,
+          active: r.activeNames.some((n) => n.startsWith(`${e.file}:${e.line} `)),
+        })),
+      })),
     }),
   );
   // Same exit contract as the human path: UNVERIFIED is an error, not a warning.
@@ -963,6 +1608,36 @@ for (const r of results) {
   console.log('  ' + r.name.padEnd(w) + cell(String(r.documented), 40).padEnd(wd + 2) + cell(String(r.derived)).padEnd(wv + 2) + mark);
 }
 console.log('');
+
+// The named skip ceiling, enumerated and UNCLAMPED.
+//
+// WHY IT IS PRINTED AND NOT LEFT IN THE TABLE. The table's DERIVED cell is
+// clamped to 64 characters because suite verdicts are sentences. The ceiling
+// detail is a LIST of up to 14 named entries plus which of them were active in
+// this run, and a clamped list is not a list a reader can check — it would read
+// as "1 of 14" with the 13 inactive names truncated away, which is precisely
+// the "13, none of which I can account for" reading the requirement exists to
+// prevent. So the enumeration is printed whole, one entry per line, with the
+// active ones marked.
+//
+// Every suite that ran a ceiling check is reported, not just the first: the loop
+// is over the collected reports so a second suite cannot be silently omitted by
+// this block being written for one shape.
+for (const r of skipCeilingReport) {
+  const { verdict } = r;
+  console.log(
+    `skip ceiling — ${verdict.observed} observed / ${verdict.permitted} permitted, ` +
+      `${verdict.active.length} of ${verdict.permitted} named entries active in this run:`,
+  );
+  for (const e of r.entries) {
+    const on = r.activeNames.some((n) => n.startsWith(`${e.file}:${e.line} `));
+    console.log(`  ${on ? 'ACTIVE  ' : 'inactive'} ${e.file}:${e.line} · ${guardName(e)} · "${e.title}"`);
+  }
+  for (const u of verdict.unaccounted) {
+    console.log(`  UNNAMED  ${u.file} · "${u.title}" — within the ceiling, attributable to no declared guard`);
+  }
+  console.log('');
+}
 if (failed.length) {
   console.error(`docs:verify FAILED — ${failed.length} claim(s) contradict the code:`);
   for (const f of failed) console.error(`  - ${f.name}: doc says ${f.documented}, actual is ${f.derived}`);

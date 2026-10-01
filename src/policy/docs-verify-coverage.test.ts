@@ -36,6 +36,28 @@ const NUMERIC_CLAIMS = [
   'root vitest tests',
   'root vitest files',
   'root vitest skipped',
+  // Whether the DECLARED guards are still locatable, reported apart from the
+  // ceiling so the message leads with the cause. Added because break-testing a
+  // deleted guard produced three red claims whose first two were about counts —
+  // a real failure whose message points at the wrong cause.
+  'skip guards declared',
+  // The ceiling run-check. It is a SEPARATE claim from `root vitest skipped` and
+  // both are registered, because they answer different questions and one used to
+  // stand in for the other: `root vitest skipped` compares the document's stated
+  // cardinality against the number of named entries derived from the tree, and
+  // `root vitest skip ceiling` compares the run against that cardinality. A
+  // guard that pinned only the first would stay green while the second was
+  // deleted, and the deleted one is the check that actually bites — it is what
+  // turns "13 skips, all within the ceiling" into a failure when none of the 13
+  // matches a declared guard.
+  //
+  // It matches `hasClaimIn` through the `ceilingLabel: 'root vitest skip
+  // ceiling',` property, which is a quoted literal followed by a comma. The
+  // call sites themselves are `fail(ceilingLabel, …)` / `pass(ceilingLabel, …)`
+  // and are NOT literals, so a matcher that only understood call arguments would
+  // report this claim as missing. The pinned assertion further down covers the
+  // entry surviving in THIS list, which is the other direction.
+  'root vitest skip ceiling',
   'desktop vitest tests',
   'desktop vitest files',
   'desktop vitest skipped',
@@ -98,6 +120,16 @@ describe('docs:verify keeps its claim set', () => {
     );
     expect(NUMERIC_CLAIMS, 'the desktop skip-count claim left the pinned list').toContain(
       'desktop vitest skipped',
+    );
+    // The ceiling's run-check, for the same reason. Removing it from the list
+    // would delete the only assertion that it is registered, and the two halves
+    // are not interchangeable: the cardinality claim can pass while the run
+    // silently exceeds the ceiling it just restated correctly.
+    expect(NUMERIC_CLAIMS, 'the ceiling run-check claim left the pinned list').toContain(
+      'root vitest skip ceiling',
+    );
+    expect(NUMERIC_CLAIMS, 'the declared-guard liveness claim left the pinned list').toContain(
+      'skip guards declared',
     );
     // Deliberately NOT a length/count assertion on the list. Adding a suite is
     // the codebase growing, and claim-matcher.ts's own doctrine is that a guard

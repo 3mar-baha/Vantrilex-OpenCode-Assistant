@@ -25,6 +25,17 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+// WHY THESE ARE SYNTHETIC DOCUMENTS RATHER THAN COPIES OF AGENTS.md. The same
+// reason the anchor cases are: appending the real document to a scenario quietly
+// turns every case into a claim about every figure the document states today, so
+// a scenario whose own injection behaves correctly fails on unrelated drift. The
+// ceiling cases are worse in a specific way, because `docFor` builds a
+// two-sentence document and a full copy would drag in every claim in the file —
+// so a self-test for "an understated ceiling is rejected" would also be a
+// self-test for the earcon count, the reachability figures and 270 line anchors.
+// The real document is checked by `docs:verify` itself, which names the figure and
+// the line; what is checked here is whether the CHECKER compares.
+
 /** The behaviours a code review found missing or vacuous, plus the Rust one. */
 export function selfTestCitedAnchors(ROOT, citedAnchors) {
   const daemonLines = readFileSync(join(ROOT, 'src/daemon.ts'), 'utf8').split('\n');
@@ -64,6 +75,12 @@ export function selfTestCitedAnchors(ROOT, citedAnchors) {
       'a citation to a real code line passes',
       oneAnchorResolves(citedAnchors, 'daemon.ts', codeLine),
     ],
+    // The skip-ceiling cases are NOT in this array: they need `reportSuite` and
+    // the results reader, which are wired in `docs-verify.mjs --self-test` where
+    // the checker is actually running. Keeping them in a separate export is what
+    // makes the split honest — this function's return value is only about
+    // anchors, and a case that silently stopped being collected would be
+    // invisible here.
     [
       // The drift class the whole check exists for: `daemon.ts:509` pointed at a
       // comment for a full cycle while the gate stayed green.
@@ -137,6 +154,497 @@ function oneAnchorResolves(citedAnchors, name, line) {
     const anchors = citedAnchors();
     return anchors.length === 1 && anchors[0].ok;
   });
+}
+
+// ── the skip ceiling ─────────────────────────────────────────────────────────
+//
+// WHY THESE ARE BEHAVIOURAL AND NOT IN `src/policy/`. The coverage guard pins
+// claim LABELS, which is a shape test: it cannot tell whether the ceiling
+// compares anything, and the three ways this could be broken all leave a
+// label-pinning guard green.
+//
+//   1. the comparison inverted (`observed >= permitted` instead of `<=`);
+//   2. the accounting reduced to a summary count, so an unnamed skip inside the
+//      ceiling passes;
+//   3. the empty-set case left vacuous, so a broken derivation that finds zero
+//      entries reports "0 observed <= 0 permitted" and passes.
+//
+// The first is the one the requirement names: a ceiling that does not bite is
+// worse than the equality it replaced. These cases drive the REAL
+// `reportSuite` with synthetic counts and a synthetic document, so they exercise
+// the claim path rather than a helper the claim path happens to call — which is
+// why `reportSuite` takes `doc` as a parameter instead of closing over the real
+// AGENTS.md.
+
+/** A `root **N total** (F files)` sentence plus a ceiling sentence. */
+function docFor({ total, files, ceiling, runIf }) {
+  return [
+    `root **${total} total** (${files} files)`,
+    `The skip is a NAMED CEILING, skip ceiling **${ceiling}** (1 win32 platform skip + ${runIf} test.runIf prerequisites)`,
+  ].join('\n');
+}
+
+const COUNT_RE = /root \*\*(\d+) total(?: [^**]*)?\*\*/;
+const FILES_RE = /root \*\*\d+ total(?: [^**]*)?\*\* \((\d+) files\)/;
+const CEILING_RE = /skip ceiling \*\*(\d+)\*\* \(1 win32 platform skip \+ (\d+) test\.runIf prerequisites\)/;
+
+/**
+ * A synthetic run: the four counts, a file count, the COLLECTED file list, and
+ * per-assertion skips.
+ *
+ * `filesList` is a parameter rather than a fixed `[]` because it is what
+ * `declaredSkipEntries` reads to size the ceiling, and hardcoding it to empty
+ * made every case derive the platform guard alone — so the document's
+ * `runIf` half was compared against 0 and the cardinality claim was red for a
+ * reason that had nothing to do with the case under test. MEASURED: that is
+ * exactly what happened, and the failure read as "the document is wrong" when
+ * the fixture was. A synthetic input that silently does not reach the code under
+ * test is the fixture's bug, and it is indistinguishable from a real failure
+ * unless the input is checked.
+ */
+function countsFor({ tests, passed, failed = 0, skipped = 0, files = 1, filesList = [], skips = [], exit = 0 }) {
+  return {
+    ok: true,
+    collectError: false,
+    exit,
+    tests,
+    passed,
+    failed,
+    skipped,
+    todos: 0,
+    files,
+    filesList,
+    problem: null,
+    skipDetail: skips.map((s) => ({ file: s.file, title: s.title })),
+  };
+}
+
+/** Drive one root-suite claim against a synthetic document and run. */
+function ceilingRun({ deps, doc, counts }) {
+  const { reportSuite, resetResults, readResults } = deps;
+  resetResults();
+  reportSuite({
+    doc,
+    counts,
+    countRe: COUNT_RE,
+    filesRe: FILES_RE,
+    runLabel: 'root vitest (no failures)',
+    testsLabel: 'root vitest tests',
+    skippedLabel: 'root vitest skipped',
+    filesLabel: 'root vitest files',
+    testsMetric: 'total',
+    skipCheck: 'ceiling',
+    ceilingRe: CEILING_RE,
+    ceilingLabel: 'root vitest skip ceiling',
+  });
+  const rows = readResults();
+  return {
+    rows,
+    byName: new Map(rows.map((r) => [r.name, r])),
+  };
+}
+
+/** The status of one claim, or `'ABSENT'` — never `'ok'` for a missing row. */
+function statusOf(run, name) {
+  return run.byName.get(name)?.status ?? 'ABSENT';
+}
+
+export function selfTestSkipCeiling({ ROOT, declaredSkipEntries, skipCeilingVerdict, ...deps }) {
+  // `declaredSkipEntries` is handed a file list, so these cases control the
+  // ceiling's size exactly by choosing which files to scan. The real
+  // `test/release-verify-boot.test.ts` carries two `test.runIf` sites and no
+  // `skipIf`, so scanning it ALONE plus the declared platform guard is a
+  // three-entry ceiling with no fixture file.
+  //
+  // THE PLATFORM ENTRY IS NOT OPTIONAL, and getting this wrong is the trap: it is
+  // located by a literal condition in `src/daemon.test.ts`, NOT by the file list,
+  // so it is derived in EVERY case below. A self-test that assumed the ceiling was
+  // exactly the `runIf` count would document a number the script never produces.
+  const twoEntryFile = join(ROOT, 'test/release-verify-boot.test.ts');
+  const { entries: realTwo, problems: realTwoProblems } = declaredSkipEntries([twoEntryFile]);
+  // Both halves asserted as COUNTS, not truthiness, and both asserted NON-ZERO:
+  // a case written against a scan that silently found nothing would pass on
+  // `0 <= 0` and prove nothing. This is the standing rule about predicates over
+  // an empty set, applied to a count. The split is the document's own split —
+  // 1 declared guard plus N `runIf` sites — because the claim checks the halves
+  // separately, so a self-test that used one number for both would be testing a
+  // weaker claim than the checker makes.
+  const ceilingCount = realTwo.length;
+  const runIfCount = realTwo.filter((e) => e.kind === 'runIf').length;
+  const platformCount = ceilingCount - runIfCount;
+  const shapeOk = realTwoProblems.length === 0 && ceilingCount > 0 && runIfCount > 0 && platformCount === 1;
+
+  // A synthetic run whose skips are the REAL derived entries, so the
+  // "all observed skips are named" case uses titles the derivation actually
+  // produced rather than invented ones that could not match. One of the three
+  // entries is the platform guard, whose title comes from the real
+  // `src/daemon.test.ts` — so an entry whose title stopped being read from the
+  // file breaks this case too, which is the coupling that makes it worth having.
+  const named = realTwo.map((e) => ({ file: e.file, title: e.title }));
+  // The file list is what makes the derivation return `ceilingCount` entries, so
+  // it is part of every synthetic run. Omitting it would derive 1 (the platform
+  // guard alone) while the document claimed 3, and the cardinality claim would be
+  // red for a reason that has nothing to do with the case under test.
+  const namedCounts = (skipped, skips) =>
+    countsFor({ tests: 100, passed: 100 - skipped, skipped, files: 1, filesList: [twoEntryFile], skips });
+
+  return [
+    // 1. The document's cardinality matching the tree passes, and that is the
+    //    ONLY way the cardinality claim passes.
+    [
+      'the ceiling cardinality claim passes when the document restates the tree',
+      // `shapeOk` is conjoined rather than assumed, so this case cannot pass on a
+      // derivation that found nothing: a scan returning 0 entries would make
+      // `ceilingCount - 1` negative and the "understated" case below meaningless.
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          counts: namedCounts(0, []),
+        }),
+        'root vitest skipped',
+      ) === 'ok' && shapeOk,
+    ],
+    [
+      // The direction the requirement exists for: a document that understates
+      // the ceiling is red, which is what makes adding a `runIf` without
+      // raising the ceiling a visible failure.
+      'a document that understates the ceiling is rejected',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount - 1, runIf: runIfCount - 1 }),
+          counts: namedCounts(0, []),
+        }),
+        'root vitest skipped',
+      ) === 'FAIL',
+    ],
+    [
+      // The compensating-error guard: the TOTAL is right and the `runIf` half is
+      // wrong. A bare-sum check would pass this.
+      'a correct ceiling total with a wrong runIf half is rejected',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount + 1 }),
+          counts: namedCounts(0, []),
+        }),
+        'root vitest skipped',
+      ) === 'FAIL',
+    ],
+
+    // 2. THE CEILING BITES.
+    [
+      // EVERY declared entry is active and one more skip arrives on top, so
+      // `observed = ceilingCount + 1 > permitted = ceilingCount` and the extra
+      // one matches nothing. Both ceiling conditions hold at once, which is the
+      // real shape of "the suite gained a skip" — the case asserts only that the
+      // claim is red, because which of the two conditions fires is a
+      // message-quality question and red is the requirement.
+      'observed skips above the ceiling are rejected',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          counts: namedCounts(ceilingCount + 1, [
+            ...named,
+            { file: named[0].file, title: 'an extra skip nobody declared' },
+          ]),
+        }),
+        'root vitest skip ceiling',
+      ) === 'FAIL' && shapeOk,
+    ],
+    [
+      // THE COUNT CHECK, IN ISOLATION — and this case exists because the two
+      // above do not pin it. MEASURED while break-testing: with
+      // `overCeiling` forced to `false`, BOTH cases above still passed, because a
+      // suite that genuinely gains skips gains UNDECLARED ones, so the naming
+      // check fired and carried the verdict. The count comparison was untested.
+      //
+      // The shape that reaches it alone is a skip whose title REPEATS: a
+      // `test.runIf` guard over a `test.each` produces one skipped assertion PER
+      // ROW, all carrying the same title, so the run observes more skips than
+      // there are entries while every one of them IS attributable. That is a real
+      // vitest behaviour, not a contrived one, and it is the only shape where the
+      // two conditions can disagree.
+      //
+      // `repeated` is a count, not a boolean, for the standing reason: `every()`
+      // over an empty is true.
+      'observed skips beyond the ceiling are rejected when all of them are named',
+      (() => {
+        const repeated = [named[0], named[0], named[1], named[2]].filter(Boolean);
+        return (
+          repeated.length > ceilingCount &&
+          new Set(repeated.map((s) => `${s.file}\u0000${s.title}`)).size === named.length &&
+          statusOf(
+            ceilingRun({
+              deps,
+              doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+              counts: namedCounts(repeated.length, repeated),
+            }),
+            'root vitest skip ceiling',
+          ) === 'FAIL'
+        );
+      })(),
+    ],
+    [
+      // The case a bare count CANNOT catch, and the reason the accounting exists:
+      // `2 <= ceilingCount` is comfortably true, and one of the two skips matches
+      // no declared entry. A ceiling that only compared integers would pass this,
+      // which is precisely the "13, none of which I can account for" reading the
+      // requirement names. The invented title is deliberately unlike any real one.
+      'a skip within the ceiling that matches no declared entry is rejected',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          counts: namedCounts(2, [
+            named[0],
+            { file: named[0].file, title: 'a skip nobody declared' },
+          ]),
+        }),
+        'root vitest skip ceiling',
+      ) === 'FAIL' && shapeOk,
+    ],
+    [
+      // The positive case for the same code path, so the two above cannot be
+      // satisfied by a check that rejects everything. A claim pinned only on its
+      // failure modes is a claim that cannot pass.
+      //
+      // Every declared entry active, none invented: the ceiling holds and every
+      // skip is named. This is the "all 13 of 13 permitted" case the
+      // requirement asks a reader to be able to distinguish from the other one.
+      'observed skips within the ceiling and all named are accepted',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          counts: namedCounts(ceilingCount, named),
+        }),
+        'root vitest skip ceiling',
+      ) === 'ok' && shapeOk,
+    ],
+
+    // 3. The vacuous-true guards.
+    [
+      // The smallest derivation the checker can produce. `declaredSkipEntries([])`
+      // scans no file, so the ONLY entry is the declared platform guard — and
+      // asserting that count is 1 is what makes the next case meaningful, because
+      // "an unnamed skip is caught" is only a claim if the ceiling was not empty.
+      //
+      // A count assertion rather than a truthiness one, per the standing rule
+      // about predicates over an empty set. If the declared platform guard ever
+      // stopped resolving, this reads 0 and the case goes red, which is correct:
+      // the ceiling would then be empty and every check over it vacuous.
+      'an empty file list still derives exactly the one declared platform guard',
+      declaredSkipEntries([]).entries.length === 1 &&
+        declaredSkipEntries([]).entries[0].kind === 'platform' &&
+        declaredSkipEntries([]).problems.length === 0,
+    ],
+    [
+      // Against that minimal one-entry ceiling: a run observing two skips, neither
+      // of which is the platform guard. `unaccounted` is 2, so the claim is red
+      // even though `2 <= 1` is... false, which is the other half. The point of
+      // the pair is that BOTH the bound and the naming are load-bearing, and a
+      // check that enforced only one of them would pass a case the other rejects.
+      'a run observing more skips than the ceiling permits is rejected',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          // `filesList: []` → the derived ceiling is 1 (the platform guard only),
+          // while the document claims ceilingCount, so the CARDINALITY claim is
+          // red too. The run-check is what this case is about, and it is red for
+          // its own reason: 2 observed, 1 permitted.
+          counts: countsFor({
+            tests: 100,
+            passed: 98,
+            skipped: 2,
+            files: 1,
+            filesList: [],
+            skips: [
+              { file: 'a.test.ts', title: 'nobody declared this' },
+              { file: 'b.test.ts', title: 'nor this' },
+            ],
+          }),
+        }),
+        'root vitest skip ceiling',
+      ) === 'FAIL',
+    ],
+    [
+      // The other vacuous shape, asserted on the verdict function directly: a run
+      // with skips and no entry able to match any of them. `active.length === 0`
+      // alongside `unaccounted.length > 0` is the broken-accounting signature, and
+      // it must not read as a pass.
+      'a run with skips and zero active entries is rejected',
+      (() => {
+        const v = skipCeilingVerdict([], countsFor({ tests: 4, passed: 2, skipped: 2, skips: [
+          { file: 'a.ts', title: 'x' },
+          { file: 'b.ts', title: 'y' },
+        ] }));
+        return v.unaccounted.length === 2 && v.active.length === 0 && v.permitted === 0;
+      })(),
+    ],
+
+    // 4. The real run, end to end through the derivation.
+    [
+      // The real tree, the real guard sites, every one of them NAMED. This is the
+      // case that would fail if `guardedTestSites` stopped finding sites (the set
+      // would empty and nothing would be accounted for) or if the titles drifted
+      // out of sync with the reporter's.
+      //
+      // Non-emptiness is asserted as a count, per the standing rule: "every entry
+      // has a title" over an empty set is true and worthless.
+      'every declared skip guard in the real tree has a non-empty title',
+      realTwoProblems.length === 0 &&
+        realTwo.length > 0 &&
+        realTwo.every((e) => typeof e.title === 'string' && e.title.length > 0),
+    ],
+    [
+      // Both entries are distinguishable by (file, title), which is the key the
+      // accounting matches on. If two guards in one file shared a title the set
+      // would collapse and one entry could be double-counted as two skips.
+      'declared skip guards in one file are distinguishable by title',
+      new Set(realTwo.map((e) => `${e.file}\u0000${e.title}`)).size === realTwo.length,
+    ],
+    [
+      // The real platform guard is located, and the runIf sites are not counted
+      // as platform entries. One entry of `kind === 'platform'`, located in
+      // `src/daemon.test.ts` by its literal condition.
+      'the declared win32 platform guard resolves to exactly one entry',
+      (() => {
+        const { entries, problems } = declaredSkipEntries([
+          join(ROOT, 'src/daemon.test.ts'),
+          twoEntryFile,
+        ]);
+        const platform = entries.filter((e) => e.kind === 'platform');
+        const runIf = entries.filter((e) => e.kind === 'runIf');
+        return (
+          problems.length === 0 &&
+          platform.length === 1 &&
+          platform[0].file === 'src/daemon.test.ts' &&
+          platform[0].condition === "process.platform === 'win32'" &&
+          // The TOTAL is checked as a sum of the two named halves, and
+          // `runIf.length` is asserted as a COUNT rather than inferred. This is
+          // the case that would go red if a `runIf` inside `src/daemon.test.ts`
+          // were counted once as a platform guard and once as a `runIf` entry —
+          // that file declares 2 `skipIf` sites and 0 `runIf` sites, and the
+          // `skipIf(process.platform !== 'win32')` sibling must contribute
+          // nothing, because it RUNS on this platform and skips nothing.
+          runIf.length === runIfCount &&
+          entries.length === platform.length + runIf.length
+        );
+      })(),
+    ],
+
+    // 5. The strictness the ruling adds, in the OTHER direction: the total.
+    [
+      // The claim moved from `numPassedTests` to `numTotalTests`, and this is the
+      // case that pins the move. A document stating the PASS count and a run
+      // whose passes differ from its total must be rejected — which is the state
+      // this repository was in, and it is the reason the change was needed.
+      'a document stating the pass count is rejected when passes differ from the total',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount })
+            .replace('root **100 total**', 'root **99 total**'),
+          counts: namedCounts(0, []),
+        }),
+        'root vitest tests',
+      ) === 'FAIL',
+    ],
+    [
+      // And the positive half: the total as stated is accepted. A claim pinned
+      // only on its failure modes cannot pass, so this is not optional.
+      'a document stating the total is accepted',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          counts: countsFor({ tests: 100, passed: 87, files: 1 }),
+        }),
+        'root vitest tests',
+      ) === 'ok',
+    ],
+    [
+      // A SHORTER suite is a failure, which is the "a suite that loses a test so
+      // the total drops goes red" requirement. 99 tests observed against 100
+      // documented.
+      'a suite that loses a test is rejected against the documented total',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          counts: countsFor({ tests: 99, passed: 87, files: 1 }),
+        }),
+        'root vitest tests',
+      ) === 'FAIL',
+    ],
+    [
+      // The EQUALITY branch, which is the one the ceiling path never reaches —
+      // and which is therefore the one a self-test made only of ceiling cases
+      // would never run. `reportSuite` read its second group from a hoisted `m`
+      // that only the ceiling path had removed, and every ceiling case passed
+      // while `npm run docs:verify` died with `ReferenceError: m is not
+      // defined` on the DESKTOP call. MEASURED. Two things follow and both are
+      // asserted here: the equality branch must still compare the skip count, and
+      // it must do so by reading the document itself.
+      'the equality skip branch still compares the documented skip count',
+      (() => {
+        const { reportSuite, resetResults, readResults } = deps;
+        resetResults();
+        reportSuite({
+          doc: 'desktop **100 passed + 0 skipped** (1 files)',
+          counts: countsFor({ tests: 100, passed: 100, skipped: 0, files: 1 }),
+          countRe: /desktop \*\*(\d+) passed \+ (\d+) skipped(?: [^**]*)?\*\*/,
+          filesRe: /desktop \*\*\d+ passed \+ \d+ skipped(?: [^**]*)?\*\* \((\d+) files\)/,
+          runLabel: 'desktop vitest (no failures)',
+          testsLabel: 'desktop vitest tests',
+          skippedLabel: 'desktop vitest skipped',
+          filesLabel: 'desktop vitest files',
+        });
+        const rows = readResults();
+        const row = rows.find((r) => r.name === 'desktop vitest skipped');
+        return rows.length === 4 && row !== undefined && row.status === 'ok';
+      })(),
+    ],
+    [
+      // And the same branch rejects a WRONG skip count, so the case above cannot
+      // pass by finding the row and accepting whatever it says.
+      'the equality skip branch rejects a wrong documented skip count',
+      (() => {
+        const { reportSuite, resetResults, readResults } = deps;
+        resetResults();
+        reportSuite({
+          doc: 'desktop **100 passed + 3 skipped** (1 files)',
+          counts: countsFor({ tests: 100, passed: 100, skipped: 0, files: 1 }),
+          countRe: /desktop \*\*(\d+) passed \+ (\d+) skipped(?: [^**]*)?\*\*/,
+          filesRe: /desktop \*\*\d+ passed \+ \d+ skipped(?: [^**]*)?\*\* \((\d+) files\)/,
+          runLabel: 'desktop vitest (no failures)',
+          testsLabel: 'desktop vitest tests',
+          skippedLabel: 'desktop vitest skipped',
+          filesLabel: 'desktop vitest files',
+        });
+        const row = readResults().find((r) => r.name === 'desktop vitest skipped');
+        return row !== undefined && row.status === 'FAIL';
+      })(),
+    ],
+    [
+      // A REAL FAILURE still goes red, and separately: the run claim is not the
+      // count claim, so a failing suite with the documented total present is
+      // still red. This is the third strictness requirement.
+      'a real test failure is rejected even when the documented total matches',
+      statusOf(
+        ceilingRun({
+          deps,
+          doc: docFor({ total: 100, files: 1, ceiling: ceilingCount, runIf: runIfCount }),
+          counts: countsFor({ tests: 100, passed: 86, failed: 1, files: 1 }),
+        }),
+        'root vitest (no failures)',
+      ) === 'FAIL',
+    ],
+  ];
 }
 
 function withDoc(citedAnchors, doc, fn) {
