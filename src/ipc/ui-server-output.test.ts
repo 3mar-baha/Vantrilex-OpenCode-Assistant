@@ -194,6 +194,47 @@ describe('UiServer.output — emission', () => {
     client.end();
   });
 
+  /**
+   * The DoD for W4, asserted on the WIRE rather than on the returned object.
+   * Asserting on the object would pass if the object were clean but the bytes
+   * were not — and the bytes are what reach the renderer.
+   *
+   * `output` is up to 32 KiB of unbounded shell stdout and `command` is the
+   * command line, so `cat .env.local` puts a credential in both. This frame was
+   * the one type with no redaction on its path; `notice`, `voice` and
+   * `ack.detail` were all scrubbed and `protocol.ts` had zero `redact` matches.
+   */
+  test('credentials in shell stdout do not reach the wire, and the surrounding output does', async () => {
+    const { server, port } = await startServer();
+    const client = await rawSocket(port);
+    await untilType(client, 'hello');
+
+    const secrets = {
+      github: 'gho_' + '0123456789abcdefghijklmnopqrstuvwxyz',
+      anthropic: 'sk-ant-api03-0123456789abcdef0123456789abcdef0123456789abcdef',
+      google: 'AIza' + 'Sy0123456789abcdefghijklmnopqrstuvw',
+    };
+    server.output(
+      input({
+        command: `env | grep -i key # ${secrets.github}`,
+        output: `env dump start\nGITHUB_TOKEN=${secrets.github}\nGOOGLE=${secrets.google}\n${secrets.anthropic}\nenv dump end\n`,
+      }),
+    );
+
+    // Read the raw text frame off the socket, not a re-parsed object.
+    const raw = await client.readText();
+    for (const [name, secret] of Object.entries(secrets)) {
+      expect(raw, `${name} survived onto the wire`).not.toContain(secret);
+    }
+    // Non-credential text survives — a redactor that returns "" passes the
+    // asserts above and destroys the feature.
+    expect(raw).toContain('env dump start');
+    expect(raw).toContain('env dump end');
+    expect(raw).toContain('[REDACTED]');
+    expect(raw).toContain('GITHUB_TOKEN=');
+    client.end();
+  });
+
   test('a shell that has never heard of `output` is unaffected — its frames keep arriving', async () => {
     // Degradation, stated as a test: an older shell has no `output` branch, so
     // the frame is simply an unknown type. Nothing here can crash it, because

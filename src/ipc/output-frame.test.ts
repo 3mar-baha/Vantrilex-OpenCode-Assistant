@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { REDACTION_MARKER } from '../common/logger.js';
 import {
   buildOutputFrame,
   deriveShellOutcome,
@@ -314,6 +315,97 @@ describe('buildOutputFrame — the cap is on the PRODUCTION path', () => {
   test('a serve-flagged error is `failed` and its text is the `error` field, not `output`', () => {
     const frame = buildOutputFrame(6, input({ status: 'error', output: 'ignored', exitCode: null }));
     expect(frame.outcome).toBe('failed');
+  });
+});
+
+describe('buildOutputFrame — the output sink is REDACTED', () => {
+  /**
+   * `output` carries up to 32 KiB of unbounded shell stdout and `command`
+   * carries the command line. Both are free text off a subprocess, and this
+   * frame was the ONE frame type with no redaction anywhere on its path:
+   * `notice`, `voice` and `ack.detail` were each scrubbed, and `protocol.ts`
+   * had zero `redact` matches before this.
+   *
+   * `cat .env.local` is the reachable case, and it is not hypothetical in this
+   * project: a serve error that echoed whole config files, live credentials
+   * included, is the incident that produced the `gho_` shape in the first
+   * place. The frame then reaches the renderer AND the retained resume window,
+   * so a leak is both immediate and replayable.
+   */
+  const GH_OAUTH = 'gho_' + '0123456789abcdefghijklmnopqrstuvwxyz';
+  const ANTHROPIC = 'sk-ant-api03-0123456789abcdef0123456789abcdef0123456789abcdef';
+  const GOOGLE = 'AIza' + 'Sy0123456789abcdefghijklmnopqrstuvw';
+
+  test('credentials in the output text do not survive into the frame', () => {
+    const frame = buildOutputFrame(
+      1,
+      input({
+        output: `env dump:\nGITHUB_TOKEN=${GH_OAUTH}\nANTHROPIC_API_KEY=${ANTHROPIC}\nGOOGLE_KEY=${GOOGLE}\ndone\n`,
+      }),
+    );
+    const emitted = JSON.stringify(frame);
+    expect(emitted).not.toContain(GH_OAUTH);
+    expect(emitted).not.toContain(ANTHROPIC);
+    expect(emitted).not.toContain(GOOGLE);
+    // And the surrounding text survives. A redactor that eats the whole
+    // message passes the asserts above and is worse than useless: a shell
+    // showing `env dump: [REDACTED] done` cannot diagnose anything.
+    expect(frame.output).toContain('env dump:');
+    expect(frame.output).toContain('done');
+    expect(frame.output).toContain(REDACTION_MARKER);
+    // The field NAMES survive, which is the diagnosable half of the trade.
+    expect(frame.output).toContain('GITHUB_TOKEN=');
+  });
+
+  test('a credential in the COMMAND line is redacted too — `command` is free text as well', () => {
+    const frame = buildOutputFrame(2, input({ command: `curl -H "Authorization: ${GH_OAUTH}" https://api.github.com` }));
+    expect(JSON.stringify(frame)).not.toContain(GH_OAUTH);
+    expect(frame.command).toContain('curl -H');
+    expect(frame.command).toContain('https://api.github.com');
+  });
+
+  test('a whole stdout dump is scrubbed, not just the tail the schema inspects', () => {
+    // The credential sits at the FRONT, so a length-based or tail-only scrub
+    // would miss it, and it is followed by enough clean output to make a
+    // "return an empty string" fix look like it worked.
+    const frame = buildOutputFrame(
+      3,
+      input({ output: `key=${GH_OAUTH}\n${'clean line\n'.repeat(200)}` }),
+    );
+    expect(frame.output.startsWith('key=')).toBe(true);
+    expect(frame.output).not.toContain(GH_OAUTH);
+    expect(frame.output).toContain('clean line');
+  });
+
+  test('CLEAN output is carried through byte-identical — redaction that eats the message is not a fix', () => {
+    const clean = 'On branch main\nnothing to commit, working tree clean\n';
+    const frame = buildOutputFrame(4, input({ output: clean }));
+    expect(frame.output).toBe(clean);
+    expect(frame.outputBytes).toBe(Buffer.byteLength(clean, 'utf8'));
+    expect(frame.truncated).toBe(false);
+    expect(frame.droppedBytes).toBe(0);
+  });
+
+  test('redaction runs BEFORE the cap, so a scrubbed frame can still not exceed MAX_OUTPUT_TEXT_BYTES', () => {
+    // `[REDACTED]` is 10 bytes. Redacting after the cap could GROW an
+    // already-at-cap string past the limit and throw inside the schema parse —
+    // a redaction that takes down the producer.
+    const noisy = `${GH_OAUTH}\n${'y'.repeat(MAX_OUTPUT_TEXT_BYTES)}`;
+    const frame = buildOutputFrame(5, input({ output: noisy }));
+    expect(Buffer.byteLength(frame.output, 'utf8')).toBeLessThanOrEqual(MAX_OUTPUT_TEXT_BYTES);
+    expect(frame.output).not.toContain(GH_OAUTH);
+  });
+
+  test('outputBytes reports the REDACTED size — the raw length would leak the secret length', () => {
+    const frame = buildOutputFrame(6, input({ output: `k=${GH_OAUTH}` }));
+    expect(frame.outputBytes).toBe(Buffer.byteLength(frame.output, 'utf8'));
+    expect(frame.outputBytes).toBeLessThan(`k=${GH_OAUTH}`.length);
+  });
+
+  test('redaction is idempotent: a producer that pre-redacts gets the same frame', () => {
+    const once = buildOutputFrame(7, input({ output: `k=${GH_OAUTH} trailing` }));
+    const twice = buildOutputFrame(7, input({ output: `k=${REDACTION_MARKER} trailing` }));
+    expect(twice.output).toBe(once.output);
   });
 });
 

@@ -41,7 +41,7 @@ import { isActionableInstruction, optimizePrompt } from './orchestrator/prompt-o
 import { probeHealth } from './launcher/index.js';
 import { FileVault } from './voice/vault.js';
 import { Keyring, keyAdvanced, withKey, type AcquiredKey } from './voice/keyring.js';
-import { GroqWhisperClient, transcribeStream } from './voice/stt.js';
+import { GroqWhisperClient, SttTimeoutError, transcribeStream } from './voice/stt.js';
 import { AudioIngest, isLoudWindow } from './voice/ingest.js';
 // NOT imported statically. `runtime/vad.js` pulls in `onnxruntime-node`, a
 // native module the sidecar does not bundle, so a static import made a missing
@@ -54,7 +54,8 @@ import { AudioIngest, isLoudWindow } from './voice/ingest.js';
 import { makeVadGate, type VadModule } from './runtime/vad-gate.js';
 import { writeKeyPools } from './voice/key-store.js';
 import { TelemetryWriter } from './telemetry/index.js';
-import type { SanitizedErrorClass, TelemetryInput } from './telemetry/index.js';
+import { classifyError } from './telemetry/index.js';
+import type { TelemetryInput } from './telemetry/index.js';
 
 // Production daemon — the missing composition root. It adopts an already-running
 // `opencode serve` (single-supervisor rule: it never fights one), owns the
@@ -241,16 +242,60 @@ export interface SpeechGateLike {
  * generation check, and the user paid for a planning call whose result was never
  * spoken. Cancelling means the request, not the audio.
  *
- * Two generations, deliberately, because they guard different awaits:
+ * W11. Two halves were still not the whole. `pipeline().cancel()` bumps a
+ * GENERATION COUNTER — it unwinds the daemon's own `await`, and nothing else.
+ * It cannot reach OpenCode, because the daemon never holds that request.
+ *
+ * WHY IT NEVER HOLDS IT, in the form that does not depend on which prompt
+ * route happens to be live: the conversational egress is `ServeClient
+ * .promptSession`, and BOTH of its routes return an ADMISSION, not a
+ * completion. `/api/session/{id}/prompt` answers with `SessionInputAdmitted`,
+ * and the v1 `POST /session/{id}/prompt_async` answers **204 with no body at
+ * all** (measured 2026-10-01 against the live serve: 204, no content-type, zero
+ * bytes, for the `{messageID, parts}` body this client sends). So by the time
+ * the daemon holds its receipt, OpenCode is already generating the answer, and
+ * the only party that can stop it is OpenCode.
+ *
+ * `promptWithKey` prefers the v2 route and falls through to v1 on a 5xx;
+ * `client.ts` records the v2 route as 500-ing on this server generation. That
+ * specific 500 was NOT re-measured here — reproducing it needs a REAL session id
+ * and a real turn, which is the user's quota and their session, not a probe's.
+ * The argument above does not depend on it: an admitted turn is still a running
+ * turn. A cancel that never interrupts the session leaves the user's paid-for
+ * turn running to completion in a process nobody is watching — which is the
+ * defect W11 names, and it was invisible locally because both local halves did
+ * fire.
+ *
+ * So three halves, in a fixed order, and the order is the contract:
  *   * `gate`     — TTS sentence synthesis and broadcast, per sentence;
- *   * `pipeline` — the STT → think → dispatch turn, per await.
+ *   * `pipeline` — the STT → think → dispatch turn, per await (local only);
+ *   * `interrupt`— the OpenCode session itself (`POST /api/session/{id}/interrupt`).
  *
  * `pipeline` is a getter because `rebuildVoice` can replace the pipeline while
  * a command is in flight, and an abort must reach the CURRENT one.
+ *
+ * `interrupt` is `() => void`, NOT `() => Promise<void>`, and it is never
+ * awaited. `abort` is a member of `SERVE_LOCAL_ONLY_COMMANDS`
+ * (`runtime/serve-health.ts`) precisely so it still works when serve is DOWN —
+ * which is the moment a user reaches for cancel hardest. Awaiting a round trip
+ * before the local cancel would let a dead serve delay the one thing that still
+ * works, and would make a cancel that cannot reach OpenCode take seconds to
+ * admit it. The caller fires and forgets; this function stays synchronous, so
+ * the local halves are unconditional and instantaneous.
+ *
+ * The third parameter is REQUIRED, not optional. An optional `interrupt` would
+ * type-check at every existing call site and silently reintroduce exactly the
+ * local-only abort this replaced — a signature that reads as wired and behaves
+ * as if it were not.
  */
-export function abortTurn(gate: SpeechGateLike, pipeline: () => { cancel(): void } | null): void {
+export function abortTurn(
+  gate: SpeechGateLike,
+  pipeline: () => { cancel(): void } | null,
+  interrupt: () => void,
+): void {
   gate.abort();
   pipeline()?.cancel();
+  interrupt();
 }
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
@@ -370,6 +415,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // the shell applied when it pre-created this path (main.rs,
       // `ensure_owner_key`). A torn read can only make the shell refuse, which
       // is the fail-closed direction.
+      //
+      // `mode` below only ever applies on CREATION. When the shell has already
+      // provisioned this path — which `ensure_owner_marker` now does on every
+      // launch, not just the first — the write lands on an existing file and the
+      // protected descriptor survives untouched. The guard is for the other case,
+      // where this daemon is running without the supervisor and would otherwise
+      // CREATE the marker on the parent directory's inherited ACL, putting the
+      // owner key in a file every local administrator can read. That is refused
+      // rather than written; the catch below already reports it as
+      // `daemon-owner-unpublished`, and the next launch then refuses to adopt a
+      // holder it cannot authenticate, which is the fail-closed direction.
+      if (!CAN_ENFORCE_FILE_MODE && !existsSync(ownerPath)) {
+        throw new Error(
+          'refusing to create the daemon.owner marker on Windows: a 0600 mode is a ' +
+            'no-op there, and the marker carries the owner key. Start Voxaura so its ' +
+            'supervisor provisions the path with a protected owner-only DACL.',
+        );
+      }
       writeFileSync(ownerPath, JSON.stringify(marker), { mode: 0o600 });
     } catch (err) {
       // Not fatal: the daemon is listening and serving. But the next launch will
@@ -857,6 +920,53 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     speak: options.shellSpeak ?? ((text) => speakCourtesy(text)),
   });
 
+  // ── W11 · the half of a cancel that leaves this process ──────────────────
+  // `abortTurn` cancels two LOCAL generations and then interrupts the OpenCode
+  // session. This is that third half, and it is the only one that costs a round
+  // trip, so it is written to be unable to hurt the other two.
+  //
+  // NOT AWAITED, EVER. See the `interrupt` parameter's note on `abortTurn`:
+  // `abort` is allow-listed in `SERVE_LOCAL_ONLY_COMMANDS` so it still fires
+  // when serve is dead, which is when it matters most. Awaiting here would put
+  // the local cancel behind an HTTP round trip to a port that may not be
+  // listening.
+  //
+  // NO SESSION, NOTHING TO INTERRUPT. `activeSession` is `undefined` until the
+  // shell switches or the daemon creates one, and `interruptSession` would
+  // throw `SESSION_NOT_FOUND` for a fabricated id. Skipping is the truthful
+  // answer, not a silent success: there was no session running.
+  const interruptActiveSession = (): void => {
+    const session = activeSession;
+    if (session === undefined) return;
+    void client.interruptSession(session).catch(() => {
+      // The user asked to stop work that may still be running inside OpenCode,
+      // and it did not stop. Saying so is the whole point — a cancel that fails
+      // quietly is the same defect as a cancel that is not wired at all, and it
+      // is the one half of this path that cannot be verified locally.
+      //
+      // The error itself is deliberately NOT interpolated and NOT logged here.
+      // `err.message` from the control funnel is a provider string, and
+      // redaction is a SINK responsibility (`UiServer.notice`), so echoing it
+      // into a second channel would be exactly the leak that sink exists to
+      // prevent. `notice.code` is an open `z.string().min(1)`, so a new code is
+      // additive and needs no protocol change; the shell renders it through the
+      // generic notice pipe.
+      //
+      // STATED LIMIT — no telemetry row for this failure. `TelemetryInput`'s
+      // `subsystem` is a closed union (`STT|BRAIN|TTS|LAYA|LAUNCHER|KEYRING`,
+      // `telemetry/writer.ts`) and none of those six is honest for a session
+      // interrupt. `BRAIN` would be a lie in the one file whose own comment says
+      // reusing a wrong code "would have put a lie in the data", so the row is
+      // omitted rather than falsified. Widening the union is the correct fix and
+      // is deliberately NOT smuggled in from here.
+      ui.notice(
+        'interrupt-failed',
+        'وقفنا الصوت محلياً، بس ما قدرنا نوقف شغل OpenCode — جرّب مرة ثانية.',
+        'warn',
+      );
+    });
+  };
+
   // ── SERVE RESILIENCE · POINT 3 · the gate ─────────────────────────────────
   // EXACTLY the one-line guard `docs/SERVE-RESILIENCE.md` specifies: a wrapper,
   // two existing arguments, one new. `withServeGate` is generic over the command
@@ -946,7 +1056,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ui.notice('persona-changed', persona, 'info');
     },
     // The EXPLICIT stop (the HUD button): the whole turn, not just the audio.
-    onAbort: () => abortTurn(speechGate, () => audio),
+    // W11: three halves now — the TTS gate, the local turn generation, and the
+    // OpenCode session. The first two are local; only `interruptActiveSession`
+    // leaves the process, and it is the only one that could have been missing
+    // without any local test noticing.
+    onAbort: () => abortTurn(speechGate, () => audio, interruptActiveSession),
     // M2 Pattern 2: a voice burst stops the SPEECH only. Barely more than
     // `speechGate.abort()` on purpose — reaching the pipeline here would throw
     // away a plan the user is already paying for. Structural guard:
@@ -1010,25 +1124,21 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // Deliberately swallowed — see above.
     }
   };
-  /** Map a thrown value to the closed error-class union. Never leaks a message. */
-  const classify = (err: unknown): SanitizedErrorClass => {
-    if (err instanceof OrchestratorError) {
-      // Only reachable now that the brain stops reporting every failure as
-      // BRAIN_TIMEOUT (L24). Before that, quota exhaustion — the live blocker —
-      // was indistinguishable from a slow network here.
-      if (err.code === 'RATE_LIMITED') return 'QuotaExceeded';
-      if (err.code === 'BRAIN_AUTH') return 'AuthError';
-      if (err.code === 'BRAIN_REJECTED') return 'FetchError';
-      if (err.code === 'SERVE_UNREACHABLE' || err.code === 'SSE_DISCONNECTED') return 'FetchError';
-      if (err.code === 'CONFIG_INVALID' || err.code === 'HIGH_STAKES_CONFIRM_REQUIRED') return 'AuthError';
-      if (err.code === 'CONTRACT_DRIFT') return 'ContractDrift';
-    }
-    const name = err instanceof Error ? err.name : '';
-    if (name === 'AbortError' || name === 'TimeoutError') return 'TimeoutError';
-    if (name === 'ZodError') return 'ZodError';
-    if (name === 'TypeError' && err instanceof Error && /fetch|network|socket/i.test(err.message)) return 'FetchError';
-    return 'Unknown';
-  };
+  /**
+   * Map a thrown value to the closed error-class union. Never leaks a message.
+   *
+   * THE BODY LIVES IN `telemetry/error-class.ts` (W27). It used to be this
+   * closure, and that was load-bearing in a way nobody intended: a closure over
+   * nothing cannot be imported, so no test could call it with a real error, so
+   * the classifier's rule was never exercised by a real error — which is exactly
+   * how `SttTimeoutError` came to be recorded as `Unknown` for the daemon's
+   * entire life while every row it wrote looked plausible.
+   *
+   * The name `classify` and every `classify(err)` call site are kept, so the
+   * wiring guard that pins them (`policy/telemetry-wired.test.ts`) still matches
+   * the call it was written against.
+   */
+  const classify = classifyError;
 
   let audio: AudioPipeline | null = null;
   let voicePhase = 'idle';
@@ -1137,6 +1247,23 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // destroyed ring's key material. The queue itself is not rebuilt, so
       // in-flight tasks survive the save.
       coordinatorRef = coordinator;
+      // The one measured handoff between the STT call and the pipeline's
+      // recovery callback (W27). `onSttTimeout` is handed the TIMEOUT BUDGET,
+      // which is a constant, so writing it into `latencyMs` reported every stall
+      // as exactly 15 000 ms — a fabricated measurement in the one file whose
+      // entire job is measurement. This holds the real elapsed time until the
+      // callback fires.
+      //
+      // Declared at PIPELINE scope, not inside `transcribe`, because the writer
+      // (`transcribe`'s catch) and the reader (`onSttTimeout`) are siblings in
+      // this one options object.
+      //
+      // ORDER IS DETERMINISTIC, not a race: the timeout arm rethrows,
+      // `transcribeWindow` catches it and calls `onSttTimeout` synchronously
+      // afterwards, and `pushChunk` awaits windows serially — that serial await
+      // is the very wedge D5 fixed — so no second window can overwrite this
+      // between the write and the read.
+      let sttElapsedMs: number | null = null;
       return new AudioPipeline({
         // M3 B.3: the accumulator reports watermarks, the transport publishes
         // them. The callback is transport-blind — `AudioIngest` neither imports
@@ -1167,6 +1294,28 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
                 ? res.text
                 : { text: res.text, noSpeechProb: res.noSpeechProb };
             } catch (err) {
+              // A STALL IS NOT A FAILURE, and this is the only branch that knows
+              // it (W27). `SttTimeoutError` is thrown by `stt.ts`'s race, and the
+              // pipeline's `transcribeWindow` catches exactly that class, counts
+              // it, fires `onSttTimeout` and DROPS the window — the loop keeps
+              // flowing by design (`audio-pipeline.ts`, the D5 fix). So the
+              // pipeline, not this catch, is the authority on a timeout.
+              //
+              // Before this branch, ONE stalled window produced THREE false
+              // reports about itself: this row (`STT_FAILED`/`ERROR`), this
+              // notice (`stt-failed`, severity `error`) and then the pipeline's
+              // `STT_TIMEOUT`/`DEGRADED` row and `stt-timeout` notice at
+              // severity `warn`. Two notices at conflicting severities for one
+              // recoverable event, and the harsher one first. The user was told
+              // speech-to-text had failed while the app was still listening.
+              //
+              // The rethrow is load-bearing: it is what lets the pipeline
+              // recognise the timeout and recover. Swallowing it here would turn
+              // a recoverable stall into a wedge.
+              if (err instanceof SttTimeoutError) {
+                sttElapsedMs = Date.now() - t0;
+                throw err;
+              }
               record({
                 subsystem: 'STT',
                 status: 'ERROR',
@@ -1411,15 +1560,29 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         // D5: a stalled provider costs one window, not the session, and the
         // shell is told so the silence is not read as a bug.
         onSttTimeout: (ms) => {
+          // THE SINGLE AUTHORITY for a stalled STT window (W27). The pipeline
+          // dropped the window and kept listening, so this is a DEGRADED
+          // observation at `warn`, not a failure at `error` — and the STT call's
+          // own catch no longer claims otherwise. One stall is now one row and
+          // one notice, rather than two of each at conflicting severities.
+          //
+          // `latencyMs` is the MEASURED elapsed time when the STT call left it
+          // for us, and the budget only as a floor, so a row never asserts a
+          // precision the code does not have. `sanitizedErrorClass` is the
+          // literal `'TimeoutError'` rather than `classify(err)` because the
+          // callback is handed a duration, not the error; it is written out so
+          // that the row's class and `classify`'s answer cannot drift apart.
+          const measured = sttElapsedMs ?? Math.round(ms);
           record({
             subsystem: 'STT',
             status: 'DEGRADED',
-            latencyMs: Math.round(ms),
+            latencyMs: measured,
             errorCode: 'STT_TIMEOUT',
             sanitizedErrorClass: 'TimeoutError',
             remediationAttempted: 'None',
           });
           ui.notice('stt-timeout', `تجاوز تحويل الصوت المهلة (${Math.round(ms / 1000)} ثانية) — تم تجاهل النافذة ومتابعة الاستماع.`, 'warn');
+          sttElapsedMs = null;
         },
         onUtterance: (utterance) => {
           void (async () => {
@@ -1718,8 +1881,50 @@ export function ipcTokenPath(home: string = homedir()): string {
 }
 
 /**
+ * True when this platform can actually make a file owner-only from Node.
+ *
+ * MEASURED on Windows, not assumed: `writeFileSync(p, x, { mode: 0o600 })`
+ * followed by `chmodSync(p, 0o600)` leaves the file at
+ *
+ *   NT AUTHORITY\SYSTEM:(I)(F)
+ *   BUILTIN\Administrators:(I)(F)
+ *   <owner>:(I)(F)
+ *
+ * Both calls compile, return, and change nothing that matters. `mode` is an
+ * argument to `open(2)`, and it is consumed only when the file is CREATED;
+ * `chmodSync` is `SetFileAttributes`, which toggles `FILE_ATTRIBUTE_READONLY`
+ * and no access control at all. So the `0o600` here was never a control — it
+ * was decoration that read like one, which is the same failure shape as the
+ * `(0600)` comments that used to ship with no ACL code anywhere.
+ *
+ * Windows carries "only me" in a DACL. Node cannot write one without a native
+ * addon, which is why the Rust supervisor owns credential creation on this
+ * platform (see `restrict_to_owner` in `main.rs`).
+ */
+const CAN_ENFORCE_FILE_MODE = process.platform !== 'win32';
+
+/**
  * Return the per-install IPC token, generating it on first use (H4). The value
- * is random per machine, written 0600, and never baked into the bundle or logs.
+ * is random per machine, never baked into the bundle or logs, and — on Windows —
+ * never written by this process at all (see `CAN_ENFORCE_FILE_MODE`).
+ *
+ * ADOPT, NEVER RE-CREATE, ON WINDOWS. This function used to create the file
+ * with `{ mode: 0o600 }` and a `chmodSync`, which is why it could win a race
+ * against the supervisor and leave the WS-4097 bearer token readable by
+ * `BUILTIN\Administrators`. It is the ONLY producer of this credential outside
+ * the Rust supervisor: `serveDaemon` reaches it solely when
+ * `VOICE_RUNTIME_IPC_TOKEN` is absent from the environment, and the supervisor
+ * always sets that (main.rs). So the create branch is reachable exactly when the
+ * supervisor did NOT run — which is not a moment this process should be inventing
+ * a credential in, because it cannot protect the file it is about to write.
+ *
+ * Failing closed is the correct direction here rather than a loud no-op: a
+ * refused create is an operator-visible error naming the real cause, whereas a
+ * silently world-readable bearer token is discovered during an audit.
+ *
+ * An EXISTING file is still adopted, and `writeFileSync` against an existing
+ * path does not change its security descriptor, so this never downgrades what
+ * the supervisor locked down.
  */
 export function ensureIpcToken(path: string = ipcTokenPath()): string {
   if (existsSync(path)) {
@@ -1727,12 +1932,22 @@ export function ensureIpcToken(path: string = ipcTokenPath()): string {
     if (existing.length > 0) return existing;
   }
   const token = randomBytes(32).toString('hex');
+  if (!CAN_ENFORCE_FILE_MODE) {
+    throw new Error(
+      `ipc.token is absent at ${path} and this process cannot create it safely: ` +
+        'on Windows a 0600 mode is a no-op (SetFileAttributes), so a token written here ' +
+        'would be readable by every local administrator. Provision the token through the ' +
+        'Voxaura shell, which applies a protected owner-only DACL, or set ' +
+        'VOICE_RUNTIME_IPC_TOKEN.',
+    );
+  }
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, token, { mode: 0o600 });
   try {
     chmodSync(path, 0o600);
   } catch {
-    // Windows ACLs already scope the user profile; best-effort on POSIX.
+    // Best effort on POSIX only. Reachable exclusively where the mode above is
+    // real, so a failure here is the filesystem refusing, not a silent no-op.
   }
   return token;
 }

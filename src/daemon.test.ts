@@ -1,8 +1,8 @@
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ipcTokenFromEnv, startDaemon, vaultPathFromEnv, type DaemonHandle, type DaemonOptions } from './daemon.js';
 import {
@@ -47,6 +47,25 @@ vi.mock('groq-sdk', () => ({
   },
 }));
 
+// Every `POST /api/session/{id}/interrupt` the fake serve has been asked for, as
+// `{path, authHeader}`. W11: the whole point of the item is whether a cancel
+// LEAVES THIS PROCESS, so the fake has to be able to disagree — and the record
+// is what lets a test prove it did, rather than trusting a spy on a local call.
+const interruptHits: Array<{ path: string; authorized: boolean }> = [];
+
+/**
+ * W11 — how the fake answers an interrupt. `204` with NO content-type and no
+ * body, because that is what the real route answers, MEASURED 2026-10-01 on a
+ * live `ses_…` against the serve this client talks to (`/doc` declares
+ * `v2.session.interrupt`, responses 204/400/401/404).
+ *
+ * A fake that answered `200 application/json` instead would have been a
+ * different route: `spaFallbackContentType` returns `null` for JSON and for a
+ * missing type alike, so the JSON variant would pass even with the guard off and
+ * the 204 variant is what makes the guard test below real.
+ */
+const interruptStatus: { code: number } = { code: 204 };
+
 // A fake `opencode serve`: only the routes the daemon touches.
 function fakeServe(): Promise<{ server: Server; port: number }> {
   return new Promise((resolve) => {
@@ -63,6 +82,28 @@ function fakeServe(): Promise<{ server: Server; port: number }> {
         send({ data: [{ id: 'build', name: 'Build' }] });
         return;
       }
+      // W11: the cancel's egress. Recorded BEFORE the response so a test that
+      // waits on the record cannot lose a race with the daemon's own reply.
+      const interrupt = /^\/api\/session\/([^/]+)\/interrupt$/.exec(req.url ?? '');
+      if (interrupt !== null && req.method === 'POST') {
+        interruptHits.push({ path: req.url ?? '', authorized: (req.headers.authorization ?? '') !== '' });
+        // `interruptStatus` is mutable so ONE test can make this route answer
+        // the SPA fallback instead, and prove the guard refuses it. Default 204.
+        if (interruptStatus.code === 204) {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        if (interruptStatus.code === 200) {
+          // Byte-for-byte the shape measured from the real server for a
+          // session-scoped path with no handler: 2 884 bytes of index.html.
+          res.writeHead(200, { 'Content-Type': 'text/html;charset=UTF-8' });
+          res.end(`<!doctype html>\n<html lang="en"><head><meta char${'set'}="utf-8"></head></html>`);
+          return;
+        }
+        send({ _tag: 'SessionNotFoundError' }, interruptStatus.code);
+        return;
+      }
       send({ error: 'not found' }, 404);
     });
     server.listen(0, '127.0.0.1', () => {
@@ -77,6 +118,14 @@ const servers: Server[] = [];
 const handles: DaemonHandle[] = [];
 
 afterEach(async () => {
+  // W11: the interrupt record is module-level so the fake serve can write it
+  // without `boot` having to thread a port back out. That makes leakage between
+  // tests the failure mode, so it is cleared here — and `interruptStatus` with
+  // it, because one test deliberately makes the route answer the SPA fallback
+  // and a leaked 200 would make every later cancel look broken (or, worse, make
+  // the guard test pass for the wrong reason).
+  interruptHits.length = 0;
+  interruptStatus.code = 204;
   while (handles.length > 0) await handles.pop()!.stop();
   while (servers.length > 0) {
     const s = servers.pop()!;
@@ -338,6 +387,170 @@ describe('daemon composition (production wiring)', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// W11 · a cancel must reach OpenCode, not just this process
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// WHAT WAS BROKEN, from the tree and not from the plan: `abortTurn` was
+// `gate.abort(); pipeline()?.cancel();`. Both are LOCAL. `pipeline().cancel()`
+// bumps a generation counter that unwinds the daemon's own `await`
+// (`audio-pipeline.ts:180` drops an abandoned turn's reply), and that is all it
+// can do: the conversational egress is `promptSession`, and both of its routes
+// return an ADMISSION rather than a completion — the v1 fallback
+// `POST /session/{id}/prompt_async` measured 204, no content-type, zero bytes on
+// the live serve (2026-10-01). OpenCode is therefore already generating the
+// answer when the daemon gets its receipt, and only OpenCode can stop it.
+//
+// WHY THESE TESTS DRIVE THE WIRE AND NOT THE FUNCTION. `ServeClient` is a class
+// instance constructed inside `startDaemon`; there is no seam to inject through.
+// Asserting that a local closure ran would prove the local half, which was never
+// broken, and would pass unchanged against the pre-W11 code. So the evidence
+// here is the fake serve's OWN RECORD of the request — an egress the local half
+// cannot fake, because it does not exist in the pre-fix code at all.
+describe('W11: an abort reaches the OpenCode session, not only this process', () => {
+  /** A real socket that records EVERY text frame — acks and notices alike. */
+  function observe(port: number, token: string): {
+    send: (cmd: Record<string, unknown>) => void;
+    frames: Array<Record<string, unknown>>;
+    close: () => void;
+  } {
+    const frames: Array<Record<string, unknown>> = [];
+    const sock = createConnection({ host: '127.0.0.1', port });
+    let acc = Buffer.alloc(0);
+    let head = Buffer.alloc(0);
+    let upgraded = false;
+    sock.on('data', (chunk: Buffer) => {
+      let rest = chunk;
+      if (!upgraded) {
+        head = Buffer.concat([head, chunk]);
+        const idx = head.indexOf('\r\n\r\n');
+        if (idx === -1) return;
+        upgraded = true;
+        rest = head.subarray(idx + 4);
+      }
+      acc = Buffer.concat([acc, rest]);
+      const { frames: decoded, remaining } = decodeFrames(acc);
+      acc = Buffer.from(remaining);
+      for (const f of decoded) {
+        if (f.opcode !== Opcode.Text) continue;
+        frames.push(JSON.parse(Buffer.from(f.payload).toString('utf8')) as Record<string, unknown>);
+      }
+    });
+    sock.on('connect', () => {
+      sock.write(
+        Buffer.from(
+          [
+            'GET /v1/ui HTTP/1.1',
+            'Host: 127.0.0.1',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+            'Sec-WebSocket-Version: 13',
+            `Sec-WebSocket-Protocol: voice-ui.v1, ${token}`,
+            '',
+            '',
+          ].join('\r\n'),
+          'utf8',
+        ),
+      );
+    });
+    return {
+      send: (cmd) =>
+        sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify(cmd)), Buffer.from([1, 2, 3, 4]))),
+      frames,
+      close: () => sock.destroy(),
+    };
+  }
+
+  const noticeCodes = (frames: Array<Record<string, unknown>>): string[] =>
+    frames.filter((f) => f['type'] === 'notice').map((f) => String(f['code']));
+
+  test('an abort over the wire interrupts the ACTIVE session on serve', async () => {
+    const vault = join(mkdtempSync(join(tmpdir(), 'w11-')), 'keyring.dat');
+    const handle = await boot(vault);
+    const ws = observe(handle.ipcPort, 'test-ipc-token');
+    await new Promise((r) => setTimeout(r, 250));
+
+    // The shell names the session first — `activeSession` is `undefined` until
+    // then, which is the honest reason an earlier abort had nothing to interrupt.
+    ws.send({ id: 'sw', kind: 'switchSession', sessionId: 'ses_a' });
+    await until(() => ws.frames.some((f) => f['type'] === 'ack' && f['id'] === 'sw'));
+    ws.send({ id: 'ab', kind: 'abort' });
+
+    // The assertion IS the egress: a POST the daemon could only have made by
+    // leaving the process.
+    await until(() => interruptHits.length > 0, 5_000);
+    expect(interruptHits).toEqual([{ path: '/api/session/ses_a/interrupt', authorized: true }]);
+    expect(
+      ws.frames.some((f) => f['type'] === 'ack' && f['id'] === 'ab' && f['ok'] === true),
+      'the cancel still acks ok',
+    ).toBe(true);
+    // Silence is the right outcome: both local halves did their job, so a
+    // failure notice here would be a lie.
+    expect(noticeCodes(ws.frames).filter((c) => c === 'interrupt-failed')).toEqual([]);
+    ws.close();
+  });
+
+  test('a session-scoped path that 200s (the SPA fallback) is REFUSED, and the cancel still lands', async () => {
+    // This is the half that made `interruptSession` dangerous to wire: the real
+    // server answers a session-scoped path with NO HANDLER as `200 text/html`
+    // (measured 2 884 bytes on a live session), so a status-only check reports
+    // success against nothing. Here the fake replays exactly that, and the
+    // daemon must (a) NOT claim the cancel reached OpenCode and (b) STILL ack
+    // `ok` — the serve leg is best-effort by construction and must never be
+    // able to wedge the local cancel.
+    interruptStatus.code = 200;
+    const vault = join(mkdtempSync(join(tmpdir(), 'w11-spa-')), 'keyring.dat');
+    const handle = await boot(vault);
+    const ws = observe(handle.ipcPort, 'test-ipc-token');
+    await new Promise((r) => setTimeout(r, 250));
+    ws.send({ id: 'sw2', kind: 'switchSession', sessionId: 'ses_a' });
+    await until(() => ws.frames.some((f) => f['type'] === 'ack' && f['id'] === 'sw2'));
+    ws.send({ id: 'ab2', kind: 'abort' });
+
+    await until(() => noticeCodes(ws.frames).includes('interrupt-failed'), 5_000);
+    expect(interruptHits.length, 'the request really was attempted').toBe(1);
+    expect(
+      ws.frames.some((f) => f['type'] === 'ack' && f['id'] === 'ab2' && f['ok'] === true),
+      'a broken OpenCode leg must not fail the user-facing cancel',
+    ).toBe(true);
+    ws.close();
+  });
+
+  test('no active session means no interrupt request is invented', async () => {
+    const vault = join(mkdtempSync(join(tmpdir(), 'w11-nosess-')), 'keyring.dat');
+    const handle = await boot(vault);
+    const ws = observe(handle.ipcPort, 'test-ipc-token');
+    await new Promise((r) => setTimeout(r, 250));
+    ws.send({ id: 'ab3', kind: 'abort' });
+    await until(() => ws.frames.some((f) => f['type'] === 'ack' && f['id'] === 'ab3'));
+    // Give a wrongly-constructed request time to arrive before asserting it did
+    // not — otherwise this passes for the wrong reason.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(interruptHits, 'interrupting nothing must not POST a fabricated session').toEqual([]);
+    expect(noticeCodes(ws.frames).filter((c) => c === 'interrupt-failed')).toEqual([]);
+    ws.close();
+  });
+
+  test('STRUCTURAL: startDaemon hands abortTurn a real interrupter, not a no-op', () => {
+    // Labelled structural, for the reason the neighbouring structural tests in
+    // `daemon-barge-in.test.ts` give: the interrupter is a closure private to
+    // `startDaemon`. This pins the SHAPE; the three tests above pin the
+    // BEHAVIOUR. Only one of the two is load-bearing if this drifts.
+    //
+    // Non-vacuous by construction: `() => undefined` cannot satisfy the
+    // `interruptActiveSession` requirement below, and dropping the third
+    // argument is a compile error because the parameter is required.
+    const src = readFileSync('src/daemon.ts', 'utf8');
+    const lines = src.split('\n').filter((l) => /^\s*onAbort:/.test(l));
+    expect(lines, 'startDaemon must wire an onAbort into the command handler').toHaveLength(1);
+    const wiring = lines[0] ?? '';
+    expect(wiring, `the abort handler must reach the OpenCode session: ${wiring.trim()}`).toMatch(
+      /abortTurn\(speechGate,\s*\(\)\s*=>\s*audio,\s*interruptActiveSession\)/,
+    );
+  });
+});
+
 describe('A5: the TTS credit clock belongs to the daemon, not to the pipeline', () => {
   const DAY_MS = 86_400_000;
   const T0 = 1_760_000_000_000;
@@ -562,6 +775,16 @@ describe('C2: the daemon publishes who owns the IPC port', () => {
     const previous = process.env[DAEMON_OWNER_KEY_ENV];
     process.env[DAEMON_OWNER_KEY_ENV] = KEY;
     try {
+      // The marker is PRE-CREATED, empty, by the shell before the daemon is
+      // spawned — `ensure_owner_marker` in main.rs, which applies a protected
+      // owner-only DACL and does so on every launch, not only the first.
+      // Creating it here mirrors the real sequence; it used to be absent, which
+      // is a state no supported launch path produces, and it let the daemon
+      // "create" the file on the parent directory's inherited ACL — the exact
+      // condition the guard in `publishOwner` refuses on Windows, because Node
+      // cannot write a DACL there. The daemon must rewrite this existing path in
+      // place, which preserves the descriptor the shell locked down.
+      writeFileSync(ownerPath, '', 'utf8');
       const { server, port } = await fakeServe();
       servers.push(server);
       const handle = await startDaemon({
@@ -626,6 +849,46 @@ describe('C2: the daemon publishes who owns the IPC port', () => {
     }
   });
 
+  // The guard added alongside W1: with an owner key but no pre-provisioned
+  // marker, a Windows daemon must NOT create one. `{ mode: 0o600 }` is a no-op
+  // there, so creating it would leave the owner key readable by
+  // `BUILTIN\Administrators`. Failing closed is correct: the next shell launch
+  // then reports 4097 as held by a stranger, which is TRUE, rather than trusting
+  // a marker this process could not protect.
+  test.skipIf(process.platform !== 'win32')(
+    'on Windows a daemon with no pre-provisioned marker refuses to create one',
+    async () => {
+      const runtimeDir = mkdtempSync(join(tmpdir(), 'daemon-nomarker-'));
+      const ownerPath = join(runtimeDir, DAEMON_OWNER_FILE);
+      const previous = process.env[DAEMON_OWNER_KEY_ENV];
+      process.env[DAEMON_OWNER_KEY_ENV] = KEY;
+      try {
+        const { server, port } = await fakeServe();
+        servers.push(server);
+        const handle = await startDaemon({
+          servePort: port,
+          servePassword: 'pw',
+          ipcToken: 'test-ipc-token',
+          ipcPort: 0,
+          vaultPath: join(mkdtempSync(join(tmpdir(), 'daemon-nomarker-vault-')), 'keyring.dat'),
+          directory: process.cwd(),
+          inventoryIntervalMs: 3_600_000,
+          runtimeDir,
+        });
+        handles.push(handle);
+        expect(
+          existsSync(ownerPath),
+          'the marker must not be created at an ACL this process cannot control',
+        ).toBe(false);
+        // The daemon itself is unaffected: it is listening, only the claim is withheld.
+        expect(handle.ipcPort).toBeGreaterThan(0);
+      } finally {
+        if (previous === undefined) delete process.env[DAEMON_OWNER_KEY_ENV];
+        else process.env[DAEMON_OWNER_KEY_ENV] = previous;
+      }
+    },
+  );
+
   test('stop does not delete a claim that is no longer ours', async () => {
     // `clearOwner` re-reads and re-validates before unlinking, so a daemon that
     // has been superseded does not delete its successor's claim — which would
@@ -635,6 +898,8 @@ describe('C2: the daemon publishes who owns the IPC port', () => {
     const previous = process.env[DAEMON_OWNER_KEY_ENV];
     process.env[DAEMON_OWNER_KEY_ENV] = KEY;
     try {
+      // Pre-created by the shell, as in the previous test.
+      writeFileSync(ownerPath, '', 'utf8');
       const { server, port } = await fakeServe();
       servers.push(server);
       const handle = await startDaemon({
@@ -927,10 +1192,42 @@ describe('env resolvers', () => {
     expect(ipcTokenFromEnv({} as NodeJS.ProcessEnv)).toBe('');
   });
 
-  test('ensureIpcToken generates a per-install token once and reuses it', () => {
+  // The platform split is the point of the test, not a detail: the old version
+  // asserted "generates and reuses" on every platform, which on Windows was
+  // asserting the DEFECT — that this process persists a WS-4097 bearer token at
+  // an access level it cannot control. `{ mode: 0o600 }` and `chmodSync(0o600)`
+  // are both measured no-ops there (SetFileAttributes); the file lands on the
+  // parent directory's inherited ACL, which grants
+  // `BUILTIN\Administrators:(I)(F)`.
+  //
+  // So on Windows the correct behaviour is to REFUSE to create and to leave the
+  // provisioning to the Rust supervisor, which applies a protected owner-only
+  // DACL via SetNamedSecurityInfoW. A test that pins the insecure behaviour is
+  // the same trap as `capture-permission.test.ts` pinning an idempotency guard.
+  test('ensureIpcToken adopts an existing token on every platform', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ipctoken-'));
+    const path = ipcTokenPath(dir);
+    mkdirSync(dirname(path), { recursive: true });
+    const seeded = 'a'.repeat(64);
+    writeFileSync(path, seeded, 'utf8');
+    expect(ensureIpcToken(path)).toBe(seeded);
+  });
+
+  test.skipIf(process.platform === 'win32')(
+    'ensureIpcToken generates and reuses a per-install token where 0600 is real',
+    () => {
+      const path = ipcTokenPath(join(mkdtempSync(join(tmpdir(), 'ipctoken-'))));
+      const first = ensureIpcToken(path);
+      expect(first.length).toBe(64); // 32 random bytes, hex
+      expect(ensureIpcToken(path)).toBe(first);
+    },
+  );
+
+  test('ensureIpcToken refuses to create a credential on Windows rather than write a readable one', () => {
+    if (process.platform !== 'win32') return; // POSIX genuinely enforces the mode above.
     const path = ipcTokenPath(join(mkdtempSync(join(tmpdir(), 'ipctoken-'))));
-    const first = ensureIpcToken(path);
-    expect(first.length).toBe(64); // 32 random bytes, hex
-    expect(ensureIpcToken(path)).toBe(first);
+    expect(() => ensureIpcToken(path)).toThrow(/cannot create it safely/);
+    // Fail closed means no file at all, not an empty or half-written one.
+    expect(existsSync(path)).toBe(false);
   });
 });

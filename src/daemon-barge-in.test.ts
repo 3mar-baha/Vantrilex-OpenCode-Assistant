@@ -71,6 +71,8 @@ interface Rig {
   readonly synthesized: string[];
   /** Every audio frame pushed at the shell. */
   readonly broadcast: number[];
+  /** W11: every session id an `abort` asked OpenCode to interrupt. */
+  readonly interrupts: string[];
 }
 
 /**
@@ -82,6 +84,7 @@ function rig(): Rig {
   const utterances: Utterance[] = [];
   const synthesized: string[] = [];
   const broadcast: number[] = [];
+  const interrupts: string[] = [];
   const gate = new SpeechGate();
   let mp3Seq = 0;
 
@@ -95,6 +98,7 @@ function rig(): Rig {
     utterances,
     synthesized,
     broadcast,
+    interrupts,
   };
 
   state.pipeline = new AudioPipeline({
@@ -127,7 +131,11 @@ function rig(): Rig {
     switchSession: () => undefined,
     activeSessionId: () => 'ses_a' as SessionId,
     projectDirectory: () => process.cwd(),
-    onAbort: () => abortTurn(gate, () => state.pipeline),
+    // W11: the third half, mirroring `startDaemon`. The rig records it so the
+    // CANCEL-REACHES-OPENCODE claim is asserted here too and not only in
+    // `daemon.test.ts` — a rig that passed `() => undefined` would be the
+    // local-only abort this replaced, wearing a test's clothes.
+    onAbort: () => abortTurn(gate, () => state.pipeline, () => { state.interrupts.push('ses_a'); }),
     // M2 Pattern 2: exactly what `startDaemon` wires — a bare gate trip.
     onStopSpeech: () => gate.abort(),
   });
@@ -136,6 +144,25 @@ function rig(): Rig {
 }
 
 describe('abort cancels the turn, not just the audio (C4)', () => {
+  test('W11: an abort asks OpenCode to interrupt the session it had', async () => {
+    // The rig's third half. `daemon.test.ts` proves this against a real egress;
+    // this proves it against the rig, so the C4 suite cannot regress into
+    // asserting only the two local halves — which is precisely the shape it had
+    // before W11, and precisely the shape that hides this defect.
+    const r = rig();
+    const gen = r.gate.capture();
+    expect(r.interrupts, 'nothing before the cancel').toEqual([]);
+    expect(await r.handle({ id: 'cmd-w11', kind: 'abort' })).toEqual({ ok: true });
+    expect(r.gate.isCurrent(gen), 'the TTS half still trips').toBe(false);
+    expect(r.interrupts, 'and the OpenCode half is asked too').toEqual(['ses_a']);
+  });
+
+  // A first draft of this file also asserted HERE that `stopSpeech` fires no
+  // interrupt. It was VACUOUS and break-proved so: mutating the production
+  // `onStopSpeech` in `daemon.ts` left it green, because the rig builds its own
+  // handler in THIS file and the fixture cannot disagree with the assertion
+  // written beside it. The counterweight therefore lives in the M2-P2
+  // structural test below, which reads the real call site.
   test('a reply already being planned when abort lands is never narrated', async () => {
     const planner = deferred<{ reply: string }>();
     const r = rig();
@@ -237,7 +264,9 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
       switchSession: () => undefined,
       activeSessionId: () => undefined,
       projectDirectory: () => process.cwd(),
-      onAbort: () => abortTurn(gate, () => null),
+      // Mirrors `startDaemon` with no active session: `interruptActiveSession` returns
+      // early, so there is no id to interrupt and the call must not be made at all.
+      onAbort: () => abortTurn(gate, () => null, () => undefined),
     });
     const gen = gate.capture();
     const outcome = await handle({ id: 'cmd-3', kind: 'abort' });
@@ -259,7 +288,7 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
     await expect(pushed).rejects.toThrow('provider down');
   });
 
-  test('startDaemon hands abortTurn the LIVE pipeline, not a stub', () => {
+  test('startDaemon hands abortTurn the LIVE pipeline and a REAL interrupter', () => {
     // STRUCTURAL, and deliberately labelled as such. The rig above calls
     // `abortTurn` directly, so it proves the function cancels the turn; it cannot
     // prove that `startDaemon` passes a real pipeline, because `audio` is private
@@ -270,14 +299,30 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
     // purpose: it is the exact mistake this test exists to catch — reverting to
     // the audio-only handler. Verified non-vacuous: changing the argument to
     // `() => null` fails this test.
+    //
+    // W11 WIDENED IT, deliberately and not as a loosening. The old pattern ended
+    // at `audio)`, i.e. it pinned the ARITY — two arguments — rather than the
+    // property the test exists for. Adding the third half therefore turned it
+    // red, which is the correct behaviour for a pin on a shape and the wrong
+    // behaviour for a pin on a property. The pipeline assertion now terminates on
+    // the argument separator instead of the call's close paren, so it still
+    // fails on a null stub, and the interrupter gained its own assertion below
+    // rather than riding along unchecked. Net: strictly more is pinned than
+    // before, because a two-argument `abortTurn` no longer satisfies this test.
     const src = readFileSync('src/daemon.ts', 'utf8');
     const lines = src.split('\n').filter((l) => /^\s*onAbort:/.test(l));
     expect(lines, 'startDaemon must wire an onAbort into the command handler').toHaveLength(1);
     const wiring = lines[0] ?? '';
     expect(wiring, `the abort handler must reach the turn pipeline: ${wiring.trim()}`).toMatch(
-      /abortTurn\(speechGate,\s*\(\)\s*=>\s*audio\)/,
+      /abortTurn\(speechGate,\s*\(\)\s*=>\s*audio\s*,/,
     );
     expect(wiring, 'a null pipeline is the pre-C4 bug in disguise').not.toMatch(/\(\)\s*=>\s*null/);
+    // W11: the half that leaves the process. A no-op here is the exact defect
+    // this item is about, and it is invisible to every other assertion in this
+    // file — the two local halves would still trip.
+    expect(wiring, `a cancel that never reaches OpenCode is the W11 bug: ${wiring.trim()}`).toMatch(
+      /abortTurn\([^;]*interruptActiveSession\s*\)/,
+    );
   });
 
   // M2 Pattern 2 — speech-only barge-in. A voice burst must stop the AUDIO and
@@ -300,6 +345,14 @@ describe('abort cancels the turn, not just the audio (C4)', () => {
     );
     expect(wiring, 'stopSpeech must never cancel the turn').not.toMatch(/abortTurn/);
     expect(wiring, 'stopSpeech must never reach the pipeline').not.toMatch(/audio/);
+    // W11: and now a THIRD reach, which is the only one that leaves this
+    // process. A barge-in that interrupted the OpenCode session would stop the
+    // turn outright and waste the planner call the user is already paying for —
+    // the exact measured cost M2 Pattern 2 exists to avoid. This assertion is
+    // the real home of that counterweight: it reads the production call site,
+    // so a rig in this file cannot make it vacuous. Break-proven — wiring
+    // `interruptActiveSession()` into `onStopSpeech` fails it.
+    expect(wiring, 'a barge-in must not interrupt the OpenCode session').not.toMatch(/interrupt/);
   });
 
   test('M2-P2: an executed stopSpeech is never narrated back to the user', () => {    // STRUCTURAL, same rationale: `onExecuted` is an inline closure in

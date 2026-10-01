@@ -212,8 +212,7 @@ export const SERVE_BLOCKED_DETAIL_EXHAUSTED = 'serve-reconnect-exhausted';
 export const SERVE_NOTICE_RECONNECTING = 'serve-reconnecting';
 
 /**
- * Commands that provably cannot reach serve, and are therefore NOT blocked by
- * the gate.
+ * Commands the gate must NOT block when serve is dead, and why.
  *
  * This is an ALLOWLIST on purpose: an unknown or future command kind is blocked
  * until someone proves it local. Default-deny is the direction where a mistake
@@ -226,9 +225,34 @@ export const SERVE_NOTICE_RECONNECTING = 'serve-reconnecting';
  * the pre-tier-model file, in which these bodies sat ~350 lines earlier, and
  * an anchor that has drifted that far is indistinguishable from one that was
  * never checked. The MEMBERSHIP is unchanged and was verified member by
- * member: it is default-deny, and `serve-health.test.ts` re-derives it as the
- * exact complement of the serve-reaching kinds from the live `UiCommandSchema`.
- *   - `abort`            → `command-router.ts:641` calls `deps.onAbort?.()` only.
+ * member, re-verified 2026-10-01 (every anchor below resolved again).
+ *
+ * THE HEADLINE SENTENCE IS NOW NARROWER THAN THE LIST, DELIBERATELY. This block
+ * used to read "commands that provably cannot reach serve", and that was true
+ * when every member was local. `abort` stopped being local when the session
+ * interrupt landed (see its entry), so the honest claim is the one that survives
+ * it: **no member of this allowlist BLOCKS on a serve round trip the command
+ * must wait for.** `serve-health.test.ts` re-derives membership as the exact
+ * complement of the kinds whose router body `await`s `deps.client.*` (plus
+ * `confirm`, which re-enters `execute`), taken from the live `UiCommandSchema`
+ * rather than from this comment — which is why the two can disagree in prose
+ * and still not disagree in behaviour.
+ *   - `abort`            → `command-router.ts:640-642` calls `deps.onAbort?.()` and
+ *                          returns `{ ok: true }`. The router's OWN body is
+ *                          synchronous and awaits nothing, but the hook it calls
+ *                          is no longer local-only: `abortTurn` (`daemon.ts:290`)
+ *                          cancels the TTS gate and the pipeline, then calls
+ *                          `interruptActiveSession` (`daemon.ts:937`), which
+ *                          fires `client.interruptSession` WITHOUT awaiting it
+ *                          (`daemon.ts:940`) and emits `interrupt-failed` if it
+ *                          rejects (`daemon.ts:961`). So `abort` does reach serve
+ *                          now, and it is still the right member here precisely
+ *                          BECAUSE of that fire-and-forget shape: the local two
+ *                          halves are unconditional and instant, and the third
+ *                          half cannot make a cancel against a dead serve wait.
+ *                          Blocking it would make the gate cause the outage it
+ *                          exists to describe — the user reaches for cancel
+ *                          hardest when the assistant will not stop talking.
  *   - `stopSpeech`       → `command-router.ts:646` calls `deps.onStopSpeech?.()` only.
  *   - `playbackStarted`  → `command-router.ts:652` calls `deps.onPlaybackStarted?.()` only.
  *   - `mute`/`deafen`/`arm` → `command-router.ts:677-680` return `{ ok: true }`
@@ -236,7 +260,7 @@ export const SERVE_NOTICE_RECONNECTING = 'serve-reconnecting';
  *   - `switchSession`    → `command-router.ts:549-552` mutates daemon-local state.
  *   - `setPersona`       → `command-router.ts:635-638` calls `deps.setPersona?.()`,
  *                          which the daemon wires to `ui.setPersona`/`ui.notice`
- *                          (`daemon.ts:936-937`) — both local frames.
+ *                          (`daemon.ts:1041-1055`) — both local frames.
  *   - `saveApiKeys`      → `command-router.ts:627-633` calls `deps.saveKeys`, wired
  *                          to `writeKeyPools` (`daemon.ts:55`), which reaches only
  *                          the encrypted vault (`voice/key-store.ts:1`). No
