@@ -96,37 +96,104 @@ const isBuiltin = (s) => s.startsWith('node:') || s.startsWith('data:')
  * This is the fix for the phantom-import bug described at the top of the file,
  * and it is the reason the function looks more careful than a regex deserves.
  */
-export function stripComments(src) {
-  let out = '';
+function scan(src) {
+  // A template body is not a string body: `${ … }` is CODE, and it may contain a
+  // nested template with its own backticks. Scanning a backtick to the NEXT
+  // backtick — the obvious implementation — ends the template early on
+  // `` `${ "`" }` `` and then swallows the rest of the file as one long string.
+  // That was silent before the inString mask existed (the text survived
+  // unmangled by luck); with the mask it becomes a DROPPED import. Hence a real
+  // mode stack rather than a flat loop.
+  const out = [];
+  // Positions of the OUTPUT that came from a string or template BODY. A
+  // `${ … }` interpolation is code and is deliberately NOT marked, so an
+  // `import` inside one is still an import.
+  const inString = new Uint8Array(src.length);
+  const emit = (s, inStr) => {
+    if (inStr) for (let k = 0; k < s.length; k++) inString[out.length + k] = 1;
+    for (const ch of s) out.push(ch);
+  };
   let i = 0;
   const n = src.length;
+  const stack = [{ mode: 'code', quote: '', brace: 0, interp: false }];
+  const top = () => (stack.length > 0 ? stack[stack.length - 1] : null);
+
   while (i < n) {
+    const t = top();
     const c = src[i];
     const c2 = src[i + 1];
+
+    if (t.mode === 'string') {
+      if (c === '\\') { emit(src.substr(i, 2), true); i += 2; continue; }
+      emit(c, true);
+      i++;
+      if (c === t.quote) stack.pop();
+      continue;
+    }
+
+    if (t.mode === 'template') {
+      if (c === '\\') { emit(src.substr(i, 2), true); i += 2; continue; }
+      if (c === '`') { emit(c, true); i++; stack.pop(); continue; }
+      if (c === '$' && c2 === '{') {
+        // Leave the template body: the interpolation is code until its `}`.
+        emit(src.substr(i, 2), true);
+        i += 2;
+        stack.push({ mode: 'code', quote: '', brace: 0, interp: true });
+        continue;
+      }
+      emit(c, true);
+      i++;
+      continue;
+    }
+
     if (c === '/' && c2 === '/') { while (i < n && src[i] !== '\n') i++; continue; }
     if (c === '/' && c2 === '*') {
       i += 2;
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++;
-      i += 2;
-      out += ' ';
-      continue;
-    }
-    if (c === '`' || c === "'" || c === '"') {
-      const q = c;
-      out += c;
-      i++;
-      while (i < n) {
-        if (src[i] === '\\') { out += src[i] + (src[i + 1] ?? ''); i += 2; continue; }
-        out += src[i];
-        if (src[i] === q) { i++; break; }
-        i++;
+      const close = src.indexOf('*/', i);
+      if (close < 0) {
+        // Unterminated block comment. Real JS would not parse this file at all,
+        // but DISCARDING the remainder silently drops real imports, and a
+        // dropped import is the dangerous direction for an audit: a genuinely
+        // missing module would go unreported. Preserve the tail verbatim so the
+        // failure is loud (it will not resolve) rather than invisible.
+        emit(src.slice(i - 2), false);
+        i = n;
+        continue;
       }
+      emit(' ', false);
+      i = close + 2;
       continue;
     }
-    out += c;
+    if (c === "'" || c === '"') { emit(c, false); i++; stack.push({ mode: 'string', quote: c, brace: 0, interp: false }); continue; }
+    if (c === '`') { emit(c, true); i++; stack.push({ mode: 'template', quote: '', brace: 0, interp: false }); continue; }
+    if (c === '{') { t.brace++; emit(c, false); i++; continue; }
+    if (c === '}') {
+      // `}` closes a `${` ONLY when this frame was opened by one. In ordinary
+      // top-level code a brace is just a brace; popping there empties the stack
+      // and every later character throws on an undefined frame.
+      if (t.interp && t.brace === 0) { emit(c, true); i++; stack.pop(); continue; }
+      if (t.brace > 0) t.brace--;
+      emit(c, false);
+      i++;
+      continue;
+    }
+    emit(c, false);
     i++;
   }
-  return out;
+  return { code: out.join(''), inString };
+}
+
+/**
+ * Blank out comments while preserving string and template bodies verbatim, so
+ * an import specifier survives but a doc comment cannot invent one.
+ *
+ * `scan` additionally reports which output positions came from inside a string,
+ * because `const s = "import 'phantom'"` is NOT an import while `import 'x'` is,
+ * and both look identical to a regex over the stripped text. The mask makes that
+ * decidable instead of heuristic.
+ */
+export function stripComments(src) {
+  return scan(src).code;
 }
 
 /**
@@ -135,15 +202,24 @@ export function stripComments(src) {
  * for an unresolvable specifier depends on which one it was.
  */
 const SPEC_RE = /(?:^|[\s;)(=,{])(?:import|export)\s+(?:[^'"]*?\s*from\s*)?['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g;
+/** The keyword inside a match. No /g — `.exec` here must not carry lastIndex. */
+const KEYWORD_RE = /\b(?:import|export)\b/;
 
 /** @returns {{static: string[], dynamic: string[]}} specifiers, static first. */
 export function specifiersOf(source) {
-  const src = stripComments(source);
+  const { code, inString } = scan(source);
   const stat = [];
   const dyn = [];
   SPEC_RE.lastIndex = 0;
   let m;
-  while ((m = SPEC_RE.exec(src)) !== null) {
+  while ((m = SPEC_RE.exec(code)) !== null) {
+    // The match begins with a boundary character class, so the keyword sits a few
+    // characters in. If the KEYWORD is inside a string literal, the whole match
+    // is text, not an import — the specifier sits in a string either way, so the
+    // keyword is the only thing that can tell the two apart.
+    const kw = KEYWORD_RE.exec(m[0]);
+    const kwAt = m.index + (kw ? kw.index : 0);
+    if (inString[kwAt] === 1) continue;
     if (m[1] !== undefined) stat.push(m[1]);
     else if (m[2] !== undefined) dyn.push(m[2]);
   }

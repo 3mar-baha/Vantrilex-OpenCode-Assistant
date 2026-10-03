@@ -863,3 +863,102 @@ describe('W18 · the sidecar manifest is pinned and locked', () => {
     expect(src).toMatch(/does not match the dist\/ just built/);
   });
 });
+
+/**
+ * Adversarial corpus for `scan` / `stripComments` / `specifiersOf`.
+ *
+ * Found by ATTACK, not by reading: an out-of-tree probe fed 31 hostile inputs
+ * and compared `specifiersOf()` against hand-declared expectations. Three broke,
+ * from three distinct root causes:
+ *
+ *   1. UNTERMINATED BLOCK COMMENT — an opening marker with no closing marker made
+ *      the old walker discard the whole remainder of the file, so every later
+ *      real import vanished. A dropped import is the dangerous direction for an
+ *      audit: a genuinely missing module would go unreported.
+ *   2. PHANTOM SPECIFIER — `const s = "import 'phantom'"` is not an import, but
+ *      the keyword and its specifier are both inside one string literal and a
+ *      regex cannot tell that from `import 'x'`. Fixed by a position mask:
+ *      the specifier sits in a string either way, so the KEYWORD is what
+ *      discriminates.
+ *   3. NESTED BACKTICK IN `${}` — the old walker scanned a backtick to the next
+ *      backtick, so `` `${ "`" }` `` ended the template early and swallowed the
+ *      rest of the file. This was LATENT: the text survived unmangled by luck,
+ *      so the corpus passed. Once (2) added the mask, the walker's mistaken
+ *      model started rejecting real imports — the fix exposed the bug rather
+ *      than creating it. Hence the mode stack.
+ *
+ * Measured reach in the shipped payload, so the urgency is not overstated:
+ * unterminated `/*` in 0 of 111 `dist/*.js`; import-shaped string interior in
+ * 0 of 4,419 string literals. Both were real defects with zero live impact.
+ */
+describe('the stripper is not defeatable by comment- or string-shaped input', () => {
+  // [name, source, expected static, expected dynamic] — expectations are
+  // hand-declared from the source text, never read back from the function.
+  const CORPUS: [string, string, string[], string[]][] = [
+    // --- class: unterminated block comment (was: DROP) -------------------
+    ['unterminated-block-eats-rest', "import 'before';\n/* never closed\nimport 'after';\n", ['before', 'after'], []],
+    ['unterminated-block-midfile', "/* oops\nimport 'swallowed';\n", ['swallowed'], []],
+    // --- class: `//` inside a URL or string (non-break) -------------------
+    ['url-in-single-quoted-string', "const u = 'https://example.com/a//b';\nimport 'keep-me';\n", ['keep-me'], []],
+    ['url-in-double-quoted-string', 'const u = "https://example.com//path";\nimport "keep-me2";\n', ['keep-me2'], []],
+    ['protocol-relative-in-string', "const u = '//cdn.example.com/x';\nimport 'keep-me3';\n", ['keep-me3'], []],
+    // --- class: template with ${} carrying quotes and // -----------------
+    ['template-simple-slashes', "const t = `a // b`;\nimport 't-keep';\n", ['t-keep'], []],
+    ['template-interp-with-quote', 'const t = `x ${ obj["k"] } y`;\nimport \'t-keep2\';\n', ['t-keep2'], []],
+    ['template-nested-backtick-then-slashes', "const t = `x ${ \"`\" } // tail`; import 'DROPPED-A';\n", ['DROPPED-A'], []],
+    ['template-nested-backtick-import-after', "const t = `a ${ \"`\" } // b`;\nimport 'DROPPED-B';\n", ['DROPPED-B'], []],
+    ['template-nested-template', 'const t = `a ${ `b ${ "c" }` } d`;\nimport \'t-keep3\';\n', ['t-keep3'], []],
+    ['template-with-block-comment-marker', "const t = `a /* b */ c`;\nimport 't-keep4';\n", ['t-keep4'], []],
+    // --- class: escaped quotes -------------------------------------------
+    ['escaped-backslash-then-quote', "const s = 'a\\\\';\nimport 'esc-keep';\n", ['esc-keep'], []],
+    ['escaped-quote-inside-string', "const s = 'he said \\\\'hi\\\\'';\nimport 'esc-keep2';\n", ['esc-keep2'], []],
+    ['trailing-backslash-at-eof-in-string', "const s = 'abc\\", [], []],
+    // --- class: apostrophe inside a comment ------------------------------
+    ['apostrophe-in-line-comment', "// don't do this\nimport 'apos-keep';\n", ['apos-keep'], []],
+    ['apostrophe-in-block-comment', "/* don't do this either */\nimport 'apos-keep2';\n", ['apos-keep2'], []],
+    ['quote-pair-in-block-comment', '/* it\'s a "trap" */\nimport \'apos-keep3\';\n', ['apos-keep3'], []],
+    // --- class: regex literal containing // ------------------------------
+    ['regex-with-escaped-slashes', "const r = /\\\\/\\\\//;\nimport 're-keep';\n", ['re-keep'], []],
+    ['regex-with-star-slash', "const r = /\\\\*\\\\//;\nimport 're-keep2';\n", ['re-keep2'], []],
+    ['regex-with-char-class', "const r = /[/]/;\nimport 're-keep3';\n", ['re-keep3'], []],
+    // --- class: comment markers inside string bodies ---------------------
+    ['comment-markers-in-double-quotes', 'const s = "// not a comment /* nor this */";\nimport \'cm-keep\';\n', ['cm-keep'], []],
+    ['comment-markers-single-quoted', "const s = '/* nope */';\nimport 'cm-keep2';\n", ['cm-keep2'], []],
+    // --- class: phantom from a COMMENT (the pre-existing guarantee) ------
+    ['phantom-comment-import', "// import 'phantom-only-in-comment'\nimport 'real-1';\n", ['real-1'], []],
+    ['phantom-block-comment-import', "/* import 'phantom-block' */\nimport 'real-2';\n", ['real-2'], []],
+    // --- class: phantom from a STRING INTERIOR (the new guarantee) -------
+    ['phantom-comment-inside-string', 'const s = "// import \'phantom-str\'";\nimport \'real-3\';\n', ['real-3'], []],
+    ['phantom-import-inside-string-bare', 'const s = "import \'phantom-bare\'";\nimport \'real-4\';\n', ['real-4'], []],
+    ['phantom-export-inside-string', 'const s = "export * from \'phantom-ex\'";\nimport \'real-5\';\n', ['real-5'], []],
+    ['phantom-dynamic-inside-string', 'const s = "import(\'phantom-dyn2\')";\nimport(\'real-dyn2\');\n', [], ['real-dyn2']],
+    ['phantom-comment-looks-like-dynamic', "// import('phantom-dyn')\nimport('real-dyn');\n", [], ['real-dyn']],
+    // --- comment-as-whitespace: valid JS, must be recovered --------------
+    ['comment-between-import-and-specifier', "import/*c*/'ws-1';\n", ['ws-1'], []],
+    ['comment-in-dynamic-import', "const p = import(/*c*/'ws-2');\n", [], ['ws-2']],
+    // --- dynamic specifiers ----------------------------------------------
+    ['plain-dynamic', "const p = import('dyn-1');\n", [], ['dyn-1']],
+    ['dynamic-after-line-comment', "// gone\nconst p = await import('dyn-2');\n", [], ['dyn-2']],
+    ['template-then-dynamic', "const t = `x`;\nconst p = await import('dyn-3');\n", [], ['dyn-3']],
+  ];
+
+  test.each(CORPUS)('%s', (_name, src, expStatic, expDynamic) => {
+    const got = specifiersOf(src);
+    expect([...got.static].sort()).toEqual([...expStatic].sort());
+    expect([...got.dynamic].sort()).toEqual([...expDynamic].sort());
+  });
+
+  test('the corpus is non-empty and covers every declared attack class', () => {
+    // A corpus that silently lost entries would make the whole table vacuous.
+    expect(CORPUS.length).toBeGreaterThanOrEqual(30);
+    expect(new Set(CORPUS.map((c) => c[0])).size).toBe(CORPUS.length);
+  });
+
+  test('BREAK: the stripper removes comments and does not remove code', () => {
+    // Bounds on the stripper itself, so a remove-everything or
+    // keep-everything implementation cannot pass the table above.
+    const stripped = stripComments('// gone\n/* also gone */\nimport \'kept\';\n');
+    expect(stripped).not.toMatch(/gone/);
+    expect(stripped).toContain('kept');
+  });
+});
