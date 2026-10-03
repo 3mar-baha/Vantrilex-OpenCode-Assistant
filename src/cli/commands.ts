@@ -26,6 +26,7 @@ export const HEADLESS_COMMANDS = [
   'spec',
   'agent',
   'wait',
+  'driver',
 ] as const;
 
 export type HeadlessCommand = (typeof HEADLESS_COMMANDS)[number];
@@ -36,4 +37,4 @@ export function isHeadlessCommand(command: string | undefined): command is Headl
 
 /** The one-line addition printed under the original usage string. */
 export const HEADLESS_USAGE_SUFFIX =
-  '       opencode-voice reason | intents | gate | sessions | mcp | lsp | skills | create-session | prompt | shell | spec | agent | wait';
+  '       opencode-voice reason | intents | gate | sessions | mcp | lsp | skills | create-session | prompt | shell | spec | agent | wait | driver';

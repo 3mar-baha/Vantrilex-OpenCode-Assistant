@@ -16,6 +16,7 @@ import {
 import { reasonCommand } from './reason.js';
 import { createSessionCommand, lspCommand, mcpCommand, promptCommand, sessionsCommand, shellCommand, skillsCommand, specCommand } from './bridge.js';
 import { agentCommand, waitCommand } from './agent.js';
+import { driverCommand } from './driver.js';
 import { assertGateInvariant, measureGateInvariant, type GateInvariant } from './turn.js';
 import { HEADLESS_COMMANDS, type HeadlessCommand } from './commands.js';
 import { readFileSync } from 'node:fs';
@@ -69,6 +70,13 @@ const VALUE_OPTIONS: ReadonlySet<string> = new Set([
   'source',
   'timeout',
   'message',
+  // `driver`'s own value options. Named here for the same reason the rest of the
+  // set exists: a parser that treats `--transcript out.jsonl` as a flag plus a
+  // positional would read `out.jsonl` as the UTTERANCE and run a turn whose input
+  // was a file path.
+  'transcript',
+  'turn-timeout',
+  'tool-wait',
 ]);
 
 /** Positional arguments, in order, ignoring flags and their values. */
@@ -123,6 +131,10 @@ function usage(): string {
     '  wait <sessionId> <messageId> [--timeout <ms>]',
     '                                poll a turn to completion; reports which of the',
     '                                four: text / empty / running / errored',
+    '  driver [<text>] [--session <id>] [--transcript <file>] [--daemon]',
+    '                        [--turn-timeout <ms>] [--tool-wait <ms>]',
+    '                        text REPL over the real chain, no UI and no voice;',
+    '                        JSONL transcript on stdout AND in a per-session file',
     '',
     'no audio, no webview, no daemon required. serve must be running on 4096.',
   ].join('\n');
@@ -232,6 +244,24 @@ async function intentsCommand(args: readonly string[]): Promise<number> {
   return faults.length === 0 && slot.violations.length === 0 ? 0 : 1;
 }
 
+/**
+ * A non-negative integer option, or `null` for "absent or unusable".
+ *
+ * `null` conflates the two cases deliberately: the caller reports the option name
+ * and exits 2 either way, and the distinction between "you did not pass it" and
+ * "you passed nonsense" is not one an exit code needs to carry.
+ */
+function intOption(raw: string | null, name: string): number | null {
+  if (raw === null) return 0;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    out.heading('driver');
+    out.fail(`--${name} must be a non-negative integer of milliseconds, got "${raw}"`);
+    return null;
+  }
+  return parsed;
+}
+
 export async function runHeadless(command: HeadlessCommand, argv: readonly string[]): Promise<number> {
   const args = argv.slice(1);
   switch (command) {
@@ -329,6 +359,26 @@ export async function runHeadless(command: HeadlessCommand, argv: readonly strin
         timeoutMs = parsed;
       }
       return waitCommand(sessionId, messageId, timeoutMs);
+    }
+    case 'driver': {
+      // A bad numeric option is a usage error rather than a silent default, for
+      // the reason `--timeout` above gives: these two ARE the budgets, and
+      // quietly substituting 0 for a typo would turn "bound every turn" into
+      // "bound nothing" while looking like a correct parse.
+      const turnTimeout = intOption(option(args, 'turn-timeout'), 'turn-timeout');
+      if (turnTimeout === null) return 2;
+      const toolWait = intOption(option(args, 'tool-wait'), 'tool-wait');
+      if (toolWait === null) return 2;
+      const seed = positionals(args).join(' ').trim();
+      return driverCommand({
+        seed: seed.length === 0 ? null : seed,
+        sessionId: option(args, 'session'),
+        directory: option(args, 'directory'),
+        transcriptFile: option(args, 'transcript'),
+        turnTimeoutMs: turnTimeout,
+        toolWaitMs: toolWait,
+        startDaemon: flag(args, 'daemon'),
+      });
     }
     default: {
       out.heading('headless');
