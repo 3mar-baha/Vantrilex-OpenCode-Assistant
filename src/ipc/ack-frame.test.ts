@@ -265,7 +265,7 @@ async function driveWire(): Promise<Map<string, RawFrame>> {
   await run('cmd-ko-arabic-session', () => ({ ok: true, detail: 'جلسة جديدة: ses_01ABCdef' }));
   await run('cmd-ko-throwing-provider', () => {
     throw new Error(
-      'provider said no: sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd',
+      'provider said no: sk-or-v1-' + '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd',
     );
   });
   await run('cmd-ko-throwing-plain', () => {

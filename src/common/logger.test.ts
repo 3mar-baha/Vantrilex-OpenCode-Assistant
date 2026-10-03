@@ -167,16 +167,30 @@ describe('secret redaction (I-2)', () => {
 
     // WHAT THIS GUARD COVERS, AND WHY NOT EVERYTHING.
     //
-    // Scope is the files that DECLARE credential samples, i.e. the ones a
-    // scanner match would be attributable to. Today that is `logger.ts` and
-    // this file. Scoped deliberately rather than "every tracked file", because
-    // a guard that is red for a reason nobody can act on stops being read: two
-    // `src/ipc/**` test files carry Google/GitHub-shaped literals that predate
-    // this change, are already published on `origin/main` (introduced by
-    // `63e6695`), and are outside this change's write set. Widening to them
-    // would make the assertion permanently red and therefore vacuous in
-    // practice — the reader learns to skip it. They are reported here instead.
-    const SAMPLE_DECLARING_FILES = ['src/common/logger.ts', 'src/common/logger.test.ts'];
+    // Scope is the files that DECLARE credential samples — the ones a scanner
+    // match would be attributable to. That is `logger.ts`, this file, and the
+    // two `src/ipc/**` suites that carry their own provider-shaped samples.
+    //
+    // The earlier note here claimed widening to those two would leave the guard
+    // permanently red, because they carry intact literals. That was measured and
+    // was FALSE for the shapes cited: `gho_` and `AIza` were already split at a
+    // token boundary, and no contiguous scanner-shaped literal remained in them.
+    // The measurement did find intact literals elsewhere, and the true principle
+    // is narrower than "widen everything": a guard that is red for a reason
+    // nobody can act on stops being read, so scope tracks where samples are
+    // DECLARED, and every file that declares one is in scope.
+    //
+    // KNOWN OUT OF SCOPE, measured not assumed: `src/ipc/ui-server.test.ts` holds
+    // six intact `sk-or-v1-`-shaped literals. It is not listed because it does
+    // not declare a sample set — it asserts on redaction using literals of its
+    // own. That is a real gap in this guard's reach and it is reported rather
+    // than silently absorbed; widening to it is the obvious next step.
+    const SAMPLE_DECLARING_FILES = [
+      'src/common/logger.ts',
+      'src/common/logger.test.ts',
+      'src/ipc/output-frame.test.ts',
+      'src/ipc/ui-server-output.test.ts',
+    ];
 
     function repoRoot(): string {
       // vitest.config.ts runs this suite from any cwd (a clean clone uses a

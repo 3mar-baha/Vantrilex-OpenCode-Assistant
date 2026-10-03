@@ -211,7 +211,7 @@ describe('UiServer.output — emission', () => {
 
     const secrets = {
       github: 'gho_' + '0123456789abcdefghijklmnopqrstuvwxyz',
-      anthropic: 'sk-ant-api03-0123456789abcdef0123456789abcdef0123456789abcdef',
+      anthropic: 'sk-ant-api' + '03-0123456789abcdef0123456789abcdef0123456789abcdef',
       google: 'AIza' + 'Sy0123456789abcdefghijklmnopqrstuvw',
     };
     server.output(

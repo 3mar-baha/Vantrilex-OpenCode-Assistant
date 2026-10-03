@@ -333,7 +333,7 @@ describe('buildOutputFrame — the output sink is REDACTED', () => {
    * so a leak is both immediate and replayable.
    */
   const GH_OAUTH = 'gho_' + '0123456789abcdefghijklmnopqrstuvwxyz';
-  const ANTHROPIC = 'sk-ant-api03-0123456789abcdef0123456789abcdef0123456789abcdef';
+  const ANTHROPIC = 'sk-ant-api' + '03-0123456789abcdef0123456789abcdef0123456789abcdef';
   const GOOGLE = 'AIza' + 'Sy0123456789abcdefghijklmnopqrstuvw';
 
   test('credentials in the output text do not survive into the frame', () => {
