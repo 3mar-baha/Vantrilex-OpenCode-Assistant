@@ -180,11 +180,14 @@ describe('secret redaction (I-2)', () => {
     // nobody can act on stops being read, so scope tracks where samples are
     // DECLARED, and every file that declares one is in scope.
     //
-    // KNOWN OUT OF SCOPE, measured not assumed: `src/ipc/ui-server.test.ts` holds
-    // six intact `sk-or-v1-`-shaped literals. It is not listed because it does
-    // not declare a sample set — it asserts on redaction using literals of its
-    // own. That is a real gap in this guard's reach and it is reported rather
-    // than silently absorbed; widening to it is the obvious next step.
+    // KNOWN OUT OF SCOPE: none known. `src/ipc/ui-server.test.ts` used to hold six
+    // intact `sk-or-v1-`-shaped literals; they are now split at a token boundary
+    // like every other file here, and their runtime values are unchanged, so it
+    // no longer declares an intact sample of its own. It stays out of the LIST
+    // because the list is the files that DECLARE sample sets, and it does not —
+    // but it no longer carries a contiguous scanner-shaped literal, which was the
+    // thing worth reporting. If that changes, the gap is closed and re-measured
+    // rather than assumed.
     const SAMPLE_DECLARING_FILES = [
       'src/common/logger.ts',
       'src/common/logger.test.ts',

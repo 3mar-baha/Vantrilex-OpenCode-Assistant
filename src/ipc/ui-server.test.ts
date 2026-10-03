@@ -158,12 +158,12 @@ describe('UiServer authentication (fail-closed)', () => {
     sock.write(handshake('secret-token'));
     await sock.readText(); // hello
 
-    const detail = 'تعذّر تحويل الكلام إلى نص: 401 from https://api.groq.com with sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const detail = 'تعذّر تحويل الكلام إلى نص: 401 from https://api.groq.com with sk-or-v1-' + 'AAAAAAAAAAAAAAAAAAAAAAAAAAAA';
     server.notice('stt-failed', detail, 'error');
     const frame = JSON.parse(await sock.readText()) as { type: string; detail: string };
 
     expect(frame.type).toBe('notice');
-    expect(frame.detail).not.toContain('sk-or-v1-AAAAAAAA');
+    expect(frame.detail).not.toContain('sk-or-v1-' + 'AAAAAAAA');
     expect(frame.detail).toContain('[REDACTED]');
     // The useful part of the message must survive, or the notice is useless.
     expect(frame.detail).toContain('تعذّر تحويل الكلام إلى نص');
@@ -310,12 +310,12 @@ describe('UiServer resume + broadcast', () => {
     sock.write(handshake('t'));
     await sock.readText();
     server.onCommand = () => {
-      throw new Error('401 from https://api.groq.com with sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+      throw new Error('401 from https://api.groq.com with sk-or-v1-' + 'AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
     };
     sock.write(maskFrame(Opcode.Text, Buffer.from(JSON.stringify({ id: 'cmd-b5', kind: 'arm' })), Buffer.from([4, 5, 6, 7])));
     const ack = JSON.parse(await sock.readText()) as { ok: boolean; detail?: string };
     expect(ack.ok).toBe(false);
-    expect(ack.detail).not.toContain('sk-or-v1-AAAAAAAA');
+    expect(ack.detail).not.toContain('sk-or-v1-' + 'AAAAAAAA');
     expect(ack.detail).toContain('[REDACTED]');
     sock.end();
   });
@@ -332,11 +332,11 @@ describe('UiServer resume + broadcast', () => {
     const sock = await rawSocket(port);
     sock.write(handshake('t'));
     await sock.readText(); // hello
-    server.voice('speaking', 'المفتاح sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAA انتهى');
+    server.voice('speaking', 'المفتاح sk-or-v1-' + 'AAAAAAAAAAAAAAAAAAAAAAAAAAAA انتهى');
     const frame = JSON.parse(await sock.readText()) as { type: string; phase: string; transcript?: string };
     expect(frame.type).toBe('voice');
     expect(frame.phase).toBe('speaking');
-    expect(frame.transcript).not.toContain('sk-or-v1-AAAAAAAA');
+    expect(frame.transcript).not.toContain('sk-or-v1-' + 'AAAAAAAA');
     expect(frame.transcript).toContain('[REDACTED]');
     expect(frame.transcript).toContain('انتهى');
     sock.end();
